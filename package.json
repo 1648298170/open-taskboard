@@ -1,0 +1,19 @@
+{
+  "name": "opencode-taskboard-monorepo",
+  "private": true,
+  "version": "0.3.0",
+  "description": "Local-first issue board for opencode & any agent tool (pnpm monorepo).",
+  "engines": { "node": ">=22.5.0" },
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm --filter @taskboard/core build && concurrently -k \"pnpm --filter @taskboard/server dev\" \"pnpm --filter @taskboard/web dev\"",
+    "start": "pnpm --filter @taskboard/server start",
+    "cli": "pnpm --filter @taskboard/cli cli",
+    "typecheck": "pnpm -r typecheck",
+    "check": "pnpm -r check"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

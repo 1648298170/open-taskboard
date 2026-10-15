@@ -1,0 +1,24 @@
+{
+  "name": "@taskboard/mcp",
+  "version": "0.3.0",
+  "description": "MCP server (stdio) exposing the taskboard as native agent tools",
+  "type": "module",
+  "bin": { "taskboard-mcp": "dist/mcp.js" },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/mcp.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@taskboard/server": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": { "node": ">=22.5.0" },
+  "license": "MIT"
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@taskboard/cli",
+  "version": "0.3.0",
+  "description": "taskctl-style CLI for opencode-taskboard",
+  "type": "module",
+  "bin": { "taskboard": "dist/cli.js" },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "cli": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@taskboard/server": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": { "node": ">=22.5.0" },
+  "license": "MIT"
+}
