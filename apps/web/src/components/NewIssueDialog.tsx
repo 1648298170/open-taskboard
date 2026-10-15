@@ -13,7 +13,8 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
 
   const submit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
-    const f = new FormData(e.currentTarget);
+    const form = e.currentTarget;
+    const f = new FormData(form);
     const parent = String(f.get('parent') ?? '').trim();
     try {
       await api_.createIssue(projectId, {
@@ -23,7 +24,7 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
         branch: String(f.get('branch') ?? '').trim(),
         description: String(f.get('description') ?? '')
       });
-      e.currentTarget.reset();
+      form.reset();
       setError(null);
       onClose();
       onCreated(parent || undefined);

@@ -13,18 +13,31 @@
     "./types": {
       "types": "./dist/types.d.ts",
       "default": "./dist/types.js"
+    },
+    "./schemas": {
+      "types": "./dist/schemas.d.ts",
+      "default": "./dist/schemas.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "tsx --test \"test/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   },
-  "engines": { "node": ">=22.5.0" },
-  "license": "MIT"
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "zod": "^4"
+  }
 }

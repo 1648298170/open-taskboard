@@ -1,4 +1,4 @@
-# opencode-taskboard
+# open-taskboard
 
 本地优先（local-first）的任务看板，为 [opencode](https://opencode.ai) 及任何 agent 工具设计——看任务、拆解任务、跟踪任务。灵感来自 [dashi-taskboard](https://github.com/chuspeeism/dashi-taskboard)（Codex 版），无需 CDP 注入。
 
@@ -28,8 +28,9 @@ MCP server ─┘   ↑ 各 agent 工具各自拉起一个 MCP 进程连这里
 ## 快速开始
 
 ```bash
-pnpm install      # 需要 pnpm 9+（npm i -g pnpm）
-pnpm build        # 按依赖拓扑构建：core → server/cli/mcp + web
+pnpm install      # 需要 pnpm 9+（npm i -g pnpm）；一键安装依赖并自动构建全部包
+pnpm build        # 手动重新构建：core → server/cli/mcp + web
+pnpm clean        # 一键删除依赖：移除根目录及各子包的 node_modules
 pnpm start        # http://127.0.0.1:47824
 
 # 开发模式（先构建 core，再并行起 server watch + vite 热更新）
@@ -60,19 +61,19 @@ MCP server 无状态转发到本地 HTTP 服务，服务未运行时自动拉起
 
 ```jsonc
 // Claude Code (.mcp.json) / Cursor (~/.cursor/mcp.json)
-{ "mcpServers": { "taskboard": { "command": "node", "args": ["/abs/path/opencode-taskboard/apps/mcp/dist/mcp.js"] } } }
+{ "mcpServers": { "taskboard": { "command": "node", "args": ["/abs/path/open-taskboard/apps/mcp/dist/mcp.js"] } } }
 ```
 
 ```toml
 # Codex (~/.codex/config.toml)
 [mcp_servers.taskboard]
 command = "node"
-args = ["/abs/path/opencode-taskboard/apps/mcp/dist/mcp.js"]
+args = ["/abs/path/open-taskboard/apps/mcp/dist/mcp.js"]
 ```
 
 ```json
 // opencode (~/.config/opencode/opencode.json)
-{ "mcp": { "taskboard": { "type": "local", "command": ["node", "/abs/path/opencode-taskboard/apps/mcp/dist/mcp.js"] } } }
+{ "mcp": { "taskboard": { "type": "local", "command": ["node", "/abs/path/open-taskboard/apps/mcp/dist/mcp.js"] } } }
 ```
 
 建议同时在 AGENTS.md / rules 中加入：
@@ -82,7 +83,7 @@ args = ["/abs/path/opencode-taskboard/apps/mcp/dist/mcp.js"]
 ### 方式二：Skill + CLI（opencode 或不支持 MCP 的工具）
 
 ```bash
-ln -s /abs/path/opencode-taskboard/skills/opencode-taskboard ~/.config/opencode/skill/opencode-taskboard
+ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/open-taskboard
 ```
 
 ## 环境变量

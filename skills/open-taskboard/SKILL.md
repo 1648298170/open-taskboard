@@ -1,5 +1,5 @@
 ---
-name: opencode-taskboard
+name: open-taskboard
 description: 管理 opencode Taskboard 的任务：查看、拆解、领取、跟踪任务状态。Use when the user asks to 看任务/拆解任务/拆分需求/更新任务状态/领取任务, or when starting work that should be tracked on the taskboard.
 ---
 

@@ -12,10 +12,29 @@ export function Drawer({ issueId, statuses, onClose, onChanged, onToast, onOpenI
   const [detail, setDetail] = useState<IssueDetail | null>(null);
   const [desc, setDesc] = useState('');
   const [comment, setComment] = useState('');
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const load = async (): Promise<void> => setDetail(await api_.showIssue(issueId));
-  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [issueId]);
+  const load = async (): Promise<void> => {
+    try {
+      setDetail(await api_.showIssue(issueId));
+      setLoadError(null);
+    } catch (err) {
+      setLoadError((err as Error).message);
+    }
+  };
+  useEffect(() => { setDetail(null); setLoadError(null); void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [issueId]);
 
+  if (loadError) {
+    return (
+      <aside className="drawer">
+        <div className="drawer-head">
+          <span className="issue-id">#{issueId}</span>
+          <button className="icon-btn" onClick={onClose}>✕</button>
+        </div>
+        <p style={{ color: 'var(--danger)' }}>加载失败：{loadError}</p>
+      </aside>
+    );
+  }
   if (!detail) return <aside className="drawer">加载中…</aside>;
 
   const patch = async (body: Partial<IssueDetail>): Promise<void> => {
@@ -47,9 +66,11 @@ export function Drawer({ issueId, statuses, onClose, onChanged, onToast, onOpenI
           onBlur={e => { if (e.target.value !== detail.branch) void patch({ branch: e.target.value }); }} />
         <button className="btn tiny" style={{ color: 'var(--danger)' }} onClick={async () => {
           if (!confirm(`删除 #${detail.id} 及其子任务/评论？`)) return;
-          await api_.deleteIssue(detail.id);
-          onToast('已删除');
-          onClose(); onChanged();
+          try {
+            await api_.deleteIssue(detail.id);
+            onToast('已删除');
+            onClose(); onChanged();
+          } catch (err) { onToast(`✗ ${(err as Error).message}`); }
         }}>删除</button>
       </div>
 
@@ -61,8 +82,10 @@ export function Drawer({ issueId, statuses, onClose, onChanged, onToast, onOpenI
         <button className="btn tiny" onClick={async () => {
           const title = prompt('子任务标题:');
           if (!title) return;
-          await api_.createIssue(detail.projectId, { parentId: detail.id, title });
-          onChanged(); await load();
+          try {
+            await api_.createIssue(detail.projectId, { parentId: detail.id, title });
+            onChanged(); await load();
+          } catch (err) { onToast(`✗ ${(err as Error).message}`); }
         }}>＋ 拆解子任务</button>
       </h3>
       <ul className="children">
@@ -83,8 +106,10 @@ export function Drawer({ issueId, statuses, onClose, onChanged, onToast, onOpenI
       <form onSubmit={async e => {
         e.preventDefault();
         if (!comment.trim()) return;
-        await api_.addComment(detail.id, 'web', comment.trim());
-        setComment(''); onChanged(); await load();
+        try {
+          await api_.addComment(detail.id, 'web', comment.trim());
+          setComment(''); onChanged(); await load();
+        } catch (err) { onToast(`✗ ${(err as Error).message}`); }
       }}>
         <input value={comment} onChange={e => setComment(e.target.value)} placeholder="添加评论…" />
         <button className="btn tiny" type="submit">发送</button>

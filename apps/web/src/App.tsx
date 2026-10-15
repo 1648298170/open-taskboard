@@ -12,6 +12,7 @@ export default function App() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [connError, setConnError] = useState(false);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -20,36 +21,54 @@ export default function App() {
 
   const refresh = useCallback(async (pid = projectId) => {
     if (!pid) return;
-    const [list, prog] = await Promise.all([api_.listIssues(pid), api_.progress(pid)]);
-    setIssues(list);
-    setProgress(prog);
+    try {
+      const [list, prog] = await Promise.all([api_.listIssues(pid), api_.progress(pid)]);
+      setIssues(list);
+      setProgress(prog);
+    } catch {
+      // SSE 回调里的 void refresh() 失败时静默忽略，避免未处理的 Promise 拒绝
+    }
   }, [projectId]);
 
-  useEffect(() => {
+  const loadProjects = useCallback(() => {
     api_.listProjects().then(list => {
+      setConnError(false);
       setProjects(list);
       if (list.length) {
         const prev = localStorage.getItem('project');
         const pid = prev && list.some(p => p.id === prev) ? prev : list[0].id;
         setProjectId(pid);
       }
-    });
+    }).catch(() => setConnError(true));
   }, []);
+
+  useEffect(() => { loadProjects(); }, [loadProjects]);
 
   useEffect(() => { if (projectId) { localStorage.setItem('project', projectId); void refresh(projectId); } }, [projectId, refresh]);
   useEffect(() => connectSSE(() => void refresh()), [refresh]);
+
+  if (connError) {
+    return (
+      <div className="empty-state">
+        <p>无法连接 taskboard 服务 — 请先运行 `pnpm start`，或检查 TASKBOARD_URL</p>
+        <button className="btn primary" onClick={loadProjects}>重试</button>
+      </div>
+    );
+  }
 
   if (!projects.length) {
     return (
       <div className="empty-state">
         <p>还没有项目。<a href="#" onClick={async e => {
           e.preventDefault();
-          const p = await api_.createProject({ id: 'demo', name: 'Demo 项目' });
-          const parent = await api_.createIssue(p.id, { title: '搭建登录模块', priority: 'high', branch: 'feat/login', description: '示例父任务，包含可拆解的子任务。' });
-          for (const [title, priority] of [['登录表单 UI', 'medium'], ['JWT 鉴权接口', 'high'], ['会话刷新逻辑', 'medium']] as const) {
-            await api_.createIssue(p.id, { parentId: parent.id, title, priority });
-          }
-          setProjects([p]); setProjectId(p.id);
+          try {
+            const p = await api_.createProject({ id: 'demo', name: 'Demo 项目' });
+            const parent = await api_.createIssue(p.id, { title: '搭建登录模块', priority: 'high', branch: 'feat/login', description: '示例父任务，包含可拆解的子任务。' });
+            for (const [title, priority] of [['登录表单 UI', 'medium'], ['JWT 鉴权接口', 'high'], ['会话刷新逻辑', 'medium']] as const) {
+              await api_.createIssue(p.id, { parentId: parent.id, title, priority });
+            }
+            setProjects([p]); setProjectId(p.id);
+          } catch (err) { showToast(`✗ ${(err as Error).message}`); }
         }}>一键创建示例项目</a></p>
         <pre>taskboard project create --id my-project --name "My project"
 taskboard issue create --project my-project --title "第一个任务"</pre>
@@ -90,6 +109,7 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
         try {
           await api_.updateIssue(id, { status, version: issue.version });
           showToast(`#${id} → ${status}`);
+          await refresh();
         } catch (err) { showToast(`✗ ${(err as Error).message}`); void refresh(); }
       }} />
 

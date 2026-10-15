@@ -1,7 +1,7 @@
 {
   "name": "@taskboard/cli",
   "version": "0.3.0",
-  "description": "taskctl-style CLI for opencode-taskboard",
+  "description": "taskctl-style CLI for open-taskboard",
   "type": "module",
   "bin": { "taskboard": "dist/cli.js" },
   "files": ["dist"],
