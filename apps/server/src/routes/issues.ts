@@ -1,10 +1,11 @@
-// /api/issues routes (list/create under a project, progress, get/patch/delete by id).
-// Store arrives via plugin options. JSON bodies are validated with the shared
-// zod schemas — no hand-rolled type assertions.
+// /api/issues routes (list/create under a project, progress, get/patch/delete by id,
+// archive, and the T7-34 claim/lease endpoints). Store arrives via plugin
+// options. JSON bodies are validated with the shared zod schemas — no
+// hand-rolled type assertions.
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { STATUSES, Store, ValidationError } from '@taskboard/core';
 import type { Status } from '@taskboard/core';
-import { createIssueSchema, restUpdateIssueSchema, z } from '@taskboard/core/schemas';
+import { claimSchema, createIssueSchema, restUpdateIssueSchema, z } from '@taskboard/core/schemas';
 
 interface IssueParams { id: string }
 interface ProjectParams { projectId: string }
@@ -64,13 +65,25 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }
       children: issue.parentId ? [] : store.listIssues(issue.projectId, { parentId: issue.id }),
       comments: store.listComments(issue.id),
       activities: store.listActivities(issue.id),
+      attachments: store.listAttachments(issue.id),
       ...store.listDependencies(req.params.id)
     };
   });
 
-  app.patch('/api/issues/:id', async (req: FastifyRequest<{ Params: IssueParams }>) => {
+  app.patch('/api/issues/:id', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
     const parsed = restUpdateIssueSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    // T7-36: optional human final-review gate. With TASKBOARD_HUMAN_DONE=1, only
+    // the web UI (x-taskboard-actor: 'web') may set status to done — CLI/MCP
+    // agents must bring the task to in_review and wait for human confirmation
+    // on the web board. The gate runs before the store call (cheap header
+    // check first), so a gated request gets 403 even with a stale version.
+    // Only direct status='done' patches are gated; other statuses and archive
+    // are unaffected. Default (env unset/empty): zero behavior change.
+    if (process.env.TASKBOARD_HUMAN_DONE === '1' && parsed.data.status === 'done' &&
+        String(req.headers['x-taskboard-actor'] ?? '') !== 'web') {
+      return reply.code(403).send({ error: 'done requires human confirmation' });
+    }
     const { version, ...patch } = parsed.data;
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
     return store.updateIssue(req.params.id, patch, version, actor);
@@ -93,6 +106,30 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
     store.unarchiveIssue(req.params.id, actor);
     return { ok: true };
+  });
+
+  // T7-34: exclusive claim / lease endpoints. Bodies all follow claimSchema
+  // (heartbeat renews with an optional fresh ttl; release only needs the
+  // agent — a ttl there is ignored). Each responds with the updated Issue;
+  // claim conflicts flow through ConflictError → 409 via the global handler.
+  app.post('/api/issues/:id/claim', async (req: FastifyRequest<{ Params: IssueParams }>) => {
+    const parsed = claimSchema.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    return store.claimIssue(req.params.id, parsed.data.agent, parsed.data.ttlMinutes ?? 30, actor || parsed.data.agent);
+  });
+
+  app.post('/api/issues/:id/heartbeat', async (req: FastifyRequest<{ Params: IssueParams }>) => {
+    const parsed = claimSchema.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    return store.heartbeatIssue(req.params.id, parsed.data.agent, parsed.data.ttlMinutes ?? 30);
+  });
+
+  app.post('/api/issues/:id/release', async (req: FastifyRequest<{ Params: IssueParams }>) => {
+    const parsed = claimSchema.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    return store.releaseIssue(req.params.id, parsed.data.agent, actor || parsed.data.agent);
   });
 };
 

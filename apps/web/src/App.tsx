@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, STATUSES } from './api';
+import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUSES } from './api';
 import { Board, buildBlockedByMap, flattenCardOrder, GroupBy } from './components/Board';
 import { Drawer } from './components/Drawer';
 import { NewIssueDialog } from './components/NewIssueDialog';
+import { StatsPanel } from './components/StatsPanel';
+import { Timeline } from './components/Timeline';
 
 /** 从 location.hash 解析深链：#/issue/<id> → <id>，其余 → null。 */
 function issueIdFromHash(): string | null {
@@ -41,11 +43,18 @@ export default function App() {
     localStorage.getItem('taskboard-notify') === '1' && 'Notification' in window && Notification.permission === 'granted');
   // T5-29: j/k 高亮的卡片 id。
   const [cursorId, setCursorId] = useState<string | null>(null);
+  // T6-31: 统计面板开关 + 面板数据（打开时拉取，refresh 时重取）。
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [stats, setStats] = useState<Stats | null>(null);
+  // T7-37: 时间线视图开关（打开时替代看板主体渲染）。
+  const [timelineOpen, setTimelineOpen] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   // T6-35: refresh 回调里读的最新通知开关 + 上次数据签名（ref 防 SSE 闭包过期）。
   const notifyRef = useRef(notify);
   const lastSigRef = useRef<string | null>(null);
+  // T6-31: refresh 里读的统计面板开关（同 notifyRef 的防过期手法）。
+  const statsOpenRef = useRef(statsOpen);
 
   const isUnauthorized = (err: unknown): boolean => err instanceof ApiError && err.status === 401;
 
@@ -57,6 +66,7 @@ export default function App() {
   // T5-28: 主题同步到 <html data-theme>；默认（无值/暗色）走 :root 暗色变量。
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => { notifyRef.current = notify; }, [notify]);
+  useEffect(() => { statsOpenRef.current = statsOpen; }, [statsOpen]);
 
   // ---- 深链 #/issue/<id> ----
   // 关闭→打开用 pushState 留一条历史（支持浏览器返回键）；抽屉内切换只 replace，历史不膨胀。
@@ -102,6 +112,9 @@ export default function App() {
       setIssues(list);
       setProgress(prog);
       setDeps(edges);
+      // T6-31: 统计面板开着时随本次 refresh 一起重取（失败静默——主列表
+      // 的 catch 已处理 401 等公共错误路径）。
+      if (statsOpenRef.current) api_.stats(pid).then(setStats).catch(() => {});
     } catch (err) {
       // SSE 回调里的 void refresh() 失败时静默忽略，避免未处理的 Promise 拒绝；
       // 401（令牌缺失/失效）除外 —— 需要弹出令牌输入浮层。
@@ -128,6 +141,11 @@ export default function App() {
 
   useEffect(() => { if (projectId) { localStorage.setItem('project', projectId); void refresh(projectId); } }, [projectId, refresh]);
   useEffect(() => connectSSE(() => void refresh()), [refresh]);
+  // T6-31: 面板打开（或切换项目）时立即拉取一次；开着期间的更新走 refresh 内的重取。
+  useEffect(() => {
+    if (!statsOpen || !projectId) return;
+    api_.stats(projectId).then(setStats).catch(err => { if (isUnauthorized(err)) setNeedToken(true); });
+  }, [statsOpen, projectId]);
 
   // ---- 过滤 / 排序 ----
   const filtersActive = filters.text.trim() !== '' || filters.assignee !== '' || filters.label !== '';
@@ -382,6 +400,12 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           {/* T6-35 桌面通知开关：仅看板隐藏时的后台变更提醒。 */}
           <button className={`icon-btn${notify ? ' on' : ''}`} aria-label="桌面通知" title="桌面通知"
             onClick={() => void toggleNotify()}>🔔</button>
+          {/* T6-31 统计面板开关。 */}
+          <button className={`icon-btn${statsOpen ? ' on' : ''}`} aria-label="统计" title="统计面板"
+            onClick={() => setStatsOpen(o => !o)}>📊</button>
+          {/* T7-37 时间线视图开关（激活时替代看板主体）。 */}
+          <button className={`icon-btn${timelineOpen ? ' on' : ''}`} aria-label="时间线" title="时间线视图（甘特 lite）"
+            onClick={() => setTimelineOpen(o => !o)}>📅</button>
         </div>
       </header>
 
@@ -413,6 +437,9 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
         </div>
       </div>
 
+      {/* T6-31: 统计面板 —— toolbar 与看板之间的一个区段。 */}
+      {statsOpen && <StatsPanel stats={stats} />}
+
       {/* T5-26: 批量操作条。 */}
       {batchMode && (
         <div className="bulk-bar">
@@ -425,20 +452,24 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
         </div>
       )}
 
-      <Board issues={visibleIssues} onOpen={openIssue} blockedByMap={blockedByMap} onDrop={async (id, status) => {
-        const issue = issues.find(i => i.id === id);
-        if (!issue || issue.status === status) return;
-        try {
-          await api_.updateIssue(id, { status, version: issue.version });
-          showToast(`#${id} → ${status}`);
-          await refresh();
-        } catch (err) { showToast(`✗ ${(err as Error).message}`); void refresh(); }
-      }} emptyHint={filtersActive ? '无匹配任务' : undefined}
-        groupBy={groupBy}
-        batchMode={batchMode}
-        selectedIds={selected}
-        onToggleSelect={toggleSelect}
-        cursorId={cursorId} />
+      {/* T7-37: 时间线激活时替代看板主体（纯前端视图，数据同 visibleIssues，
+          过滤/排序工具栏照常生效）。 */}
+      {timelineOpen
+        ? <Timeline issues={visibleIssues} onOpen={openIssue} />
+        : <Board issues={visibleIssues} onOpen={openIssue} blockedByMap={blockedByMap} onDrop={async (id, status) => {
+          const issue = issues.find(i => i.id === id);
+          if (!issue || issue.status === status) return;
+          try {
+            await api_.updateIssue(id, { status, version: issue.version });
+            showToast(`#${id} → ${status}`);
+            await refresh();
+          } catch (err) { showToast(`✗ ${(err as Error).message}`); void refresh(); }
+        }} emptyHint={filtersActive ? '无匹配任务' : undefined}
+          groupBy={groupBy}
+          batchMode={batchMode}
+          selectedIds={selected}
+          onToggleSelect={toggleSelect}
+          cursorId={cursorId} />}
 
       {openId && (
         <Drawer issueId={openId} projectId={projectId} onClose={closeDrawer}

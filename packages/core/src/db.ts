@@ -106,6 +106,31 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       FROM comments c JOIN issues i ON i.id = c.issue_id;
     `);
   },
+  // v6 → v7: exclusive claim/lease (T7-34). claimed_by '' = unclaimed;
+  // claimed_at stamps the claim moment; lease_expires_at is the deadline.
+  // Expiry is LAZY — no timers: consumers treat an expired lease as
+  // unclaimed via activeClaim() until the next claim overwrites the row.
+  (db: DatabaseSync) => {
+    db.exec("ALTER TABLE issues ADD COLUMN claimed_by TEXT NOT NULL DEFAULT ''");
+    db.exec('ALTER TABLE issues ADD COLUMN claimed_at TEXT');
+    db.exec('ALTER TABLE issues ADD COLUMN lease_expires_at TEXT');
+  },
+  // v7 → v8: attachments (T7-39). This table carries METADATA only — file
+  // bodies live on disk under <dataDir>/attachments/<issueId>/. Rows cascade
+  // away with the issue via FK; the Store separately best-effort-removes the
+  // per-issue directory when the issue (or project) is deleted.
+  (db: DatabaseSync) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS attachments (
+        id TEXT PRIMARY KEY,
+        issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+        filename TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        actor TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS idx_attachments_issue ON attachments(issue_id);
+    `);
+  },
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after

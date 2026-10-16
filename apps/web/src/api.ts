@@ -2,13 +2,13 @@
 // one definition shared by server / cli / mcp / web. Imported via the
 // './types' subpath so the Node-only SQLite Store stays out of the bundle.
 import type {
-  Activity, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Status
+  Activity, Attachment, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Stats, Status
 } from '@taskboard/core/types';
 
 export type {
-  Activity, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Status
+  Activity, Attachment, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Stats, Status
 };
-export { STATUSES } from '@taskboard/core/types';
+export { STATUSES, activeClaim } from '@taskboard/core/types';
 export const PRIORITIES: Priority[] = ['low', 'medium', 'high', 'urgent'];
 
 /** T2-8: git-refs scan result for a project workspace. */
@@ -65,8 +65,38 @@ export const api_ = {
   deleteIssue: (id: string) => api<{ ok: true }>('DELETE', `/api/issues/${id}`),
   archiveIssue: (id: string) => api<{ ok: true }>('POST', `/api/issues/${id}/archive`, {}),
   unarchiveIssue: (id: string) => api<{ ok: true }>('POST', `/api/issues/${id}/unarchive`, {}),
+  // T7-34: 独占租约。Web 端固定以 agent 'web' 认领/释放。
+  claimIssue: (id: string, agent = 'web', ttlMinutes?: number) =>
+    api<Issue>('POST', `/api/issues/${id}/claim`,
+      { agent, ...(ttlMinutes !== undefined ? { ttlMinutes } : {}) }),
+  heartbeatIssue: (id: string, agent = 'web') =>
+    api<Issue>('POST', `/api/issues/${id}/heartbeat`, { agent }),
+  releaseIssue: (id: string, agent = 'web') =>
+    api<Issue>('POST', `/api/issues/${id}/release`, { agent }),
   addComment: (id: string, author: string, body: string) =>
     api<Comment>('POST', `/api/issues/${id}/comments`, { author, body }),
+  // T7-39: 附件上传是 multipart，不能走 JSON 的 api() —— 独立实现（同样带
+  // Bearer + actor 头）；下载用 <a href> 直链，令牌经 ?token= 传递（与 SSE 同法）。
+  uploadAttachment: async (id: string, file: File): Promise<Attachment> => {
+    const token = bearerToken();
+    const form = new FormData();
+    form.append('file', file, file.name);
+    const res = await fetch(`/api/issues/${id}/attachments`, {
+      method: 'POST',
+      headers: {
+        'x-taskboard-actor': 'web',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: form
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `HTTP ${res.status}`, res.status);
+    return data as Attachment;
+  },
+  downloadUrl: (attachmentId: string): string => {
+    const token = bearerToken();
+    return `/api/attachments/${attachmentId}/download${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  },
   listDependencies: (projectId: string) =>
     api<DependencyEdge[]>('GET', `/api/projects/${projectId}/dependencies`),
   addDependency: (id: string, dependsOnId: string) =>
@@ -74,6 +104,7 @@ export const api_ = {
   removeDependency: (id: string, dependsOnId: string) =>
     api<{ ok: true }>('DELETE', `/api/issues/${id}/dependencies/${dependsOnId}`),
   progress: (projectId: string) => api<Progress>('GET', `/api/projects/${projectId}/progress`),
+  stats: (projectId: string) => api<Stats>('GET', `/api/projects/${projectId}/stats?weeks=8`),
   gitRefs: (projectId: string) => api<GitRefs>('GET', `/api/projects/${projectId}/git-refs`),
   commits: (projectId: string, ref: string) =>
     api<{ commits: Commit[] }>('GET', `/api/projects/${projectId}/commits?ref=${encodeURIComponent(ref)}`)

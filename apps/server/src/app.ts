@@ -13,6 +13,8 @@ import issuesRoutes from './routes/issues.js';
 import commentsRoutes from './routes/comments.js';
 import dependencyRoutes from './routes/dependencies.js';
 import searchRoutes from './routes/search.js';
+import attachmentRoutes from './routes/attachments.js';
+import openapiRoutes from './routes/openapi.js';
 
 export interface ServerOptions {
   host?: string;
@@ -128,6 +130,8 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   await app.register(commentsRoutes, { store });
   await app.register(dependencyRoutes, { store });
   await app.register(searchRoutes, { store });
+  await app.register(attachmentRoutes, { store });
+  await app.register(openapiRoutes);
 
   return { app, store };
 }

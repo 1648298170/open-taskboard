@@ -26,11 +26,17 @@ open-taskboard CLI
   taskboard issue delete ID
   taskboard issue archive ID
   taskboard issue unarchive ID
+  taskboard issue claim ID --agent NAME [--ttl MIN]
+  taskboard issue heartbeat ID --agent NAME
+  taskboard issue release ID --agent NAME
+  taskboard issue attachments ID
+  taskboard issue attach ID FILE
   taskboard comment add ID [--author WHO] [--body TEXT]
   taskboard comment list ID
   taskboard progress --project ID
-  taskboard next --project ID [--assignee WHO]
-  taskboard ready --project ID [--assignee WHO]
+  taskboard stats --project ID [--weeks 8]
+  taskboard next --project ID [--assignee WHO] [--agent WHO]
+  taskboard ready --project ID [--assignee WHO] [--agent WHO]
   taskboard search QUERY
   taskboard export [--project ID] [--format json|md] [--out FILE]
   taskboard templates

@@ -1,13 +1,14 @@
 // Issue tools: list_issues / show_issue / create_issue / update_issue /
-// delete_issue / archive_issue / unarchive_issue / add_comment / progress +
+// delete_issue / archive_issue / unarchive_issue / claim_issue /
+// heartbeat_issue / release_issue / add_comment / progress +
 // dependencies (add/remove), the smart pickup views (ready_issues /
-// next_issue) and full-text search (search_issues). create/update/comment
-// schemas come from @taskboard/core (update_issue uses mcpUpdateIssueSchema:
-// version REQUIRED); the rest are small local zod schemas with STATUSES
-// imported from core/types — no hardcoded enum literals, no hand-written
-// JSON Schema.
+// next_issue) and full-text search (search_issues). create/update/comment/
+// claim schemas come from @taskboard/core (update_issue uses
+// mcpUpdateIssueSchema: version REQUIRED); the rest are small local zod
+// schemas with STATUSES imported from core/types — no hardcoded enum
+// literals, no hand-written JSON Schema.
 import {
-  z, createIssueSchema, mcpUpdateIssueSchema, addCommentSchema, addDependencySchema
+  z, createIssueSchema, mcpUpdateIssueSchema, addCommentSchema, addDependencySchema, claimSchema
 } from '@taskboard/core/schemas';
 import { STATUSES } from '@taskboard/core/types';
 import { ensureServerOrThrow } from '../connection.js';
@@ -82,6 +83,26 @@ export const issueTools: ToolTable = [
     '取消归档任务（恢复到看板）',
     args => ensureServerOrThrow('POST', `/api/issues/${args.id}/unarchive`, {}),
   )],
+  // T7-34: 独占租约三件套。租约默认 30 分钟，过期后其他 agent 可直接
+  // 认领（惰性过期，无需定时器）。
+  ['claim_issue', defineTool(
+    claimSchema.extend({ id: z.string() }),
+    '认领任务（独占租约）：租约期内其他 agent 认领会 409。建议先 claim 再开工，长任务用心跳续租，完成后 release。ttlMinutes 默认 30，上限 1440',
+    args => ensureServerOrThrow('POST', `/api/issues/${args.id}/claim`, {
+      agent: args.agent,
+      ...(args.ttlMinutes !== undefined ? { ttlMinutes: args.ttlMinutes } : {}),
+    }),
+  )],
+  ['heartbeat_issue', defineTool(
+    claimSchema.omit({ ttlMinutes: true }).extend({ id: z.string() }),
+    '心跳续租：延长自己持有任务的租约到期时间（长任务定期调用防过期；非持有人或租约已过期会 409）',
+    args => ensureServerOrThrow('POST', `/api/issues/${args.id}/heartbeat`, { agent: args.agent }),
+  )],
+  ['release_issue', defineTool(
+    claimSchema.omit({ ttlMinutes: true }).extend({ id: z.string() }),
+    '释放任务租约（完成或放弃时调用；释放未认领/已过期的任务是幂等 no-op）',
+    args => ensureServerOrThrow('POST', `/api/issues/${args.id}/release`, { agent: args.agent }),
+  )],
   ['search_issues', defineTool(
     z.object({ query: z.string().min(1) }).strict(),
     '全文搜索任务：标题/描述/评论（trigram，≥3 字符）；更短的查询退化为标题/描述的 LIKE 扫描',
@@ -93,6 +114,12 @@ export const issueTools: ToolTable = [
     args => ensureServerOrThrow('POST', `/api/issues/${args.id}/comments`, {
       author: args.author ?? 'mcp', body: args.body,
     }),
+  )],
+  // T7-39: 附件只读视图 —— 上传走 Web/CLI（multipart 不适合 MCP stdio），MCP 提供列表。
+  ['list_attachments', defineTool(
+    idSchema,
+    '列出任务附件（id/文件名/大小/上传者/时间）。附件经 Web 或 CLI (`taskboard issue attach`) 上传，MCP 仅提供列表，不含上传；下载路径为 /api/attachments/<id>/download',
+    args => ensureServerOrThrow('GET', `/api/issues/${args.id}/attachments`),
   )],
   ['add_issue_dependency', defineTool(
     addDependencySchema.extend({ id: z.string() }),
@@ -110,11 +137,13 @@ export const issueTools: ToolTable = [
     z.object({
       projectId: z.string(),
       assignee: z.string().optional().describe('只看分配给该负责人的就绪任务'),
+      agent: z.string().optional().describe('以该 agent 视角过滤：排除已被其他 agent 有效认领（租约未过期）的任务'),
     }).strict(),
     '列出项目下就绪的任务：自身未 done 且所有依赖（blocked-by）均已 done，按优先级排序',
     args => {
       const qs = new URLSearchParams();
       if (args.assignee !== undefined) qs.set('assignee', args.assignee);
+      if (args.agent !== undefined) qs.set('agent', args.agent);
       return ensureServerOrThrow('GET', `/api/projects/${args.projectId}/ready?${qs}`);
     },
   )],
@@ -122,11 +151,13 @@ export const issueTools: ToolTable = [
     z.object({
       projectId: z.string(),
       assignee: z.string().optional().describe('只在该负责人的就绪任务中挑选'),
+      agent: z.string().optional().describe('以该 agent 视角挑选：排除已被其他 agent 有效认领（租约未过期）的任务'),
     }).strict(),
-    '智能领任务：返回项目下一个最该做的任务（就绪列表的第一个，依赖全 done + 优先级排序），无就绪任务时 issue 为 null',
+    '智能领任务：返回项目下一个最该做的任务（就绪列表的第一个，依赖全 done + 优先级排序），无就绪任务时 issue 为 null。建议先 claim 再开工，长任务用心跳续租',
     args => {
       const qs = new URLSearchParams();
       if (args.assignee !== undefined) qs.set('assignee', args.assignee);
+      if (args.agent !== undefined) qs.set('agent', args.agent);
       return ensureServerOrThrow('GET', `/api/projects/${args.projectId}/next?${qs}`);
     },
   )],
@@ -134,5 +165,16 @@ export const issueTools: ToolTable = [
     z.object({ projectId: z.string() }).strict(),
     '项目进度。weighted 口径：一个顶层任务 = 一个单位，自身 done 或子任务全 done 即完成',
     args => ensureServerOrThrow('GET', `/api/projects/${args.projectId}/progress`),
+  )],
+  ['project_stats', defineTool(
+    z.object({
+      projectId: z.string(),
+      weeks: z.number().int().min(1).max(26).optional().describe('统计周数，默认 8'),
+    }).strict(),
+    '项目统计面板：近 N 周完成吞吐（周一起算）、平均周期（小时，按 updatedAt 估算）、Agent 贡献 top10、四状态分布',
+    args => ensureServerOrThrow(
+      'GET',
+      `/api/projects/${args.projectId}/stats${args.weeks !== undefined ? `?weeks=${args.weeks}` : ''}`,
+    ),
   )],
 ];

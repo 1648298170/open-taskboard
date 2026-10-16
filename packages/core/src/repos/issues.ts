@@ -4,7 +4,8 @@ import { Issue, IssuePatch, PRIORITIES, Priority, STATUSES, Status } from '../ty
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
 const ISSUE_COLS = `id, project_id AS projectId, parent_id AS parentId, title, description,
-  status, priority, labels, branch, worktree, archived_at AS archivedAt, assignee, version,
+  status, priority, labels, branch, worktree, archived_at AS archivedAt,
+  claimed_by AS claimedBy, lease_expires_at AS leaseExpiresAt, assignee, version,
   start_date AS startDate, due_date AS dueDate,
   created_at AS createdAt, updated_at AS updatedAt`;
 const now = (): string => new Date().toISOString();
@@ -34,8 +35,8 @@ export class IssueRepo {
     const id = shortId();
     const t = now();
     this.db.prepare(
-      `INSERT INTO issues (id, project_id, parent_id, title, description, status, priority, labels, branch, worktree, assignee, version, start_date, due_date, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`
+      `INSERT INTO issues (id, project_id, parent_id, title, description, status, priority, labels, branch, worktree, assignee, version, start_date, due_date, claimed_by, lease_expires_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '', NULL, ?, ?)`
     ).run(id, input.projectId, input.parentId, input.title, input.description ?? '', status, priority,
       input.labels ?? '', input.branch ?? '', input.worktree ?? '', input.assignee ?? '', input.startDate ?? null,
       input.dueDate ?? null, t, t);
@@ -105,6 +106,27 @@ export class IssueRepo {
     this.db.prepare(
       'UPDATE issues SET archived_at = ?, version = version + 1, updated_at = ? WHERE id = ?'
     ).run(archivedAt, now(), id);
+  }
+
+  // T7-34: exclusive claim writes. claim (and release) are row mutations
+  // like update() — version + updated_at bump so optimistic-lock clients
+  // see the change. heartbeat touches ONLY the lease deadline: a renewal
+  // must not invalidate optimistic-lock clients (no version, no updated_at).
+  // Caller wraps in a transaction and owns preconditions / activity / events.
+  setClaim(id: string, agent: string, claimedAt: string, leaseExpiresAt: string): void {
+    this.db.prepare(
+      'UPDATE issues SET claimed_by = ?, claimed_at = ?, lease_expires_at = ?, version = version + 1, updated_at = ? WHERE id = ?'
+    ).run(agent, claimedAt, leaseExpiresAt, now(), id);
+  }
+
+  extendLease(id: string, leaseExpiresAt: string): void {
+    this.db.prepare('UPDATE issues SET lease_expires_at = ? WHERE id = ?').run(leaseExpiresAt, id);
+  }
+
+  clearClaim(id: string): void {
+    this.db.prepare(
+      "UPDATE issues SET claimed_by = '', claimed_at = NULL, lease_expires_at = NULL, version = version + 1, updated_at = ? WHERE id = ?"
+    ).run(now(), id);
   }
 
   /** ids of `id` plus every descendant (children-first order irrelevant here; read-only). */

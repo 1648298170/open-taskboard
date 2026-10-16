@@ -55,6 +55,8 @@ taskboard project delete skill-test --yes
 
 ## 接入 agent 工具
 
+REST API 的完整契约（OpenAPI 3.1）在服务启动后可从 `/api/openapi.json` 获取。
+
 ### 方式一：MCP（推荐，Claude Code / Codex / Cursor / opencode 通用）
 
 MCP server 无状态转发到本地 HTTP 服务，服务未运行时自动拉起。工具：`list_projects` `create_project` `delete_project` `list_issues` `show_issue` `create_issue` `update_issue`（乐观锁 version 必填）`delete_issue` `add_comment` `progress`。
@@ -97,6 +99,7 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 | `TASKBOARD_WEB_DIST` | 自动探测 | 看板静态目录（默认 `apps/web/dist/web`） |
 | `TASKBOARD_TOKEN` | 未设置 | 设置后 API 需要 Bearer 认证（`Authorization: Bearer <token>` 或 `?token=`；SSE 支持 `?token=`） |
 | `TASKBOARD_WEBHOOK_URL` | 未设置 | 逗号分隔的 HTTP(S) URL；设置后每个事件（project/issue/comment 变更）以 POST JSON 转发到各 URL（3s 超时，失败重试一次，失败仅告警） |
+| `TASKBOARD_HUMAN_DONE` | 未设置 | 设置后 `status→done` 仅接受 web 来源（人工 UI），agent 只能到 `in_review` |
 
 ## 功能
 

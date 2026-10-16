@@ -9,7 +9,9 @@ import { addDependencySchema, z } from '@taskboard/core/schemas';
 interface IssueParams { id: string }
 interface DependencyParams { id: string; dependsOnId: string }
 interface ProjectParams { projectId: string }
-interface AssigneeQuery { assignee?: string }
+// T7-34: `agent` claims the caller's perspective — issues held under
+// another agent's ACTIVE lease are excluded from the pickup views.
+interface AssigneeQuery { assignee?: string; agent?: string }
 
 // One readable line per zod issue: "field: message; field: message".
 const validationMessage = (error: z.ZodError): string =>
@@ -42,7 +44,8 @@ const dependencyRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { sto
       return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
     }
     return store.readyIssues(req.params.projectId, {
-      assignee: req.query.assignee !== undefined ? String(req.query.assignee) : undefined
+      assignee: req.query.assignee !== undefined ? String(req.query.assignee) : undefined,
+      claimAgent: req.query.agent !== undefined ? String(req.query.agent) : undefined
     });
   });
 
@@ -52,7 +55,8 @@ const dependencyRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { sto
       return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
     }
     const ready = store.readyIssues(req.params.projectId, {
-      assignee: req.query.assignee !== undefined ? String(req.query.assignee) : undefined
+      assignee: req.query.assignee !== undefined ? String(req.query.assignee) : undefined,
+      claimAgent: req.query.agent !== undefined ? String(req.query.agent) : undefined
     });
     return { issue: ready[0] ?? null };
   });

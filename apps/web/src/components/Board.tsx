@@ -1,4 +1,4 @@
-import { DependencyEdge, Issue, STATUSES, Status } from '../api';
+import { activeClaim, DependencyEdge, Issue, STATUSES, Status } from '../api';
 
 /** issueId → 该 issue 被 whom 阻塞（blocked-by id 列表），由项目依赖边聚合而来。 */
 export type BlockedByMap = Map<string, string[]>;
@@ -182,6 +182,18 @@ function ChildProgress({ done, total }: { done: number; total: number }) {
   );
 }
 
+/** T7-34: 有效租约（未过期）时显示认领人 + 剩余分钟；过期租约不显示。 */
+function ClaimBadge({ issue }: { issue: Issue }) {
+  const holder = activeClaim(issue);
+  if (holder === null || issue.leaseExpiresAt === null) return null;
+  const minutes = Math.max(0, Math.ceil((Date.parse(issue.leaseExpiresAt) - Date.now()) / 60_000));
+  return (
+    <span className="claim-badge" title={`认领人 ${holder}，租约至 ${issue.leaseExpiresAt}`}>
+      👤 {holder} · {minutes}m
+    </span>
+  );
+}
+
 function Card({ issue, child, onOpen, locked, childProgress, batchMode, checked, onToggleSelect, active }: {
   issue: Issue;
   child?: boolean;
@@ -219,6 +231,7 @@ function Card({ issue, child, onOpen, locked, childProgress, batchMode, checked,
       {!child && childProgress && <ChildProgress done={childProgress.done} total={childProgress.total} />}
       <div className="card-meta">
         {locked && <span className="dep-lock" title="被未完成的依赖阻塞">🔒</span>}
+        <ClaimBadge issue={issue} />
         <span className={`badge ${issue.priority}`}>{issue.priority}</span>
         {issue.dueDate && <DuePill dueDate={issue.dueDate} />}
         {issue.branch && <span className="badge branch">⟂ {issue.branch}</span>}

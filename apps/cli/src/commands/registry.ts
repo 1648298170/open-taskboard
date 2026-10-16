@@ -5,6 +5,7 @@ import { projectCommands } from './project.js';
 import { issueCommands } from './issue.js';
 import { commentCommands } from './comment.js';
 import { progressCommand } from './progress.js';
+import { statsCommand } from './stats.js';
 import { nextCommand, readyCommand } from './pickup.js';
 import { searchCommand } from './search.js';
 import { serveCommand } from './serve.js';
@@ -39,6 +40,7 @@ export const registry: Record<string, Command> = {
   ...issueCommands,
   ...commentCommands,
   progress: progressCommand,
+  stats: statsCommand,
   next: nextCommand,
   ready: readyCommand,
   search: searchCommand,

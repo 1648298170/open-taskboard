@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import { need, type Command } from './registry.js';
 import { resolveTemplate } from './templates.js';
 
@@ -171,6 +173,90 @@ export const issueCommands: Record<string, Command> = {
       need(!!rest[0], 'issue unarchive ID');
       await api('POST', `/api/issues/${rest[0]}/unarchive`, {});
       console.log(`unarchived #${rest[0]}`);
+    }
+  },
+  // T7-34: exclusive claim / lease. claim takes (or renews) a lease,
+  // heartbeat extends it, release gives it back — conflicts 409 and exit 1
+  // via the shared api() error path.
+  'issue claim': {
+    summary: 'Claim an issue (exclusive lease) for an agent',
+    usage: 'issue claim ID --agent NAME [--ttl MIN]',
+    async run(ctx) {
+      const { api, flags, rest } = ctx;
+      need(!!rest[0] && !!flags.agent && typeof flags.agent === 'string', 'issue claim ID --agent NAME [--ttl MIN]');
+      const body: Record<string, unknown> = { agent: String(flags.agent) };
+      if (flags.ttl !== undefined) body.ttlMinutes = Number(flags.ttl);
+      const i = await api('POST', `/api/issues/${rest[0]}/claim`, body);
+      console.log(`#${i.id} claimed by ${i.claimedBy} until ${i.leaseExpiresAt}`);
+    }
+  },
+  'issue heartbeat': {
+    summary: 'Renew the lease of an issue you hold (heartbeat)',
+    usage: 'issue heartbeat ID --agent NAME',
+    async run(ctx) {
+      const { api, flags, rest } = ctx;
+      need(!!rest[0] && !!flags.agent && typeof flags.agent === 'string', 'issue heartbeat ID --agent NAME');
+      const i = await api('POST', `/api/issues/${rest[0]}/heartbeat`, { agent: String(flags.agent) });
+      console.log(`#${i.id} heartbeat ok (until ${i.leaseExpiresAt})`);
+    }
+  },
+  'issue release': {
+    summary: 'Release the lease of an issue (give it back)',
+    usage: 'issue release ID --agent NAME',
+    async run(ctx) {
+      const { api, flags, rest } = ctx;
+      need(!!rest[0] && !!flags.agent && typeof flags.agent === 'string', 'issue release ID --agent NAME');
+      const i = await api('POST', `/api/issues/${rest[0]}/release`, { agent: String(flags.agent) });
+      console.log(`#${i.id} released`);
+    }
+  },
+  // T7-39: attachments. List is a plain GET; attach streams a multipart
+  // upload straight at the HTTP layer (Node 22 fetch + FormData + Blob) —
+  // the shared api() helper is JSON-only by design.
+  'issue attachments': {
+    summary: 'List attachments of an issue',
+    usage: 'issue attachments ID',
+    async run(ctx) {
+      const { api, rest } = ctx;
+      need(!!rest[0], 'issue attachments ID');
+      const rows = await api('GET', `/api/issues/${rest[0]}/attachments`);
+      if (!rows.length) { console.log(`#${rest[0]}: no attachments`); return; }
+      const human = (bytes: number): string =>
+        bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)}MB`
+          : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)}KB`
+            : `${bytes}B`;
+      for (const a of rows) {
+        console.log(`  ${a.id}  ${String(human(a.size)).padStart(8)}  ${a.actor || 'anon'}  ${a.createdAt.slice(0, 16).replace('T', ' ')}  ${a.filename}`);
+      }
+      console.log(`download: ${ctx.base()}/api/attachments/<attachmentId>/download`);
+    }
+  },
+  'issue attach': {
+    summary: 'Upload a file as an attachment of an issue',
+    usage: 'issue attach ID FILE',
+    async run(ctx) {
+      const { base, rest } = ctx;
+      need(rest.length >= 2, 'issue attach ID FILE');
+      const [id, fileArg] = [String(rest[0]), String(rest[1])];
+      let buf: Buffer;
+      try {
+        buf = readFileSync(fileArg);
+      } catch (err) {
+        console.error(`error: cannot read ${fileArg} (${(err as Error).message})`);
+        process.exit(1);
+      }
+      if (buf.byteLength === 0) { console.error('error: file is empty'); process.exit(1); }
+      const form = new FormData();
+      form.append('file', new Blob([buf]), basename(fileArg));
+      const token = process.env.TASKBOARD_TOKEN;
+      const res = await fetch(`${base()}/api/issues/${id}/attachments`, {
+        method: 'POST',
+        headers: { 'x-taskboard-actor': 'cli', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: form
+      });
+      const data = await res.json().catch(() => ({})) as { id?: string; filename?: string; error?: string };
+      if (!res.ok) { console.error(`error: ${data.error ?? res.status}`); process.exit(1); }
+      console.log(`attached ${data.filename} (${data.id}) to #${id}`);
     }
   }
 };

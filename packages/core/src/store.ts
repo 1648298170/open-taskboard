@@ -1,10 +1,11 @@
 ﻿import type { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { STATUSES, activeClaim } from './types.js';
 import type {
-  Activity, Comment, DependencyEdge, Issue, IssuePatch, Priority, Progress, Project, Status, StoreEvent
+  Activity, Attachment, Comment, DependencyEdge, Issue, IssuePatch, Priority, Progress, Project, Status, Stats, StoreEvent
 } from './types.js';
-import { NotFoundError, ValidationError } from './errors.js';
+import { ConflictError, NotFoundError, ValidationError } from './errors.js';
 import { configureDatabase, createDatabase } from './db.js';
 import { EventBus } from './events.js';
 import { inTransaction } from './transactions.js';
@@ -14,8 +15,19 @@ import { CommentRepo } from './repos/comments.js';
 import { ActivityRepo } from './repos/activities.js';
 import { DependencyRepo } from './repos/dependencies.js';
 import { SearchRepo } from './repos/search.js';
+import { AttachmentRepo } from './repos/attachments.js';
 
 const now = (): string => new Date().toISOString();
+
+// T6-31 stats helpers -------------------------------------------------------
+// Monday 00:00 LOCAL of the given date (getDay(): 0=Sun…6=Sat → shifted 0=Mon…6=Sun).
+const mondayOf = (d: Date): Date => {
+  const shifted = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  shifted.setDate(shifted.getDate() - ((d.getDay() + 6) % 7));
+  return shifted;
+};
+const isoDay = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 // Patch keys that map to a writable column, in repo colMap order — used to
 // build the activity detail ("status,title", "startDate", ...).
@@ -37,13 +49,16 @@ export class Store {
   private activities: ActivityRepo;
   private deps: DependencyRepo;
   private fts: SearchRepo;
+  private attachments: AttachmentRepo;
   /** Whether issues_fts exists — fixed for this db right after migrations ran. */
   private readonly ftsAvailable: boolean;
 
   // db is the DI seam: pass a pre-opened DatabaseSync (e.g. ':memory:') to
   // skip file setup and test this layer directly. It still gets PRAGMAs +
-  // schema applied — both are idempotent.
-  constructor(dataDir = '.data', db?: DatabaseSync) {
+  // schema applied — both are idempotent. attachmentsDir (T7-39) defaults
+  // to <dataDir>/attachments; it is created lazily on the first upload, so
+  // in-memory stores that never touch attachments leave no directories.
+  constructor(dataDir = '.data', db?: DatabaseSync, attachmentsDir?: string) {
     this.db = db ?? createDatabase(dataDir);
     if (db) configureDatabase(db);
     this.projects = new ProjectRepo(this.db);
@@ -53,6 +68,7 @@ export class Store {
     this.deps = new DependencyRepo(this.db);
     this.fts = new SearchRepo(this.db);
     this.ftsAvailable = this.fts.available();
+    this.attachments = new AttachmentRepo(this.db, attachmentsDir ?? join(dataDir, 'attachments'));
   }
 
   /** Run an index-sync helper only when the FTS table exists (no-op otherwise). */
@@ -77,6 +93,7 @@ export class Store {
       `SELECT (SELECT COUNT(*) FROM projects) + (SELECT COUNT(*) FROM issues) * 10
              + (SELECT COUNT(*) FROM comments) * 100
              + (SELECT COUNT(*) FROM issue_dependencies) * 1000
+             + (SELECT COUNT(*) FROM attachments) * 10000
              + (SELECT COALESCE(SUM(version),0) FROM issues) AS rev`
     ).get()!.rev as number;
   }
@@ -98,12 +115,16 @@ export class Store {
 
   deleteProject(id: string): void {
     if (!this.projects.get(id)) throw new NotFoundError(`project not found: ${id}`);
+    // Attachment dirs live on disk outside sqlite — collect the issue ids
+    // BEFORE the rows vanish, then best-effort-remove each dir after commit.
+    const issueIds = this.issues.list(id, { archived: 'all' }).map(i => i.id);
     inTransaction(this.db, () => {
       // FTS first: every fts row carries project_id, and the rows it points
       // at are about to disappear.
       this.syncFts(() => this.fts.deleteProjectFts(id));
       this.projects.delete(id);
     });
+    for (const issueId of issueIds) this.rmAttachmentDir(issueId);
     this.emit('project.deleted', { id });
   }
 
@@ -189,7 +210,16 @@ export class Store {
       });
       return this.issues.deleteRecursively(id);
     });
+    // T7-39: attachment bodies live on disk — best-effort removal per deleted
+    // id (rows already cascaded inside the transaction); a locked file must
+    // never fail the delete itself.
+    for (const deletedId of deleted) this.rmAttachmentDir(deletedId);
     for (const deletedId of deleted) this.emit('issue.deleted', { id: deletedId });
+  }
+
+  /** Best-effort `rm -rf` of one issue's attachment dir; never throws. */
+  private rmAttachmentDir(issueId: string): void {
+    try { rmSync(this.attachments.dirPath(issueId), { recursive: true, force: true }); } catch { /* best-effort */ }
   }
 
   // ---- archive (T5-24): a row mutation — bumps version + updated_at like
@@ -211,6 +241,75 @@ export class Store {
       this.logActivity(id, actor, 'unarchived', '');
     });
     this.emit('issue.updated', { id });
+    return this.issues.get(id)!;
+  }
+
+  // ---- claims / leases (T7-34): exclusive task pickup ----
+  // Expiry is lazy — no timers anywhere. A claim is ACTIVE iff
+  // activeClaim(issue) returns the holder (claimedBy set + lease deadline in
+  // the future); expired rows read as unclaimed until overwritten.
+
+  /**
+   * Take (or renew) the exclusive lease of an issue. Re-entrant for the same
+   * agent — a second claim simply renews. Another holder's ACTIVE claim →
+   * ConflictError; an expired lease is fair game. Bumps version + updated_at
+   * like archiveIssue and logs a 'claimed' activity.
+   */
+  claimIssue(id: string, agent: string, ttlMinutes = 30, actor = agent): Issue {
+    if (!agent) throw new ValidationError('agent must be non-empty');
+    const issue = this.issues.get(id);
+    if (!issue) throw new NotFoundError(`issue not found: ${id}`);
+    const holder = activeClaim(issue);
+    if (holder !== null && holder !== agent) {
+      throw new ConflictError(`issue claimed by ${holder} until ${issue.leaseExpiresAt}`);
+    }
+    const t = now();
+    inTransaction(this.db, () => {
+      this.issues.setClaim(id, agent, t, new Date(Date.parse(t) + ttlMinutes * 60_000).toISOString());
+      this.logActivity(id, actor, 'claimed', `by ${agent} ttl ${ttlMinutes}m`);
+    });
+    this.emit('issue.updated', { id });
+    return this.issues.get(id)!;
+  }
+
+  /**
+   * Renew the caller's lease (heartbeat). A pure lease op, deliberately NOT
+   * a row mutation: no version bump, no updated_at touch, no activity — a
+   * renewal must not invalidate optimistic-lock clients or spam the activity
+   * stream. Still emits 'issue.updated' so live boards refresh the badge.
+   * Non-holder or expired lease → ConflictError (expired means claim again).
+   */
+  heartbeatIssue(id: string, agent: string, ttlMinutes = 30): Issue {
+    if (!agent) throw new ValidationError('agent must be non-empty');
+    const issue = this.issues.get(id);
+    if (!issue) throw new NotFoundError(`issue not found: ${id}`);
+    const holder = activeClaim(issue);
+    if (holder === null) throw new ConflictError('lease expired, claim again');
+    if (holder !== agent) throw new ConflictError('not the lease holder');
+    this.issues.extendLease(id, new Date(Date.now() + ttlMinutes * 60_000).toISOString());
+    this.emit('issue.updated', { id });
+    return this.issues.get(id)!;
+  }
+
+  /**
+   * Give the lease back. Clearing an ACTIVE claim bumps version + updated_at
+   * and logs a 'released' activity; releasing an unclaimed or expired issue
+   * is an idempotent no-op (success without side effects). Another holder's
+   * ACTIVE claim → ConflictError.
+   */
+  releaseIssue(id: string, agent: string, actor = agent): Issue {
+    if (!agent) throw new ValidationError('agent must be non-empty');
+    const issue = this.issues.get(id);
+    if (!issue) throw new NotFoundError(`issue not found: ${id}`);
+    const holder = activeClaim(issue);
+    if (holder !== null && holder !== agent) throw new ConflictError('not the lease holder');
+    if (holder !== null) {
+      inTransaction(this.db, () => {
+        this.issues.clearClaim(id);
+        this.logActivity(id, actor, 'released', `by ${agent}`);
+      });
+      this.emit('issue.updated', { id });
+    }
     return this.issues.get(id)!;
   }
 
@@ -240,6 +339,44 @@ export class Store {
     return this.activities.listByIssue(issueId);
   }
 
+  // ---- attachments (T7-39): metadata rows in sqlite, bodies on disk ----
+
+  /**
+   * Record one attachment: metadata row + 'attachment' activity (detail =
+   * filename) + 'issue.updated' event (live boards + SSE refresh). The
+   * caller writes the body via attachmentPathFor right after — a failed
+   * write leaves an orphan row whose download 404s, which beats an
+   * on-disk orphan nobody can discover.
+   */
+  addAttachment(issueId: string, filename: string, size: number, actor = ''): Attachment {
+    if (!this.issues.get(issueId)) throw new NotFoundError(`issue not found: ${issueId}`);
+    const attachment = inTransaction(this.db, () => {
+      const row = this.attachments.record(issueId, filename, size, actor);
+      this.logActivity(issueId, actor, 'attachment', filename);
+      return row;
+    });
+    this.emit('issue.updated', { id: issueId });
+    return attachment;
+  }
+
+  listAttachments(issueId: string): Attachment[] {
+    return this.attachments.listByIssue(issueId);
+  }
+
+  getAttachment(id: string): Attachment | null {
+    return this.attachments.get(id);
+  }
+
+  /** Per-issue attachment directory on disk, created on demand (server upload path). */
+  attachmentDirFor(issueId: string): string {
+    return this.attachments.dirFor(issueId);
+  }
+
+  /** On-disk path of one attachment body (ensures the parent dir exists). */
+  attachmentPathFor(issueId: string, attachmentId: string, filename: string): string {
+    return this.attachments.pathFor(issueId, attachmentId, filename);
+  }
+
   // ---- progress: one top-level issue = one unit, equal weight (dashi #371) ----
   projectProgress(projectId: string): Progress {
     const all = this.issues.list(projectId);
@@ -256,6 +393,58 @@ export class Store {
       topDone: done(top),
       weightedDone: completedTop,
       weightedTotal: top.length
+    };
+  }
+
+  // ---- stats (T6-31): 统计面板聚合 ----
+
+  /**
+   * Aggregate project stats: weekly done throughput (last N Monday-based
+   * weeks, zero-filled, oldest → newest), average cycle hours over done
+   * issues, per-actor activity counts (top 10), and the current per-status
+   * breakdown in STATUSES order.
+   *
+   * weeklyDone buckets DONE issues by updatedAt — a PROXY for completion
+   * time (the schema has no dedicated completed_at column; any later patch
+   * re-buckets the issue, an accepted approximation). weekStart is Monday
+   * 00:00 local formatted YYYY-MM-DD; weeks defaults to 8, clamped 1..26.
+   * Like projectProgress, archived issues are excluded (listIssues default)
+   * and unknown projects stay the route layer's business (404 there).
+   */
+  projectStats(projectId: string, opts: { weeks?: number } = {}): Stats {
+    const weeks = Math.min(26, Math.max(1, Math.trunc(opts.weeks ?? 8)));
+    const all = this.issues.list(projectId);
+
+    // Weekly buckets oldest → newest, zero-filled up front.
+    const thisMonday = mondayOf(new Date());
+    const weeklyDone: { weekStart: string; count: number }[] = [];
+    const bucketIndex = new Map<string, number>();
+    for (let k = weeks - 1; k >= 0; k--) {
+      const weekStart = isoDay(new Date(thisMonday.getFullYear(), thisMonday.getMonth(), thisMonday.getDate() - 7 * k));
+      bucketIndex.set(weekStart, weeklyDone.length);
+      weeklyDone.push({ weekStart, count: 0 });
+    }
+    const doneIssues = all.filter(i => i.status === 'done');
+    for (const issue of doneIssues) {
+      const idx = bucketIndex.get(isoDay(mondayOf(new Date(issue.updatedAt))));
+      if (idx !== undefined) weeklyDone[idx]!.count++;
+    }
+
+    // avgCycleHours = mean(updatedAt − createdAt) over done issues, hours,
+    // rounded to 1 decimal; null when nothing is done yet.
+    let avgCycleHours: number | null = null;
+    if (doneIssues.length > 0) {
+      const totalMs = doneIssues.reduce(
+        (sum, i) => sum + Date.parse(i.updatedAt) - Date.parse(i.createdAt), 0
+      );
+      avgCycleHours = Math.round(((totalMs / doneIssues.length) / 3_600_000) * 10) / 10;
+    }
+
+    return {
+      weeklyDone,
+      avgCycleHours,
+      byActor: this.activities.countByActorForProject(projectId),
+      byStatus: STATUSES.map(status => ({ status, count: all.filter(i => i.status === status).length }))
     };
   }
 
@@ -315,9 +504,12 @@ export class Store {
   /**
    * Issues whose every depends-on issue is done (and that are not done
    * themselves), in the standard listIssues priority order. With opts.assignee,
-   * only issues assigned to that exact assignee.
+   * only issues assigned to that exact assignee. With opts.claimAgent (T7-34),
+   * issues carrying another agent's ACTIVE claim are excluded — the caller's
+   * own claims and expired leases stay eligible. Default (no claimAgent):
+   * no exclusion, the UI needs to display claimed items.
    */
-  readyIssues(projectId: string, opts: { assignee?: string } = {}): Issue[] {
+  readyIssues(projectId: string, opts: { assignee?: string; claimAgent?: string } = {}): Issue[] {
     const blockedBy = new Map<string, string[]>();
     for (const edge of this.deps.listByProject(projectId)) {
       const list = blockedBy.get(edge.issueId);
@@ -327,8 +519,15 @@ export class Store {
     const statusById = new Map(this.issues.list(projectId).map(i => [i.id, i.status]));
     const isReady = (id: string): boolean =>
       (blockedBy.get(id) ?? []).every(dep => statusById.get(dep) === 'done');
+    const claimableBy = (issue: Issue): boolean => {
+      if (opts.claimAgent === undefined) return true;
+      const holder = activeClaim(issue);
+      return holder === null || holder === opts.claimAgent;
+    };
     return this.listIssues(projectId, { includeDone: false })
-      .filter(i => isReady(i.id) && (opts.assignee === undefined || i.assignee === opts.assignee));
+      .filter(i => isReady(i.id)
+        && (opts.assignee === undefined || i.assignee === opts.assignee)
+        && claimableBy(i));
   }
 
   // ---- search (T6-30) ----

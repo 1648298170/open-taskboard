@@ -23,4 +23,19 @@ export class ActivityRepo {
       `SELECT ${ACTIVITY_COLS} FROM activities WHERE issue_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`
     ).all(issueId, limit) as unknown as Activity[];
   }
+
+  // T6-31: per-actor action counts for a whole project — activities JOIN
+  // issues ON issue_id (project filter), one query instead of N+1 per-issue
+  // scans. Empty actor rows (anonymous mutations) are excluded; ties break
+  // alphabetically so the output is deterministic.
+  countByActorForProject(projectId: string, limit = 10): { actor: string; actions: number }[] {
+    return this.db.prepare(
+      `SELECT a.actor AS actor, COUNT(*) AS actions
+         FROM activities a JOIN issues i ON a.issue_id = i.id
+        WHERE i.project_id = ? AND a.actor != ''
+        GROUP BY a.actor
+        ORDER BY actions DESC, actor
+        LIMIT ?`
+    ).all(projectId, limit) as unknown as { actor: string; actions: number }[];
+  }
 }

@@ -73,6 +73,16 @@ export const addDependencySchema = z
   })
   .strict();
 
+// T7-34: claim/heartbeat/release bodies. heartbeat reuses the whole shape
+// (ttlMinutes renews with a fresh duration); release only needs the agent —
+// a ttlMinutes in a release body is tolerated and ignored by the route.
+export const claimSchema = z
+  .object({
+    agent: z.string().min(1),
+    ttlMinutes: z.number().int().positive().max(1440).optional(),
+  })
+  .strict();
+
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type CreateIssueInput = z.infer<typeof createIssueSchema>;
 export type IssuePatchInput = z.infer<typeof issuePatchSchema>;
@@ -80,3 +90,4 @@ export type RestUpdateIssueInput = z.infer<typeof restUpdateIssueSchema>;
 export type McpUpdateIssueInput = z.infer<typeof mcpUpdateIssueSchema>;
 export type AddCommentInput = z.infer<typeof addCommentSchema>;
 export type AddDependencyInput = z.infer<typeof addDependencySchema>;
+export type ClaimInput = z.infer<typeof claimSchema>;

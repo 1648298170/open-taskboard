@@ -1,10 +1,16 @@
 import { useEffect, useState } from 'react';
-import { api_, Commit, GitRefs, Issue, IssueDetail, Status } from '../api';
-import { renderMarkdown } from '../markdown';
+import { activeClaim, api_, Commit, GitRefs, Issue, IssueDetail, Status } from '../api';
+import { Markdown } from '../markdown';
 
 /** ISO → "MM-DD HH:mm"（活动时间线用）。 */
 const fmtWhen = (iso: string): string =>
   iso.length >= 16 ? `${iso.slice(5, 10)} ${iso.slice(11, 16)}` : iso;
+
+/** T7-39: 字节数人性化（B / KB / MB）。 */
+const humanSize = (bytes: number): string =>
+  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB`
+      : `${bytes} B`;
 
 export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToast, onOpenIssue, issues }: {
   issueId: string;
@@ -153,7 +159,45 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
             }}>归档</button>
           )}
+        {/* T7-34: 认领/释放（以 agent 'web' 操作，紧挨归档）。有效租约显示
+            认领徽章 + 释放；无租约显示认领。他人持有的租约释放会 409 → toast。 */}
+        {activeClaim(detail) !== null
+          ? <button className="btn tiny" style={{ color: 'var(--accent)' }} onClick={async () => {
+              try {
+                await api_.releaseIssue(detail.id);
+                onToast(`#${detail.id} 已释放租约`);
+                onChanged(); await load();
+              } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+            }}>释放</button>
+          : <button className="btn tiny" style={{ color: 'var(--accent)' }} onClick={async () => {
+              try {
+                const claimed = await api_.claimIssue(detail.id);
+                onToast(`#${detail.id} 已认领，租约至 ${claimed.leaseExpiresAt?.slice(11, 16) ?? ''}`);
+                onChanged(); await load();
+              } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+            }}>认领</button>}
       </div>
+
+      {/* T7-34: 认领信息（meta 行下单独一行，含续租）。仅有效租约显示。 */}
+      {(() => {
+        const holder = activeClaim(detail);
+        if (holder === null || detail.leaseExpiresAt === null) return null;
+        const minutes = Math.max(0, Math.ceil((Date.parse(detail.leaseExpiresAt) - Date.now()) / 60_000));
+        return (
+          <div className="claim-info">
+            <span className="claim-badge">👤 {holder} · 剩余 {minutes}m（至 {detail.leaseExpiresAt.slice(11, 16)}）</span>
+            {holder === 'web' && (
+              <button className="btn tiny" onClick={async () => {
+                try {
+                  const beat = await api_.heartbeatIssue(detail.id);
+                  onToast(`#${detail.id} 续租成功，至 ${beat.leaseExpiresAt?.slice(11, 16) ?? ''}`);
+                  onChanged(); await load();
+                } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+              }}>续租</button>
+            )}
+          </div>
+        );
+      })()}
 
       {/* T6-36: 最近提交预览 —— 绑定了分支或工作树才显示。 */}
       {commitRef && (
@@ -185,7 +229,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
               setEditingDesc(false);
             }} />
         : detail.description
-          ? <div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(detail.description) }} />
+          ? <Markdown src={detail.description} />
           : <p style={{ color: 'var(--ink-dim)', fontSize: 12 }}>暂无描述</p>}
 
       <h3>子任务
@@ -265,7 +309,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
           ? detail.comments.map(c => (
             <li key={c.id}>
               <span className="who">{c.author || 'anon'}</span>
-              <div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(c.body) }} />
+              <Markdown src={c.body} />
             </li>))
           : <li style={{ color: 'var(--ink-dim)' }}>暂无评论</li>}
       </ul>
@@ -292,6 +336,28 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
               {a.detail && <span className="det">{a.detail}</span>}
             </li>))
           : <li style={{ color: 'var(--ink-dim)' }}>暂无活动</li>}
+      </ul>
+
+      {/* T7-39: 附件 —— 列表（下载直链，令牌走 ?token=，与 SSE 同法）+ 本地上传。 */}
+      <h3>附件
+        <input type="file" className="attach-input" title="上传附件" onChange={e => {
+          const f = e.target.files?.[0];
+          e.target.value = ''; // 允许重复选择同一文件再次上传
+          if (!f) return;
+          api_.uploadAttachment(detail.id, f)
+            .then(a => { onToast(`已上传 ${a.filename}`); onChanged(); void load(); })
+            .catch(err => onToast(`✗ ${(err as Error).message}`));
+        }} />
+      </h3>
+      <ul className="attachments">
+        {detail.attachments.length
+          ? detail.attachments.map(a => (
+            <li key={a.id} title={`${a.filename} · ${a.size} B`}>
+              <span className="att-name">📄 {a.filename}</span>
+              <span className="att-meta">{humanSize(a.size)} · {a.actor || 'anon'} · {fmtWhen(a.createdAt)}</span>
+              <a className="att-dl" href={api_.downloadUrl(a.id)} target="_blank" rel="noreferrer">下载</a>
+            </li>))
+          : <li style={{ color: 'var(--ink-dim)' }}>暂无附件</li>}
       </ul>
     </aside>
   );

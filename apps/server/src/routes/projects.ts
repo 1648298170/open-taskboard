@@ -6,6 +6,7 @@ import { listCommits, scanGitRefs } from '../git-refs.js';
 
 interface ProjectParams { projectId: string }
 interface CommitsQuery { ref?: string }
+interface StatsQuery { weeks?: string }
 
 // One readable line per zod issue: "field: message; field: message".
 const validationMessage = (error: z.ZodError): string =>
@@ -44,6 +45,17 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     const worktree = (await scanGitRefs(p.workspacePath)).worktrees.find(w => w.name === ref);
     if (worktree) return { commits: await listCommits(worktree.path) };
     return { commits: await listCommits(p.workspacePath, ref) };
+  });
+
+  // T6-31: stats panel aggregate. `weeks` falls back to 8 on a missing or
+  // non-numeric value; the store clamps the final range to 1..26 (so an
+  // out-of-range number keeps its direction, e.g. 0/−3 → 1, 99 → 26).
+  app.get('/api/projects/:projectId/stats', async (req: FastifyRequest<{ Params: ProjectParams; Querystring: StatsQuery }>, reply) => {
+    if (!store.getProject(req.params.projectId)) {
+      return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
+    }
+    const raw = Number.parseInt(String(req.query.weeks ?? ''), 10);
+    return store.projectStats(req.params.projectId, { weeks: Number.isFinite(raw) ? raw : 8 });
   });
 
   app.delete('/api/projects/:projectId', async (req: FastifyRequest<{ Params: ProjectParams }>) => {

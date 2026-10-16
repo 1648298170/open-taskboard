@@ -12,7 +12,7 @@
 // (what HTTP/CLI/MCP layers hand the Store in production).
 
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -372,11 +372,11 @@ describe('Store.revision', () => {
 // --- (j) migrations ---------------------------------------------------------------
 
 describe('migrations', () => {
-  it('sets user_version to 6 on a fresh store (base schema + all migrations)', () => {
+  it('sets user_version to 8 on a fresh store (base schema + all migrations)', () => {
     const db = new DatabaseSync(':memory:');
     new Store('.unused', db); // configureDatabase runs schema + migrations
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(row.user_version, 6);
+    assert.equal(row.user_version, 8);
   });
 
   it('is idempotent: re-configuring an already-migrated db is a no-op', () => {
@@ -387,7 +387,7 @@ describe('migrations', () => {
     // Second Store over the same db replays configureDatabase (idempotent path).
     new Store('.unused', db);
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(row.user_version, 6);
+    assert.equal(row.user_version, 8);
     assert.ok(store.getIssue(issue.id));
   });
 });
@@ -671,6 +671,257 @@ describe('Store archive', () => {
   });
 });
 
+// --- (q) claims / leases (T7-34) ----------------------------------------------------
+
+describe('Store claims (T7-34)', () => {
+  // Like fresh(), but keeps the injected DatabaseSync around so tests can
+  // exec raw SQL against the same :memory: db (e.g. age a lease to expiry
+  // deterministically instead of waiting out a wall-clock ttl).
+  function freshDb(): { store: Store; db: DatabaseSync; events: StoreEvent[] } {
+    const db = new DatabaseSync(':memory:');
+    const store = new Store('.unused', db);
+    const events: StoreEvent[] = [];
+    store.subscribe(e => events.push(e));
+    return { store, db, events };
+  }
+
+  function seed(store: Store): string {
+    store.createProject({ id: 'p1', name: 'P' });
+    return store.createIssue({ projectId: 'p1', title: 'leased' }).id;
+  }
+
+  it('claims, and a re-entrant claim by the same agent renews (version bumps each time)', () => {
+    const { store } = freshDb();
+    const id = seed(store);
+
+    const first = store.claimIssue(id, 'alpha', 30);
+    assert.equal(first.claimedBy, 'alpha');
+    assert.equal(first.version, 2, 'claim bumps version');
+    assert.ok(first.leaseExpiresAt);
+    assert.ok(Date.parse(first.leaseExpiresAt!) > Date.now(), 'lease is in the future');
+
+    // same agent claims again → renew, not a conflict
+    const second = store.claimIssue(id, 'alpha', 60);
+    assert.equal(second.claimedBy, 'alpha');
+    assert.equal(second.version, 3, 're-claim bumps version again');
+    assert.ok(Date.parse(second.leaseExpiresAt!) >= Date.parse(first.leaseExpiresAt!));
+
+    // activity logged per claim
+    const claims = store.listActivities(id).filter(a => a.action === 'claimed');
+    assert.equal(claims.length, 2);
+    assert.equal(claims[0]!.actor, 'alpha');
+    assert.equal(claims[0]!.detail, 'by alpha ttl 60m');
+  });
+
+  it('rejects a second agent while the lease is active — exact ConflictError message', () => {
+    const { store } = freshDb();
+    const id = seed(store);
+    const claimed = store.claimIssue(id, 'alpha', 30);
+
+    throwsWith(
+      () => store.claimIssue(id, 'beta', 30),
+      ConflictError,
+      `issue claimed by alpha until ${claimed.leaseExpiresAt}`
+    );
+  });
+
+  it('an expired lease is claimable by a second agent (lazy expiry)', () => {
+    const { store, db } = freshDb();
+    const id = seed(store);
+    store.claimIssue(id, 'alpha', 30);
+    // age the lease deterministically: raw SQL on the injected db
+    db.exec(`UPDATE issues SET lease_expires_at = '2000-01-01T00:00:00.000Z' WHERE id = '${id}'`);
+
+    const taken = store.claimIssue(id, 'beta', 30);
+    assert.equal(taken.claimedBy, 'beta', 'expired lease reads as unclaimed');
+    assert.ok(Date.parse(taken.leaseExpiresAt!) > Date.now());
+  });
+
+  it('heartbeat by the holder extends the lease and bumps nothing', () => {
+    const { store, db } = freshDb();
+    const id = seed(store);
+    store.claimIssue(id, 'alpha', 1); // v2, lease = now + 1m
+    const before = store.getIssue(id);
+    assert.ok(before);
+    const actsBefore = store.listActivities(id).length;
+
+    const beat = store.heartbeatIssue(id, 'alpha', 60);
+    assert.ok(Date.parse(beat.leaseExpiresAt!) > Date.parse(before.leaseExpiresAt!),
+      'lease deadline extended');
+    assert.equal(beat.version, before.version, 'heartbeat does NOT bump version');
+    assert.equal(beat.updatedAt, before.updatedAt, 'heartbeat does NOT touch updated_at');
+    assert.equal(store.listActivities(id).length, actsBefore, 'heartbeat logs no activity');
+    // row check: only lease_expires_at moved
+    const row = db.prepare('SELECT claimed_by, claimed_at, version FROM issues WHERE id = ?').get(id) as { claimed_by: string; claimed_at: string | null; version: number };
+    assert.equal(row.claimed_by, 'alpha');
+    assert.ok(row.claimed_at);
+    assert.equal(row.version, 2);
+  });
+
+  it('heartbeat by a non-holder → ConflictError; heartbeat on an expired lease → claim again', () => {
+    const { store, db } = freshDb();
+    const id = seed(store);
+    store.claimIssue(id, 'alpha', 30);
+
+    throwsWith(() => store.heartbeatIssue(id, 'beta'), ConflictError, 'not the lease holder');
+
+    db.exec(`UPDATE issues SET lease_expires_at = '2000-01-01T00:00:00.000Z' WHERE id = '${id}'`);
+    throwsWith(() => store.heartbeatIssue(id, 'alpha'), ConflictError, 'lease expired, claim again');
+  });
+
+  it('release clears the claim and bumps version; releasing an unclaimed issue is a no-op', () => {
+    const { store, events } = freshDb();
+    const id = seed(store);
+    store.claimIssue(id, 'alpha', 30); // v2
+
+    const released = store.releaseIssue(id, 'alpha');
+    assert.equal(released.claimedBy, '', 'claim cleared');
+    assert.equal(released.leaseExpiresAt, null, 'lease cleared');
+    assert.equal(released.version, 3, 'release bumps version');
+    const act = store.listActivities(id).find(a => a.action === 'released');
+    assert.ok(act);
+    assert.equal(act.actor, 'alpha');
+    assert.equal(act.detail, 'by alpha');
+    assert.ok(events.some(e => e.type === 'issue.updated' && e.payload.id === id));
+
+    // no-op release: no version bump, no extra activity
+    const again = store.releaseIssue(id, 'alpha');
+    assert.equal(again.version, 3, 'no-op release does not bump version');
+    assert.equal(store.listActivities(id).filter(a => a.action === 'released').length, 1);
+  });
+
+  it('release by a non-holder → ConflictError', () => {
+    const { store } = freshDb();
+    const id = seed(store);
+    store.claimIssue(id, 'alpha', 30);
+    throwsWith(() => store.releaseIssue(id, 'beta'), ConflictError, 'not the lease holder');
+  });
+
+  it('readyIssues claimAgent excludes others’ active claims, keeps own and expired ones', () => {
+    const { store, db } = freshDb();
+    store.createProject({ id: 'p1', name: 'P' });
+    const A = store.createIssue({ projectId: 'p1', title: 'A' }).id;
+    const B = store.createIssue({ projectId: 'p1', title: 'B' }).id;
+    const C = store.createIssue({ projectId: 'p1', title: 'C' }).id;
+
+    store.claimIssue(A, 'beta', 30);   // someone else's active claim
+    store.claimIssue(B, 'me', 30);     // my own claim
+    store.claimIssue(C, 'beta', 30);   // will be aged to expiry
+    db.exec(`UPDATE issues SET lease_expires_at = '2000-01-01T00:00:00.000Z' WHERE id = '${C}'`);
+
+    const ids = (list: { id: string }[]): string[] => list.map(i => i.id);
+    // from my perspective: A excluded, B kept (own), C kept (expired)
+    assert.deepEqual(ids(store.readyIssues('p1', { claimAgent: 'me' })), [B, C]);
+    // default (no claimAgent): everything stays visible for the UI
+    assert.deepEqual(ids(store.readyIssues('p1')).sort(), [A, B, C].sort());
+    // from beta's perspective: A/C are theirs, B is mine
+    assert.deepEqual(ids(store.readyIssues('p1', { claimAgent: 'beta' })).sort(), [A, C].sort());
+  });
+
+  it('validates inputs: empty agent, unknown issue', () => {
+    const { store } = freshDb();
+    const id = seed(store);
+    throwsWith(() => store.claimIssue(id, ''), ValidationError, 'agent must be non-empty');
+    throwsWith(() => store.heartbeatIssue(id, ''), ValidationError, 'agent must be non-empty');
+    throwsWith(() => store.releaseIssue(id, ''), ValidationError, 'agent must be non-empty');
+    throwsWith(() => store.claimIssue('ghost', 'alpha'), NotFoundError, 'issue not found: ghost');
+    throwsWith(() => store.heartbeatIssue('ghost', 'alpha'), NotFoundError, 'issue not found: ghost');
+    throwsWith(() => store.releaseIssue('ghost', 'alpha'), NotFoundError, 'issue not found: ghost');
+  });
+});
+
+// --- (s) attachments (T7-39) ---------------------------------------------------------
+
+describe('Store attachments (T7-39)', () => {
+  // Like fresh(), but with a private temp attachmentsDir wired through the
+  // Store constructor param — the on-disk seam under test.
+  function freshDir(): { store: Store; dir: string; events: StoreEvent[] } {
+    const dir = mkdtempSync(join(tmpdir(), 'taskboard-attachments-'));
+    const store = new Store('.unused', new DatabaseSync(':memory:'), dir);
+    const events: StoreEvent[] = [];
+    store.subscribe(e => events.push(e));
+    return { store, dir, events };
+  }
+
+  function seed(store: Store): string {
+    store.createProject({ id: 'p1', name: 'P' });
+    return store.createIssue({ projectId: 'p1', title: 'has files' }).id;
+  }
+
+  it('records and lists attachments (created order); logs activity, emits issue.updated, bumps revision', () => {
+    const { store, events } = freshDir();
+    const id = seed(store);
+    const rev0 = store.revision();
+
+    const a1 = store.addAttachment(id, 'spec.pdf', 1024, 'alice');
+    const a2 = store.addAttachment(id, 'logo.png', 2048, 'bob');
+
+    assert.equal(a1.issueId, id);
+    assert.equal(a1.size, 1024);
+    assert.equal(a1.actor, 'alice');
+    assert.ok(a1.id.length > 0);
+    // listByIssue: created_at ASC — insertion order via the rowid tie-breaker.
+    assert.deepEqual(store.listAttachments(id).map(a => a.filename), ['spec.pdf', 'logo.png']);
+    assert.deepEqual(store.listAttachments(id).map(a => a.id), [a1.id, a2.id]);
+    // detail payload source: listAttachments is exactly what the show route ships.
+    const detail = store.listAttachments(id);
+    assert.deepEqual(detail.map(({ ...a }) => a), [
+      { id: a1.id, issueId: id, filename: 'spec.pdf', size: 1024, actor: 'alice', createdAt: a1.createdAt },
+      { id: a2.id, issueId: id, filename: 'logo.png', size: 2048, actor: 'bob', createdAt: a2.createdAt }
+    ]);
+    // activity: action 'attachment', detail = filename, actor propagated
+    const acts = store.listActivities(id).filter(a => a.action === 'attachment');
+    assert.equal(acts.length, 2);
+    assert.equal(acts[1]!.actor, 'alice');
+    assert.equal(acts[1]!.detail, 'spec.pdf');
+    assert.equal(acts[0]!.actor, 'bob');
+    assert.equal(acts[0]!.detail, 'logo.png');
+    // event + revision (attachments feed the revision counter → SSE refresh)
+    assert.ok(events.some(e => e.type === 'issue.updated' && e.payload.id === id));
+    assert.ok(store.revision() > rev0, 'attachment insert must bump revision');
+
+    // unknown issue → NotFoundError; getAttachment round-trips
+    throwsWith(() => store.addAttachment('ghost', 'x', 1), NotFoundError, 'issue not found: ghost');
+    assert.equal(store.getAttachment(a1.id)!.filename, 'spec.pdf');
+    assert.equal(store.getAttachment('nope'), undefined);
+  });
+
+  it('pathFor lands under the injected dir and creates it on demand; deleteIssue removes rows AND the dir', () => {
+    const { store, dir } = freshDir();
+    const id = seed(store);
+    const a = store.addAttachment(id, 'notes.txt', 5, 'alice');
+    const path = store.attachmentPathFor(id, a.id, 'notes.txt');
+    // <dir>/<issueId>/<attachmentId>__<filename>
+    assert.equal(path, join(join(dir, id), `${a.id}__notes.txt`));
+    assert.ok(existsSync(join(dir, id)), 'dirFor creates the per-issue dir');
+    // seed a fake body the way the server route does
+    writeFileSync(path, 'hello');
+    assert.ok(existsSync(path));
+    assert.equal(store.listAttachments(id).length, 1);
+
+    store.deleteIssue(id);
+
+    // DB rows cascaded via FK…
+    assert.equal(store.listAttachments(id).length, 0);
+    assert.equal(store.getAttachment(a.id), undefined);
+    // …and the on-disk dir removed best-effort
+    assert.ok(!existsSync(join(dir, id)), `attachment dir should be gone: ${join(dir, id)}`);
+  });
+
+  it('deleteProject also removes the project issues’ attachment dirs', () => {
+    const { store, dir } = freshDir();
+    store.createProject({ id: 'px', name: 'Doomed' });
+    const i1 = store.createIssue({ projectId: 'px', title: 'one' }).id;
+    const a = store.addAttachment(i1, 'doomed.txt', 3, 'alice');
+    writeFileSync(store.attachmentPathFor(i1, a.id, 'doomed.txt'), 'bye');
+
+    store.deleteProject('px');
+
+    assert.equal(store.getAttachment(a.id), undefined);
+    assert.ok(!existsSync(join(dir, i1)));
+  });
+});
+
 // --- (p) full-text search (T6-30) ----------------------------------------------------
 
 describe('Store.search (FTS)', () => {
@@ -741,7 +992,99 @@ describe('Store.search (FTS)', () => {
   });
 });
 
-// --- (q) backup (T6-32) ----------------------------------------------------------------
+// --- (r) project stats (T6-31) --------------------------------------------------------
+
+describe('Store.projectStats', () => {
+  it('aggregates byStatus / weeklyDone / avgCycleHours / byActor for a mixed project', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    // 2 done (created then updated via the store), 1 open; actors: alice
+    // mutates, bob comments once.
+    const a = store.createIssue({ projectId: 'p1', title: 'A' }, 'alice').id;
+    const b = store.createIssue({ projectId: 'p1', title: 'B' }, 'alice').id;
+    store.createIssue({ projectId: 'p1', title: 'C open' }, 'alice');
+    store.updateIssue(a, { status: 'done' }, undefined, 'alice');
+    store.updateIssue(b, { status: 'in_progress' }, undefined, 'alice');
+    store.updateIssue(b, { status: 'done' }, undefined, 'alice');
+    store.addComment(a, { body: 'nice' }, 'bob');
+
+    const stats = store.projectStats('p1');
+
+    // byStatus: STATUSES order, zeros included
+    assert.deepEqual(stats.byStatus.map(({ ...s }) => s), [
+      { status: 'todo', count: 1 },
+      { status: 'in_progress', count: 0 },
+      { status: 'in_review', count: 0 },
+      { status: 'done', count: 2 }
+    ]);
+
+    // weeklyDone: 8 zero-filled buckets oldest → newest; both done issues
+    // landed just now, so the current (last) week carries them.
+    assert.equal(stats.weeklyDone.length, 8);
+    assert.equal(stats.weeklyDone.filter(w => w.count === 0).length, 7);
+    assert.equal(stats.weeklyDone[7]!.count, 2);
+    // weekStart is the LOCAL Monday (Mon 00:00) of the current week, ISO date
+    const now = new Date();
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+    const p2 = (n: number): string => String(n).padStart(2, '0');
+    assert.equal(stats.weeklyDone[7]!.weekStart,
+      `${monday.getFullYear()}-${p2(monday.getMonth() + 1)}-${p2(monday.getDate())}`);
+
+    // avgCycleHours: a number ≥ 0 once done issues exist (they were done
+    // milliseconds after creation, so ~0.0)
+    assert.equal(typeof stats.avgCycleHours, 'number');
+    assert.ok(stats.avgCycleHours! >= 0);
+    assert.ok(stats.avgCycleHours! < 1, 'cycle of a just-completed issue should round to 0.0');
+
+    // byActor: alice = 3 creates + 3 updates = 6, bob = 1 comment; desc order
+    // (sqlite rows are null-prototype; spread for deep-equal)
+    const alice = stats.byActor.find(x => x.actor === 'alice');
+    assert.ok(alice, 'alice should appear in byActor');
+    assert.equal(alice!.actions, 6);
+    assert.equal(stats.byActor[0]!.actor, 'alice');
+    assert.deepEqual({ ...stats.byActor[1]! }, { actor: 'bob', actions: 1 });
+  });
+
+  it('returns zeroed stats and null avgCycleHours for an empty project', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const stats = store.projectStats('p1');
+    assert.equal(stats.avgCycleHours, null);
+    assert.equal(stats.weeklyDone.length, 8);
+    assert.ok(stats.weeklyDone.every(w => w.count === 0));
+    assert.deepEqual(stats.byActor, []);
+    assert.deepEqual(stats.byStatus.map(s => s.count), [0, 0, 0, 0]);
+  });
+
+  it('honors the weeks option (length changes) and clamps to 1..26', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    assert.equal(store.projectStats('p1', { weeks: 2 }).weeklyDone.length, 2);
+    assert.equal(store.projectStats('p1', { weeks: 0 }).weeklyDone.length, 1);
+    assert.equal(store.projectStats('p1', { weeks: 99 }).weeklyDone.length, 26);
+    // successive weekStarts step back exactly 7 days, oldest → newest
+    const w = store.projectStats('p1', { weeks: 3 }).weeklyDone;
+    const dayMs = 86_400_000;
+    assert.equal(Date.parse(w[1]!.weekStart) - Date.parse(w[0]!.weekStart), 7 * dayMs);
+    assert.equal(Date.parse(w[2]!.weekStart) - Date.parse(w[1]!.weekStart), 7 * dayMs);
+  });
+
+  it('scopes byActor to the project via the activities ⋈ issues JOIN', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'One' });
+    store.createProject({ id: 'p2', name: 'Two' });
+    const a = store.createIssue({ projectId: 'p1', title: 'A' }, 'alice').id;
+    store.createIssue({ projectId: 'p2', title: 'B' }, 'zoe');
+    store.updateIssue(a, { status: 'done' }, undefined, 'alice');
+
+    const s1 = store.projectStats('p1');
+    assert.deepEqual(s1.byActor.map(x => ({ ...x })), [{ actor: 'alice', actions: 2 }]); // zoe's p2 activity is excluded
+    const s2 = store.projectStats('p2');
+    assert.deepEqual(s2.byActor.map(x => ({ ...x })), [{ actor: 'zoe', actions: 1 }]);
+  });
+});
+
+
 
 describe('Store.backupTo', () => {
   it('writes a taskboard-*.sqlite snapshot into dir and returns its path', () => {
