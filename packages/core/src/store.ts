@@ -264,10 +264,15 @@ export class Store {
       throw new ConflictError(`issue claimed by ${holder} until ${issue.leaseExpiresAt}`);
     }
     const t = now();
+    const expires = new Date(Date.parse(t) + ttlMinutes * 60_000).toISOString();
+    // CAS against the holder we observed — another process (two serve
+    // instances / MCP auto-start races) may have claimed in between.
+    let claimed = false;
     inTransaction(this.db, () => {
-      this.issues.setClaim(id, agent, t, new Date(Date.parse(t) + ttlMinutes * 60_000).toISOString());
-      this.logActivity(id, actor, 'claimed', `by ${agent} ttl ${ttlMinutes}m`);
+      claimed = this.issues.setClaim(id, agent, t, expires, issue.claimedBy);
+      if (claimed) this.logActivity(id, actor, 'claimed', `by ${agent} ttl ${ttlMinutes}m`);
     });
+    if (!claimed) throw new ConflictError('claim state changed concurrently, retry');
     this.emit('issue.updated', { id });
     return this.issues.get(id)!;
   }
@@ -286,7 +291,9 @@ export class Store {
     const holder = activeClaim(issue);
     if (holder === null) throw new ConflictError('lease expired, claim again');
     if (holder !== agent) throw new ConflictError('not the lease holder');
-    this.issues.extendLease(id, new Date(Date.now() + ttlMinutes * 60_000).toISOString());
+    if (!this.issues.extendLease(id, new Date(Date.now() + ttlMinutes * 60_000).toISOString(), agent)) {
+      throw new ConflictError('not the lease holder');
+    }
     this.emit('issue.updated', { id });
     return this.issues.get(id)!;
   }
@@ -304,10 +311,12 @@ export class Store {
     const holder = activeClaim(issue);
     if (holder !== null && holder !== agent) throw new ConflictError('not the lease holder');
     if (holder !== null) {
+      let released = false;
       inTransaction(this.db, () => {
-        this.issues.clearClaim(id);
-        this.logActivity(id, actor, 'released', `by ${agent}`);
+        released = this.issues.clearClaim(id, agent);
+        if (released) this.logActivity(id, actor, 'released', `by ${agent}`);
       });
+      if (!released) throw new ConflictError('not the lease holder');
       this.emit('issue.updated', { id });
     }
     return this.issues.get(id)!;
@@ -516,7 +525,10 @@ export class Store {
       if (list) list.push(edge.dependsOnId);
       else blockedBy.set(edge.issueId, [edge.dependsOnId]);
     }
-    const statusById = new Map(this.issues.list(projectId).map(i => [i.id, i.status]));
+    // T5-24 × T4-20/21: include archived rows so a done-then-archived
+    // dependency still counts as done — archiving hides a card from the
+    // board, it must not un-ready its dependents.
+    const statusById = new Map(this.issues.list(projectId, { archived: 'all' }).map(i => [i.id, i.status]));
     const isReady = (id: string): boolean =>
       (blockedBy.get(id) ?? []).every(dep => statusById.get(dep) === 'done');
     const claimableBy = (issue: Issue): boolean => {
@@ -536,8 +548,8 @@ export class Store {
    * Full-text search across issue titles/descriptions and comment bodies
    * (trigram, ≥3 chars); a comment hit maps to its parent issue. Shorter
    * queries — and engines whose build skipped the FTS5 migration — fall
-   * back to a case-insensitive LIKE scan over title/description. Archived
-   * issues are excluded, matching the listIssues default.
+   * back to a case-insensitive LIKE scan over title/description/comment
+   * bodies. Archived issues are excluded, matching the listIssues default.
    */
   search(query: string): Issue[] {
     const q = query.trim();

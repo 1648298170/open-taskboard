@@ -8,8 +8,7 @@ import type {
 export type {
   Activity, Attachment, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Stats, Status
 };
-export { STATUSES, activeClaim } from '@taskboard/core/types';
-export const PRIORITIES: Priority[] = ['low', 'medium', 'high', 'urgent'];
+export { STATUSES, PRIORITIES, activeClaim } from '@taskboard/core/types';
 
 /** T2-8: git-refs scan result for a project workspace. */
 export interface GitRefs {

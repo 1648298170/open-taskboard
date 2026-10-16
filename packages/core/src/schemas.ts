@@ -53,6 +53,9 @@ export const issuePatchSchema = z
 // REST PATCH keeps version optional (today's REST contract).
 export const restUpdateIssueSchema = issuePatchSchema.extend({
   version: z.number().int().positive().optional(),
+  // T7-36 逃生舱：TASKBOARD_HUMAN_DONE=1 时，用户确认后 agent 可传
+  // confirm: true 代为把状态置为 done（默认仅 web 来源可过门禁）。
+  confirm: z.boolean().optional(),
 });
 
 // MCP update_issue requires version (optimistic-lock contract).

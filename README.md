@@ -99,7 +99,7 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 | `TASKBOARD_WEB_DIST` | 自动探测 | 看板静态目录（默认 `apps/web/dist/web`） |
 | `TASKBOARD_TOKEN` | 未设置 | 设置后 API 需要 Bearer 认证（`Authorization: Bearer <token>` 或 `?token=`；SSE 支持 `?token=`） |
 | `TASKBOARD_WEBHOOK_URL` | 未设置 | 逗号分隔的 HTTP(S) URL；设置后每个事件（project/issue/comment 变更）以 POST JSON 转发到各 URL（3s 超时，失败重试一次，失败仅告警） |
-| `TASKBOARD_HUMAN_DONE` | 未设置 | 设置后 `status→done` 仅接受 web 来源（人工 UI），agent 只能到 `in_review` |
+| `TASKBOARD_HUMAN_DONE` | 未设置 | 设置后 `status→done` 仅接受 web 来源（人工 UI），agent 只能到 `in_review`；用户确认后 agent 可传 `confirm: true` 代为设置 |
 
 ## 功能
 

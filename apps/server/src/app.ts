@@ -93,6 +93,10 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
     const expected = Buffer.from(token);
     app.addHook('onRequest', async (req, reply) => {
       if (!req.url.startsWith('/api/')) return;
+      // T7-35 × T2-9: the machine-readable contract stays discoverable
+      // pre-auth so any-language agents can bootstrap; all other /api/*
+      // routes require the token.
+      if (req.url.startsWith('/api/openapi.json')) return;
       // CORS preflight carries no credentials by browser design — let the
       // cors plugin answer it; the credentialed request behind it is checked.
       if (req.raw.method === 'OPTIONS') return;

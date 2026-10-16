@@ -113,20 +113,28 @@ export class IssueRepo {
   // see the change. heartbeat touches ONLY the lease deadline: a renewal
   // must not invalidate optimistic-lock clients (no version, no updated_at).
   // Caller wraps in a transaction and owns preconditions / activity / events.
-  setClaim(id: string, agent: string, claimedAt: string, leaseExpiresAt: string): void {
-    this.db.prepare(
-      'UPDATE issues SET claimed_by = ?, claimed_at = ?, lease_expires_at = ?, version = version + 1, updated_at = ? WHERE id = ?'
-    ).run(agent, claimedAt, leaseExpiresAt, now(), id);
+  setClaim(id: string, agent: string, claimedAt: string, leaseExpiresAt: string, expectedHolder: string): boolean {
+    // T7-34 CAS: only fire when the lease still belongs to the holder the
+    // caller observed ('' = unclaimed) — closes the cross-process
+    // check-then-write race; changes = 0 means someone else moved first.
+    const r = this.db.prepare(
+      'UPDATE issues SET claimed_by = ?, claimed_at = ?, lease_expires_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND claimed_by = ?'
+    ).run(agent, claimedAt, leaseExpiresAt, now(), id, expectedHolder);
+    return Number(r.changes) > 0;
   }
 
-  extendLease(id: string, leaseExpiresAt: string): void {
-    this.db.prepare('UPDATE issues SET lease_expires_at = ? WHERE id = ?').run(leaseExpiresAt, id);
+  extendLease(id: string, leaseExpiresAt: string, expectedHolder: string): boolean {
+    const r = this.db.prepare(
+      'UPDATE issues SET lease_expires_at = ? WHERE id = ? AND claimed_by = ?'
+    ).run(leaseExpiresAt, id, expectedHolder);
+    return Number(r.changes) > 0;
   }
 
-  clearClaim(id: string): void {
-    this.db.prepare(
-      "UPDATE issues SET claimed_by = '', claimed_at = NULL, lease_expires_at = NULL, version = version + 1, updated_at = ? WHERE id = ?"
-    ).run(now(), id);
+  clearClaim(id: string, expectedHolder: string): boolean {
+    const r = this.db.prepare(
+      "UPDATE issues SET claimed_by = '', claimed_at = NULL, lease_expires_at = NULL, version = version + 1, updated_at = ? WHERE id = ? AND claimed_by = ?"
+    ).run(now(), id, expectedHolder);
+    return Number(r.changes) > 0;
   }
 
   /** ids of `id` plus every descendant (children-first order irrelevant here; read-only). */

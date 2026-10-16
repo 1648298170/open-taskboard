@@ -43,7 +43,7 @@ pnpm start      # 启动服务 http://127.0.0.1:47824（0.0.0.0 时额外打印 
 ## taskboard 使用纪律（重要）
 
 - 状态流转严格遵循：`todo → in_progress → in_review → done`。
-- `done` 必须等用户确认后才能设置；自验完成先置 `in_review` 并在评论写明验证方式；服务端可用 `TASKBOARD_HUMAN_DONE=1` 强制（agent 来源改 done 将被 403 拒绝）。
+- `done` 必须等用户确认后才能设置；自验完成先置 `in_review` 并在评论写明验证方式；服务端可用 `TASKBOARD_HUMAN_DONE=1` 强制——届时 agent 来源改 done 将被 403 拒绝，除非用户已确认且请求带 `confirm: true`。
 - `update_issue` 必须携带 `show_issue` 返回的 `version`（乐观锁）；版本冲突说明别人改过，重读再改。
 - **多 agent 并发**：开工前先 `claim`（租约默认 30 分钟），长任务定期 `heartbeat` 续租，完成即 `release`；`next`/`ready` 会自动跳过他人租约中的任务。
 - 拆解需求：先建父任务（顶层），再用 parentId 建子任务（仅两层），一个可独立交付的子需求一个任务。
@@ -59,7 +59,7 @@ pnpm start      # 启动服务 http://127.0.0.1:47824（0.0.0.0 时额外打印 
 `TASKBOARD_HOST`（默认 127.0.0.1，LAN 共享用 0.0.0.0）· `TASKBOARD_PORT`（47824）·
 `TASKBOARD_DATA_DIR`（.data）· `TASKBOARD_URL` · `TASKBOARD_WEB_DIST` ·
 `TASKBOARD_TOKEN`（设置后 API 需 Bearer；SSE 支持 `?token=`）·
-`TASKBOARD_READONLY=1`（写操作 403）· `TASKBOARD_HUMAN_DONE=1`（done 仅限人工来源）·
+`TASKBOARD_READONLY=1`（写操作 403）· `TASKBOARD_HUMAN_DONE=1`（done 仅限 web 来源；agent 可带 `confirm: true` 代为设置）·
 `TASKBOARD_WEBHOOK_URL`（逗号分隔，事件 POST JSON 转发）· `TASKBOARD_BACKUPS=0`（关闭启动备份）。
 详见 README.md。
 

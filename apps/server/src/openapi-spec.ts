@@ -1,3 +1,5 @@
+import { PRIORITIES, STATUSES } from '@taskboard/core';
+
 // Single source of truth for the OpenAPI 3.1 document served at
 // GET /api/openapi.json (routes/openapi.ts) and written verbatim to
 // apps/server/openapi.json by scripts/write-openapi.mjs.
@@ -743,12 +745,12 @@ export const openApiSpec: OpenApiDocument = {
       Status: {
         type: 'string',
         description: 'Issue lifecycle status (strict order: todo → in_progress → in_review → done)',
-        enum: ['todo', 'in_progress', 'in_review', 'done']
+        enum: [...STATUSES]
       },
       Priority: {
         type: 'string',
         description: 'Issue priority (list order: urgent first)',
-        enum: ['urgent', 'high', 'medium', 'low']
+        enum: [...PRIORITIES]
       },
       Project: {
         type: 'object',

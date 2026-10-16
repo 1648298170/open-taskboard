@@ -70,7 +70,8 @@ export class SearchRepo {
 
   /**
    * LIKE fallback for engines without FTS5 (and short queries): case-
-   * insensitive contains over title/description, archived rows excluded,
+   * insensitive contains over title/description AND comment bodies (a
+   * comment hit maps to its parent issue), archived rows excluded,
    * standard list order. Returns bare issues.
    */
   likeScan(needle: string): Issue[] {
@@ -80,8 +81,11 @@ export class SearchRepo {
          status, priority, labels, branch, worktree, archived_at AS archivedAt, assignee, version,
          start_date AS startDate, due_date AS dueDate, created_at AS createdAt, updated_at AS updatedAt
        FROM issues
-       WHERE archived_at IS NULL AND (title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')
+       WHERE archived_at IS NULL AND (
+           title LIKE ? ESCAPE '\\'
+        OR description LIKE ? ESCAPE '\\'
+        OR id IN (SELECT issue_id FROM comments WHERE body LIKE ? ESCAPE '\\'))
        ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, created_at`
-    ).all(`%${escaped}%`, `%${escaped}%`) as unknown as Issue[];
+    ).all(`%${escaped}%`, `%${escaped}%`, `%${escaped}%`) as unknown as Issue[];
   }
 }

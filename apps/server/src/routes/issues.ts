@@ -80,8 +80,11 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }
     // check first), so a gated request gets 403 even with a stale version.
     // Only direct status='done' patches are gated; other statuses and archive
     // are unaffected. Default (env unset/empty): zero behavior change.
+    // T7-36 逃生舱（spec：默认仅 web）：用户在对话中确认后，agent 可传
+    // confirm: true 代为设置。已知边界（本地优先工具）：actor 是客户端自报
+    // 头，可被伪造——门禁约束的是守规矩的 stock cli/mcp 客户端，非恶意对手。
     if (process.env.TASKBOARD_HUMAN_DONE === '1' && parsed.data.status === 'done' &&
-        String(req.headers['x-taskboard-actor'] ?? '') !== 'web') {
+        String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true) {
       return reply.code(403).send({ error: 'done requires human confirmation' });
     }
     const { version, ...patch } = parsed.data;
