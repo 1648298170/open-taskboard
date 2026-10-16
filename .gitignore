@@ -31,3 +31,6 @@ Thumbs.db
 
 # Playwright MCP session artifacts
 .playwright-mcp/
+
+# Agent verification screenshots
+t738-*.png
