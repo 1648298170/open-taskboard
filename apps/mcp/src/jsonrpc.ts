@@ -44,7 +44,10 @@ async function handle(line: string, registry: ToolRegistry): Promise<void> {
       const tool = typeof name === 'string' ? registry.get(name) : undefined;
       if (tool === undefined) throw new Error(`unknown tool: ${name}`);
       const data = await tool.handler((params?.arguments ?? {}) as Record<string, unknown>);
-      return send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] } });
+      // A plain-string handler result IS the tool text (e.g. export_board);
+      // every other shape is pretty-printed JSON as before.
+      const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+      return send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text }] } });
     } catch (err) {
       return send({
         jsonrpc: '2.0', id,

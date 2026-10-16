@@ -20,7 +20,8 @@ const commentsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
   app.post('/api/issues/:id/comments', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
     const parsed = addCommentSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
-    return reply.code(201).send(store.addComment(req.params.id, parsed.data));
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    return reply.code(201).send(store.addComment(req.params.id, parsed.data, actor));
   });
 };
 

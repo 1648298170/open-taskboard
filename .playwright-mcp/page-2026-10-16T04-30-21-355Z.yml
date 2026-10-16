@@ -1,0 +1,94 @@
+- generic [ref=f7e2]:
+  - banner [ref=f7e3]:
+    - generic [ref=f7e4]:
+      - generic [ref=f7e5]: ▚
+      - heading "taskboard" [level=1] [ref=f7e6]
+    - generic [ref=f7e7]:
+      - generic [ref=f7e8]:
+        - generic [ref=f7e9]: project
+        - combobox "project" [ref=f7e10] [cursor=pointer]:
+          - option "Batch4 验收 (demo)" [selected]
+      - 'generic "weighted: 父任务等权统计" [ref=f7e11]': 0/1 · 0%
+      - button "＋ 新任务" [ref=f7e13] [cursor=pointer]
+      - button "切换主题" [ref=f7e14] [cursor=pointer]: ☀
+      - button "桌面通知" [ref=f7e15] [cursor=pointer]: 🔔
+  - generic [ref=f7e16]:
+    - textbox "搜索标题/描述…" [ref=f7e17]
+    - combobox [ref=f7e18] [cursor=pointer]:
+      - option "全部" [selected]
+    - combobox [ref=f7e19] [cursor=pointer]:
+      - option "全部" [selected]
+    - combobox "分组" [ref=f7e20] [cursor=pointer]:
+      - option "无" [selected]
+      - option "按负责人"
+      - option "按标签"
+    - button "批量模式" [ref=f7e21] [cursor=pointer]
+    - generic [ref=f7e22]:
+      - button "按优先级" [ref=f7e23] [cursor=pointer]
+      - button "按创建时间" [ref=f7e24] [cursor=pointer]
+  - main [ref=f7e25]:
+    - generic [ref=f7e26]:
+      - heading "todo 2" [level=2] [ref=f7e27]:
+        - text: todo
+        - generic [ref=f7e29]: "2"
+      - generic [ref=f7e31]:
+        - article [ref=f7e32] [cursor=pointer]:
+          - generic [ref=f7e33]: 父任务：登录模块
+          - generic "子任务 2/3 done" [ref=f7e34]: 2/3 ●●○
+          - generic [ref=f7e35]:
+            - generic [ref=f7e36]: high
+            - generic [ref=f7e37]: 10-20
+            - generic [ref=f7e38]: ⟂ feat/login
+            - generic [ref=f7e39]: "#bcc3f08c"
+        - article [ref=f7e40] [cursor=pointer]:
+          - generic [ref=f7e41]: └ 登录表单 UI
+          - generic [ref=f7e42]:
+            - generic [ref=f7e43]: medium
+            - generic [ref=f7e44]: "#78509433"
+        - article [ref=f7e45] [cursor=pointer]:
+          - generic [ref=f7e46]: └ JWT 鉴权
+          - generic [ref=f7e47]:
+            - generic [ref=f7e48]: medium
+            - generic [ref=f7e49]: "#713fb3d3"
+        - article [ref=f7e50] [cursor=pointer]:
+          - generic [ref=f7e51]: └ 会话刷新
+          - generic [ref=f7e52]:
+            - generic [ref=f7e53]: medium
+            - generic [ref=f7e54]: "#7b00d705"
+    - heading "in_progress 0" [level=2] [ref=f7e56]:
+      - text: in_progress
+      - generic [ref=f7e58]: "0"
+    - heading "in_review 0" [level=2] [ref=f7e60]:
+      - text: in_review
+      - generic [ref=f7e62]: "0"
+    - heading "done 2" [level=2] [ref=f7e64]:
+      - text: done
+      - generic [ref=f7e66]: "2"
+  - dialog [ref=f7e67]:
+    - generic [ref=f7e68]:
+      - heading "新任务" [level=2] [ref=f7e69]
+      - generic [ref=f7e70]:
+        - text: 标题
+        - textbox "标题" [ref=f7e71]: readonly 测试任务
+      - generic [ref=f7e72]:
+        - text: 父任务 ID（可选，留空为顶层任务）
+        - textbox "父任务 ID（可选，留空为顶层任务）" [ref=f7e73]
+      - generic [ref=f7e74]:
+        - generic [ref=f7e75]:
+          - text: 优先级
+          - combobox "优先级" [ref=f7e76] [cursor=pointer]:
+            - option "low"
+            - option "medium" [selected]
+            - option "high"
+            - option "urgent"
+        - generic [ref=f7e77]:
+          - text: 分支（可选）
+          - textbox "分支（可选）" [ref=f7e78]
+      - generic [ref=f7e79]:
+        - text: 描述
+        - textbox "描述" [ref=f7e80]
+      - paragraph [ref=f7e84]: read-only mode
+      - list [ref=f7e81]:
+        - button "取消" [ref=f7e82] [cursor=pointer]
+        - button "创建" [active] [ref=f7e83] [cursor=pointer]
+  - generic [ref=f7e85]: ✗ read-only mode

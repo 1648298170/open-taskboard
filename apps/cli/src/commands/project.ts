@@ -18,6 +18,17 @@ export const projectCommands: Record<string, Command> = {
       for (const p of await ctx.api('GET', '/api/projects')) console.log(`${p.id}  ${p.name}  ${p.workspacePath}`);
     }
   },
+  'project refs': {
+    summary: 'List git branches and worktrees of the project workspace',
+    usage: 'project refs ID',
+    async run(ctx) {
+      const { api, rest } = ctx;
+      need(!!rest[0], 'project refs ID');
+      const refs = await api('GET', `/api/projects/${rest[0]}/git-refs`);
+      for (const b of refs.branches) console.log(`branch: ${b}`);
+      for (const w of refs.worktrees) console.log(`worktree: ${w.name}  ${w.path}`);
+    }
+  },
   'project delete': {
     summary: 'Delete a project and all its issues/comments',
     usage: 'project delete ID [--yes]',

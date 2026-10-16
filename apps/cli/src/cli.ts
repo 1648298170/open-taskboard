@@ -9,21 +9,25 @@ import { registry } from './commands/registry.js';
 async function main(): Promise<void> {
   let [cmd, sub, ...args] = process.argv.slice(2);
   if (sub && sub.startsWith('--')) { args.unshift(sub); sub = undefined; }
-  const { flags, rest } = parseFlags(args);
 
-  if (!cmd || cmd === 'help' || flags.help) { console.log(HELP); return; }
+  if (!cmd || cmd === 'help') { console.log(HELP); return; }
 
   const key = `${cmd} ${sub ?? ''}`.trim();
   let command = registry[key];
   if (!command && sub !== undefined) {
     const bare = registry[cmd];
-    if (bare?.bare) command = bare;
+    // Bare dispatch: the sub word was a positional argument (e.g.
+    // `search QUERY`), not a real subcommand — hand it back to the flag
+    // parser so it lands in rest[].
+    if (bare?.bare) { args.unshift(sub); command = bare; }
   }
   if (!command) {
     console.error(`unknown command: ${cmd} ${sub ?? ''}`);
     console.log(HELP);
     process.exit(1);
   }
+  const { flags, rest } = parseFlags(args);
+  if (flags.help) { console.log(HELP); return; }
   await command.run({ api, base, flags, rest });
 }
 

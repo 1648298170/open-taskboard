@@ -5,7 +5,11 @@ import { projectCommands } from './project.js';
 import { issueCommands } from './issue.js';
 import { commentCommands } from './comment.js';
 import { progressCommand } from './progress.js';
+import { nextCommand, readyCommand } from './pickup.js';
+import { searchCommand } from './search.js';
 import { serveCommand } from './serve.js';
+import { exportCommand } from './export.js';
+import { templatesCommand } from './templates.js';
 
 /** Same signature as `api()` from ../http.js, injected via CommandContext. */
 export type ApiClient = (method: string, path: string, body?: unknown) => Promise<any>;
@@ -35,5 +39,10 @@ export const registry: Record<string, Command> = {
   ...issueCommands,
   ...commentCommands,
   progress: progressCommand,
-  serve: serveCommand
+  next: nextCommand,
+  ready: readyCommand,
+  search: searchCommand,
+  serve: serveCommand,
+  export: exportCommand,
+  templates: templatesCommand
 };

@@ -1,8 +1,48 @@
 // Process entrypoint: env resolution, app assembly, static hosting, listen,
 // and direct-run detection.
+import os from 'node:os';
+import { readdirSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Store } from '@taskboard/core';
 import { buildApp } from './app.js';
 import { ServerOptions } from './app.js';
 import { registerStatic, WEB_DIST } from './static.js';
+
+/** Backups kept per data dir before the oldest start getting pruned. */
+const BACKUP_RETENTION = 10;
+
+/**
+ * T6-32: startup backup + retention. Snapshots the db into
+ * `<dataDir>/backups/taskboard-<timestamp>.sqlite`, keeps the newest
+ * BACKUP_RETENTION files, deletes older `taskboard-*.sqlite`. Every failure
+ * degrades to a console.warn — a backup problem must never crash the server.
+ */
+function backupAndPrune(store: Store, dataDir: string): void {
+  try {
+    const dir = join(dataDir, 'backups');
+    const path = store.backupTo(dir);
+    console.log(`backup: ${path}`);
+    const files = readdirSync(dir)
+      .filter(f => /^taskboard-.*\.sqlite$/.test(f))
+      .sort(); // taskboard-YYYYMMDD-HHMMSS sorts lexicographically = chronologically
+    for (const stale of files.slice(0, Math.max(0, files.length - BACKUP_RETENTION))) {
+      try { unlinkSync(join(dir, stale)); } catch { /* best effort */ }
+    }
+  } catch (err) {
+    console.warn(`backup: failed (${(err as Error).message})`);
+  }
+}
+
+/** LAN access URLs (`http://<addr>:<port>`) — non-internal IPv4 addresses, deduped. */
+export function lanUrls(port: number): string[] {
+  const seen = new Set<string>();
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    for (const iface of ifaces ?? []) {
+      if (iface.family === 'IPv4' && !iface.internal) seen.add(iface.address);
+    }
+  }
+  return [...seen].map(addr => `http://${addr}:${port}`);
+}
 
 export async function startServer(opts: ServerOptions = {}) {
   const host = opts.host ?? process.env.TASKBOARD_HOST ?? '127.0.0.1';
@@ -14,6 +54,14 @@ export async function startServer(opts: ServerOptions = {}) {
   });
 
   await app.listen({ host, port });
+
+  // T6-32: post-listen startup backup. On by default; TASKBOARD_BACKUPS=0
+  // disables. dataDir mirrors what the Store was built from (explicit opt →
+  // env → '.data', matching every spawn path of this entrypoint).
+  if (process.env.TASKBOARD_BACKUPS !== '0') {
+    const dataDir = opts.dataDir ?? (process.env.TASKBOARD_DATA_DIR || '.data');
+    backupAndPrune(store, dataDir);
+  }
   return { app, store, url: `http://${host}:${port}` };
 }
 
@@ -27,5 +75,12 @@ if (invokedDirectly) {
   startServer({ dataDir: process.env.TASKBOARD_DATA_DIR || '.data' }).then(({ url }) => {
     console.log(`open-taskboard listening on ${url}`);
     console.log(`data dir: ${process.env.TASKBOARD_DATA_DIR || '.data'}/taskboard.sqlite`);
+    // 与 startServer 相同的 host 解析（此处未传 opts.host）
+    const host = process.env.TASKBOARD_HOST ?? '127.0.0.1';
+    if (host === '0.0.0.0' || host === '::') {
+      for (const lan of lanUrls(Number(process.env.TASKBOARD_PORT ?? 47824))) {
+        console.log(`LAN: ${lan}`);
+      }
+    }
   });
 }

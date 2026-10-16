@@ -7,5 +7,6 @@ import { runStdioServer } from './jsonrpc.js';
 import { createRegistry } from './tools/registry.js';
 import { projectTools } from './tools/projects.js';
 import { issueTools } from './tools/issues.js';
+import { exportTools } from './tools/export.js';
 
-runStdioServer(createRegistry(projectTools, issueTools));
+runStdioServer(createRegistry(projectTools, issueTools, exportTools));

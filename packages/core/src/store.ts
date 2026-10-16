@@ -1,6 +1,8 @@
-import type { DatabaseSync } from 'node:sqlite';
+﻿import type { DatabaseSync } from 'node:sqlite';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import type {
-  Comment, Issue, IssuePatch, Priority, Progress, Project, Status, StoreEvent
+  Activity, Comment, DependencyEdge, Issue, IssuePatch, Priority, Progress, Project, Status, StoreEvent
 } from './types.js';
 import { NotFoundError, ValidationError } from './errors.js';
 import { configureDatabase, createDatabase } from './db.js';
@@ -9,8 +11,18 @@ import { inTransaction } from './transactions.js';
 import { ProjectRepo } from './repos/projects.js';
 import { IssueRepo } from './repos/issues.js';
 import { CommentRepo } from './repos/comments.js';
+import { ActivityRepo } from './repos/activities.js';
+import { DependencyRepo } from './repos/dependencies.js';
+import { SearchRepo } from './repos/search.js';
 
 const now = (): string => new Date().toISOString();
+
+// Patch keys that map to a writable column, in repo colMap order — used to
+// build the activity detail ("status,title", "startDate", ...).
+const PATCH_KEYS: (keyof IssuePatch)[] = [
+  'title', 'description', 'status', 'priority', 'labels', 'branch', 'worktree',
+  'assignee', 'parentId', 'startDate', 'dueDate'
+];
 
 // Facade over the repo layer: owns transaction boundaries, event emission,
 // and cross-aggregate preconditions. Same public API as before, plus an
@@ -22,6 +34,11 @@ export class Store {
   private projects: ProjectRepo;
   private issues: IssueRepo;
   private comments: CommentRepo;
+  private activities: ActivityRepo;
+  private deps: DependencyRepo;
+  private fts: SearchRepo;
+  /** Whether issues_fts exists — fixed for this db right after migrations ran. */
+  private readonly ftsAvailable: boolean;
 
   // db is the DI seam: pass a pre-opened DatabaseSync (e.g. ':memory:') to
   // skip file setup and test this layer directly. It still gets PRAGMAs +
@@ -32,6 +49,15 @@ export class Store {
     this.projects = new ProjectRepo(this.db);
     this.issues = new IssueRepo(this.db);
     this.comments = new CommentRepo(this.db);
+    this.activities = new ActivityRepo(this.db);
+    this.deps = new DependencyRepo(this.db);
+    this.fts = new SearchRepo(this.db);
+    this.ftsAvailable = this.fts.available();
+  }
+
+  /** Run an index-sync helper only when the FTS table exists (no-op otherwise). */
+  private syncFts(fn: () => void): void {
+    if (this.ftsAvailable) fn();
   }
 
   subscribe(fn: (event: StoreEvent) => void): () => void {
@@ -42,10 +68,15 @@ export class Store {
     this.events.emit({ type, payload, revision: this.revision(), at: now() });
   }
 
+  private logActivity(issueId: string, actor: string, action: string, detail: string): void {
+    this.activities.record(issueId, actor, action, detail);
+  }
+
   revision(): number {
     return this.db.prepare(
       `SELECT (SELECT COUNT(*) FROM projects) + (SELECT COUNT(*) FROM issues) * 10
              + (SELECT COUNT(*) FROM comments) * 100
+             + (SELECT COUNT(*) FROM issue_dependencies) * 1000
              + (SELECT COALESCE(SUM(version),0) FROM issues) AS rev`
     ).get()!.rev as number;
   }
@@ -67,7 +98,12 @@ export class Store {
 
   deleteProject(id: string): void {
     if (!this.projects.get(id)) throw new NotFoundError(`project not found: ${id}`);
-    inTransaction(this.db, () => this.projects.delete(id));
+    inTransaction(this.db, () => {
+      // FTS first: every fts row carries project_id, and the rows it points
+      // at are about to disappear.
+      this.syncFts(() => this.fts.deleteProjectFts(id));
+      this.projects.delete(id);
+    });
     this.emit('project.deleted', { id });
   }
 
@@ -75,18 +111,26 @@ export class Store {
   createIssue(input: {
     projectId: string; parentId?: string | null; title: string;
     description?: string; status?: Status; priority?: Priority;
-    labels?: string; branch?: string; assignee?: string;
-  }): Issue {
+    labels?: string; branch?: string; worktree?: string | null; assignee?: string;
+    startDate?: string | null; dueDate?: string | null;
+  }, actor = ''): Issue {
     const parentId = input.parentId ?? null;
     if (!this.projects.get(input.projectId)) throw new NotFoundError(`project not found: ${input.projectId}`);
     const parent = parentId ? this.issues.get(parentId) : null;
     if (parentId && !parent) throw new NotFoundError(`parent issue not found: ${parentId}`);
     if (parent && parent.parentId) throw new ValidationError('only one level of nesting is supported (parent must be a top-level issue)');
     if (parent && parent.projectId !== input.projectId) throw new ValidationError('parent issue belongs to a different project');
-    const id = this.issues.create({
-      projectId: input.projectId, parentId, title: input.title,
-      description: input.description, status: input.status, priority: input.priority,
-      labels: input.labels, branch: input.branch, assignee: input.assignee
+    const id = inTransaction(this.db, () => {
+      const issueId = this.issues.create({
+        projectId: input.projectId, parentId, title: input.title,
+        description: input.description, status: input.status, priority: input.priority,
+        labels: input.labels, branch: input.branch, worktree: input.worktree,
+        assignee: input.assignee,
+        startDate: input.startDate, dueDate: input.dueDate
+      });
+      this.syncFts(() => this.fts.indexIssue(issueId, input.projectId, input.title, input.description ?? ''));
+      this.logActivity(issueId, actor, 'created', input.title);
+      return issueId;
     });
     this.emit('issue.created', { id, projectId: input.projectId });
     return this.issues.get(id)!;
@@ -96,7 +140,7 @@ export class Store {
     return this.issues.get(id);
   }
 
-  listIssues(projectId: string, opts: { status?: Status; parentId?: string | null; includeDone?: boolean } = {}): Issue[] {
+  listIssues(projectId: string, opts: { status?: Status; parentId?: string | null; includeDone?: boolean; archived?: 'only' | 'all' } = {}): Issue[] {
     return this.issues.list(projectId, opts);
   }
 
@@ -111,23 +155,74 @@ export class Store {
     if (parent.projectId !== cur.projectId) throw new ValidationError('parent issue belongs to a different project');
   }
 
-  updateIssue(id: string, patch: IssuePatch, expectedVersion?: number): Issue {
+  updateIssue(id: string, patch: IssuePatch, expectedVersion?: number, actor = ''): Issue {
     this.assertParentPatch(id, patch);
-    const { changed } = this.issues.update(id, patch, expectedVersion);
+    const cur = this.issues.get(id);
+    if (!cur) throw new NotFoundError(`issue not found: ${id}`);
+    // Activity detail: the changed keys joined by ','; a status change also
+    // spells out the transition (e.g. "status: todo→in_progress,title").
+    const detail = PATCH_KEYS
+      .filter(k => patch[k] !== undefined)
+      .map(k => k === 'status' && patch.status ? `status: ${cur.status}→${patch.status}` : k)
+      .join(',');
+    const changed = inTransaction(this.db, () => {
+      const result = this.issues.update(id, patch, expectedVersion);
+      if (result.changed) {
+        // Title/description may have moved — refresh both fts rows.
+        const updated = this.issues.get(id)!;
+        this.syncFts(() => this.fts.reindexIssue(id, updated.projectId, updated.title, updated.description));
+        this.logActivity(id, actor, 'updated', detail);
+      }
+      return result.changed;
+    });
     if (changed) this.emit('issue.updated', { id });
     return this.issues.get(id)!;
   }
 
   deleteIssue(id: string): void {
     if (!this.issues.get(id)) throw new NotFoundError(`issue not found: ${id}`);
-    const deleted = inTransaction(this.db, () => this.issues.deleteRecursively(id));
+    const deleted = inTransaction(this.db, () => {
+      // FTS cleanup FIRST — deleteIssueFts resolves comment rows via a
+      // subquery over the still-intact comments table, for the whole subtree.
+      this.syncFts(() => {
+        for (const sub of this.issues.subtreeIds(id)) this.fts.deleteIssueFts(sub);
+      });
+      return this.issues.deleteRecursively(id);
+    });
     for (const deletedId of deleted) this.emit('issue.deleted', { id: deletedId });
   }
 
+  // ---- archive (T5-24): a row mutation — bumps version + updated_at like
+  // updateIssue so optimistic-lock clients see the change. ----
+  archiveIssue(id: string, actor = ''): Issue {
+    if (!this.issues.get(id)) throw new NotFoundError(`issue not found: ${id}`);
+    inTransaction(this.db, () => {
+      this.issues.setArchived(id, now());
+      this.logActivity(id, actor, 'archived', '');
+    });
+    this.emit('issue.updated', { id });
+    return this.issues.get(id)!;
+  }
+
+  unarchiveIssue(id: string, actor = ''): Issue {
+    if (!this.issues.get(id)) throw new NotFoundError(`issue not found: ${id}`);
+    inTransaction(this.db, () => {
+      this.issues.setArchived(id, null);
+      this.logActivity(id, actor, 'unarchived', '');
+    });
+    this.emit('issue.updated', { id });
+    return this.issues.get(id)!;
+  }
+
   // ---- comments ----
-  addComment(issueId: string, input: { author?: string; body: string }): Comment {
+  addComment(issueId: string, input: { author?: string; body: string }, actor = ''): Comment {
     if (!this.issues.get(issueId)) throw new NotFoundError(`issue not found: ${issueId}`);
-    const id = inTransaction(this.db, () => this.comments.add(issueId, input));
+    const id = inTransaction(this.db, () => {
+      const commentId = this.comments.add(issueId, input);
+      this.syncFts(() => this.fts.indexComment(commentId, this.issues.get(issueId)!.projectId, input.body));
+      this.logActivity(issueId, actor, 'commented', input.body.slice(0, 200));
+      return commentId;
+    });
     this.emit('comment.created', { id, issueId });
     return this.comments.get(id)!;
   }
@@ -138,6 +233,11 @@ export class Store {
 
   listComments(issueId: string): Comment[] {
     return this.comments.list(issueId);
+  }
+
+  // ---- activities: latest first, capped by the repo (default 50) ----
+  listActivities(issueId: string): Activity[] {
+    return this.activities.listByIssue(issueId);
   }
 
   // ---- progress: one top-level issue = one unit, equal weight (dashi #371) ----
@@ -157,5 +257,133 @@ export class Store {
       weightedDone: completedTop,
       weightedTotal: top.length
     };
+  }
+
+  // ---- dependencies: edge (issueId, dependsOnId) = "issueId is blocked by dependsOnId" ----
+
+  /** All ids transitively reachable from `from` along depends-on edges (incl. `from`). */
+  private transitiveDependsOn(from: string): Set<string> {
+    const visited = new Set<string>();
+    const stack = [from];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      for (const next of this.deps.directDependsOn(cur)) stack.push(next);
+    }
+    return visited;
+  }
+
+  addDependency(issueId: string, dependsOnId: string, actor = ''): void {
+    const issue = this.issues.get(issueId);
+    if (!issue) throw new NotFoundError(`issue not found: ${issueId}`);
+    const target = this.issues.get(dependsOnId);
+    if (!target) throw new NotFoundError(`issue not found: ${dependsOnId}`);
+    if (issue.projectId !== target.projectId) throw new ValidationError('dependencies must stay within one project');
+    if (issueId === dependsOnId) throw new ValidationError('an issue cannot depend on itself');
+    // Adding issueId→dependsOnId cycles iff dependsOnId already (transitively)
+    // depends on issueId — i.e. issueId is reachable from dependsOnId.
+    if (this.transitiveDependsOn(dependsOnId).has(issueId)) {
+      throw new ValidationError('circular dependency detected');
+    }
+    inTransaction(this.db, () => {
+      this.deps.add(issueId, dependsOnId, now());
+      this.logActivity(issueId, actor, 'dependency-added', `depends on ${dependsOnId}`);
+    });
+    this.emit('issue.updated', { id: issueId });
+  }
+
+  removeDependency(issueId: string, dependsOnId: string, actor = ''): void {
+    if (!this.issues.get(issueId)) throw new NotFoundError(`issue not found: ${issueId}`);
+    if (!this.issues.get(dependsOnId)) throw new NotFoundError(`issue not found: ${dependsOnId}`);
+    if (!this.deps.exists(issueId, dependsOnId)) throw new ValidationError('dependency does not exist');
+    inTransaction(this.db, () => {
+      this.deps.remove(issueId, dependsOnId);
+      this.logActivity(issueId, actor, 'dependency-removed', `no longer depends on ${dependsOnId}`);
+    });
+    this.emit('issue.updated', { id: issueId });
+  }
+
+  listDependencies(issueId: string): { blockedBy: string[]; blocks: string[] } {
+    return this.deps.listForIssue(issueId);
+  }
+
+  projectDependencies(projectId: string): DependencyEdge[] {
+    return this.deps.listByProject(projectId);
+  }
+
+  /**
+   * Issues whose every depends-on issue is done (and that are not done
+   * themselves), in the standard listIssues priority order. With opts.assignee,
+   * only issues assigned to that exact assignee.
+   */
+  readyIssues(projectId: string, opts: { assignee?: string } = {}): Issue[] {
+    const blockedBy = new Map<string, string[]>();
+    for (const edge of this.deps.listByProject(projectId)) {
+      const list = blockedBy.get(edge.issueId);
+      if (list) list.push(edge.dependsOnId);
+      else blockedBy.set(edge.issueId, [edge.dependsOnId]);
+    }
+    const statusById = new Map(this.issues.list(projectId).map(i => [i.id, i.status]));
+    const isReady = (id: string): boolean =>
+      (blockedBy.get(id) ?? []).every(dep => statusById.get(dep) === 'done');
+    return this.listIssues(projectId, { includeDone: false })
+      .filter(i => isReady(i.id) && (opts.assignee === undefined || i.assignee === opts.assignee));
+  }
+
+  // ---- search (T6-30) ----
+
+  /**
+   * Full-text search across issue titles/descriptions and comment bodies
+   * (trigram, ≥3 chars); a comment hit maps to its parent issue. Shorter
+   * queries — and engines whose build skipped the FTS5 migration — fall
+   * back to a case-insensitive LIKE scan over title/description. Archived
+   * issues are excluded, matching the listIssues default.
+   */
+  search(query: string): Issue[] {
+    const q = query.trim();
+    if (!q) return [];
+    if (!this.ftsAvailable || q.length < 3) return this.fts.likeScan(q);
+    // Wrap as a quoted phrase so user input can never break FTS syntax;
+    // embedded double quotes are stripped first (a stray quote would error).
+    const phrase = q.replace(/"/g, '');
+    if (!phrase) return [];
+    const hits = this.fts.match(`"${phrase}"`);
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const hit of hits) {
+      let issueId: string | null = null;
+      if (hit.kind === 'issue-title' || hit.kind === 'issue-desc') issueId = hit.refId;
+      else if (hit.kind === 'comment') {
+        const c = this.comments.get(hit.refId);
+        issueId = c ? c.issueId : null;
+      }
+      if (issueId && !seen.has(issueId)) { seen.add(issueId); ids.push(issueId); }
+    }
+    const out: Issue[] = [];
+    for (const id of ids) {
+      const issue = this.issues.get(id);
+      if (issue && !issue.archivedAt) out.push(issue);
+    }
+    return out;
+  }
+
+  // ---- backup (T6-32) ----
+
+  /**
+   * VACUUM INTO a compact snapshot under `dir` (created recursively if
+   * missing); returns the written file path (taskboard-YYYYMMDD-HHMMSS.sqlite).
+   * Cannot run inside a transaction — call outside any unit of work
+   * (the server does it right after listen). NUL bytes are rejected; single
+   * quotes in the path are escaped by doubling.
+   */
+  backupTo(dir: string): string {
+    if (dir.includes('\0')) throw new ValidationError('backup dir must not contain NUL bytes');
+    mkdirSync(dir, { recursive: true });
+    const t = new Date();
+    const p2 = (n: number): string => String(n).padStart(2, '0');
+    const file = join(dir, `taskboard-${t.getFullYear()}${p2(t.getMonth() + 1)}${p2(t.getDate())}-${p2(t.getHours())}${p2(t.getMinutes())}${p2(t.getSeconds())}.sqlite`);
+    this.db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+    return file;
   }
 }

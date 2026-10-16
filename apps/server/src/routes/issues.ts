@@ -17,7 +17,7 @@ const validationMessage = (error: z.ZodError): string =>
   error.issues.map(i => (i.path.length > 0 ? `${i.path.map(String).join('.')}: ` : '') + i.message).join('; ');
 
 const issuesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }) => {
-  app.get('/api/projects/:projectId/issues', async (req: FastifyRequest<{ Params: ProjectParams; Querystring: { status?: Status; parentId?: string; includeDone?: string } }>, reply) => {
+  app.get('/api/projects/:projectId/issues', async (req: FastifyRequest<{ Params: ProjectParams; Querystring: { status?: Status; parentId?: string; includeDone?: string; archived?: string } }>, reply) => {
     if (!store.getProject(req.params.projectId)) {
       return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
     }
@@ -25,17 +25,28 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }
     if (q.status !== undefined && !(STATUSES as readonly string[]).includes(q.status)) {
       return reply.code(400).send({ error: `invalid status: ${q.status}` });
     }
+    // T5-24: 'only' / 'all'; absent (or any other value rejected) → default
+    // excludes archived rows.
+    let archived: 'only' | 'all' | undefined;
+    if (q.archived !== undefined) {
+      if (q.archived !== 'only' && q.archived !== 'all') {
+        return reply.code(400).send({ error: `invalid archived filter: ${q.archived} (expected 'only' | 'all')` });
+      }
+      archived = q.archived;
+    }
     return store.listIssues(req.params.projectId, {
       status: q.status,
       parentId: q.parentId !== undefined ? (q.parentId === 'null' ? null : q.parentId) : undefined,
-      includeDone: q.includeDone !== 'false'
+      includeDone: q.includeDone !== 'false',
+      archived
     });
   });
 
   app.post('/api/projects/:projectId/issues', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
     const parsed = createIssueBodySchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
-    return reply.code(201).send(store.createIssue({ ...parsed.data, projectId: req.params.projectId }));
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    return reply.code(201).send(store.createIssue({ ...parsed.data, projectId: req.params.projectId }, actor));
   });
 
   app.get('/api/projects/:projectId/progress', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
@@ -51,7 +62,9 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }
     return {
       ...issue,
       children: issue.parentId ? [] : store.listIssues(issue.projectId, { parentId: issue.id }),
-      comments: store.listComments(issue.id)
+      comments: store.listComments(issue.id),
+      activities: store.listActivities(issue.id),
+      ...store.listDependencies(req.params.id)
     };
   });
 
@@ -59,11 +72,26 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }
     const parsed = restUpdateIssueSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     const { version, ...patch } = parsed.data;
-    return store.updateIssue(req.params.id, patch, version);
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    return store.updateIssue(req.params.id, patch, version, actor);
   });
 
   app.delete('/api/issues/:id', async (req: FastifyRequest<{ Params: IssueParams }>) => {
     store.deleteIssue(req.params.id);
+    return { ok: true };
+  });
+
+  // T5-24: archive / unarchive. Like every write path, the actor header is
+  // propagated; NotFoundError → 404 via the global error handler.
+  app.post('/api/issues/:id/archive', async (req: FastifyRequest<{ Params: IssueParams }>) => {
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    store.archiveIssue(req.params.id, actor);
+    return { ok: true };
+  });
+
+  app.post('/api/issues/:id/unarchive', async (req: FastifyRequest<{ Params: IssueParams }>) => {
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    store.unarchiveIssue(req.params.id, actor);
     return { ok: true };
   });
 };

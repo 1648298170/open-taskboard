@@ -18,6 +18,11 @@ export const projectTools: ToolTable = [
       id: args.id, name: args.name, workspacePath: args.workspacePath ?? '',
     }),
   )],
+  ['project_git_refs', defineTool(
+    z.object({ projectId: z.string() }).strict(),
+    '扫描项目工作区的 git 分支与 worktree 列表（workspacePath 为空或非 git 仓库时返回空列表），用于绑定任务的 branch/worktree',
+    args => ensureServerOrThrow('GET', `/api/projects/${args.projectId}/git-refs`),
+  )],
   ['delete_project', defineTool(
     z.object({ id: z.string() }).strict(),
     '删除项目及其全部任务与评论（危险操作）',

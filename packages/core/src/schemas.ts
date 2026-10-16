@@ -25,7 +25,11 @@ export const createIssueSchema = z
     priority: z.enum(PRIORITIES).optional(),
     labels: z.string().optional(),
     branch: z.string().optional(),
+    // T2-8: null creates as unbound ('' after the repo's ?? '' normalization).
+    worktree: z.string().nullable().optional(),
     assignee: z.string().optional(),
+    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   })
   .strict();
 
@@ -37,8 +41,12 @@ export const issuePatchSchema = z
     priority: z.enum(PRIORITIES).optional(),
     labels: z.string().optional(),
     branch: z.string().optional(),
+    // T2-8: null clears (stored as '').
+    worktree: z.string().nullable().optional(),
     assignee: z.string().optional(),
     parentId: z.string().nullable().optional(),
+    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   })
   .strict();
 
@@ -59,9 +67,16 @@ export const addCommentSchema = z
   })
   .strict();
 
+export const addDependencySchema = z
+  .object({
+    dependsOnId: z.string().min(1),
+  })
+  .strict();
+
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type CreateIssueInput = z.infer<typeof createIssueSchema>;
 export type IssuePatchInput = z.infer<typeof issuePatchSchema>;
 export type RestUpdateIssueInput = z.infer<typeof restUpdateIssueSchema>;
 export type McpUpdateIssueInput = z.infer<typeof mcpUpdateIssueSchema>;
 export type AddCommentInput = z.infer<typeof addCommentSchema>;
+export type AddDependencyInput = z.infer<typeof addDependencySchema>;

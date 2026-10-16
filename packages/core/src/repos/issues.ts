@@ -4,7 +4,9 @@ import { Issue, IssuePatch, PRIORITIES, Priority, STATUSES, Status } from '../ty
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
 const ISSUE_COLS = `id, project_id AS projectId, parent_id AS parentId, title, description,
-  status, priority, labels, branch, assignee, version, created_at AS createdAt, updated_at AS updatedAt`;
+  status, priority, labels, branch, worktree, archived_at AS archivedAt, assignee, version,
+  start_date AS startDate, due_date AS dueDate,
+  created_at AS createdAt, updated_at AS updatedAt`;
 const now = (): string => new Date().toISOString();
 const shortId = (): string => randomUUID().slice(0, 8);
 
@@ -22,7 +24,8 @@ export class IssueRepo {
   create(input: {
     projectId: string; parentId: string | null; title: string;
     description?: string; status?: Status; priority?: Priority;
-    labels?: string; branch?: string; assignee?: string;
+    labels?: string; branch?: string; worktree?: string | null; assignee?: string;
+    startDate?: string | null; dueDate?: string | null;
   }): string {
     const status = input.status ?? 'todo';
     const priority = input.priority ?? 'medium';
@@ -31,10 +34,11 @@ export class IssueRepo {
     const id = shortId();
     const t = now();
     this.db.prepare(
-      `INSERT INTO issues (id, project_id, parent_id, title, description, status, priority, labels, branch, assignee, version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+      `INSERT INTO issues (id, project_id, parent_id, title, description, status, priority, labels, branch, worktree, assignee, version, start_date, due_date, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`
     ).run(id, input.projectId, input.parentId, input.title, input.description ?? '', status, priority,
-      input.labels ?? '', input.branch ?? '', input.assignee ?? '', t, t);
+      input.labels ?? '', input.branch ?? '', input.worktree ?? '', input.assignee ?? '', input.startDate ?? null,
+      input.dueDate ?? null, t, t);
     return id;
   }
 
@@ -42,7 +46,7 @@ export class IssueRepo {
     return this.db.prepare(`SELECT ${ISSUE_COLS} FROM issues WHERE id = ?`).get(id) as unknown as Issue | null;
   }
 
-  list(projectId: string, opts: { status?: Status; parentId?: string | null; includeDone?: boolean } = {}): Issue[] {
+  list(projectId: string, opts: { status?: Status; parentId?: string | null; includeDone?: boolean; archived?: 'only' | 'all' } = {}): Issue[] {
     const where = ['project_id = ?'];
     const args: SQLInputValue[] = [projectId];
     if (opts.status) { where.push('status = ?'); args.push(opts.status); }
@@ -51,6 +55,10 @@ export class IssueRepo {
       else { where.push('parent_id = ?'); args.push(opts.parentId); }
     }
     if (opts.includeDone === false) where.push("status != 'done'");
+    // T5-24: default (undefined) excludes archived rows; 'only' selects just
+    // them; 'all' adds no clause.
+    if (opts.archived === 'only') where.push('archived_at IS NOT NULL');
+    else if (opts.archived !== 'all') where.push('archived_at IS NULL');
     return this.db.prepare(
       `SELECT ${ISSUE_COLS} FROM issues WHERE ${where.join(' AND ')}
        ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, created_at`
@@ -70,7 +78,9 @@ export class IssueRepo {
     const colMap: [keyof IssuePatch, string][] = [
       ['title', 'title'], ['description', 'description'], ['status', 'status'],
       ['priority', 'priority'], ['labels', 'labels'], ['branch', 'branch'],
-      ['assignee', 'assignee'], ['parentId', 'parent_id']
+      ['worktree', 'worktree'],
+      ['assignee', 'assignee'], ['parentId', 'parent_id'],
+      ['startDate', 'start_date'], ['dueDate', 'due_date']
     ];
     for (const [key, col] of colMap) {
       const v = patch[key];
@@ -78,13 +88,36 @@ export class IssueRepo {
       if (key === 'status') assertValidStatus(v as Status);
       if (key === 'priority') assertValidPriority(v as Priority);
       sets.push(`${col} = ?`);
-      args.push(v);
+      // worktree column is NOT NULL '' — a null patch clears to empty string.
+      args.push(key === 'worktree' && v === null ? '' : v);
     }
     if (!sets.length) return { changed: false };
     sets.push('version = version + 1', 'updated_at = ?');
     args.push(now(), id);
     this.db.prepare(`UPDATE issues SET ${sets.join(', ')} WHERE id = ?`).run(...args);
     return { changed: true };
+  }
+
+  // T5-24: archive / unarchive. A row mutation like update(), so it bumps
+  // version + updated_at to keep optimistic-lock consistency. Caller wraps
+  // in a transaction and owns existence checks / activity / events.
+  setArchived(id: string, archivedAt: string | null): void {
+    this.db.prepare(
+      'UPDATE issues SET archived_at = ?, version = version + 1, updated_at = ? WHERE id = ?'
+    ).run(archivedAt, now(), id);
+  }
+
+  /** ids of `id` plus every descendant (children-first order irrelevant here; read-only). */
+  subtreeIds(id: string): string[] {
+    const out: string[] = [];
+    const walk = (cur: string): void => {
+      out.push(cur);
+      for (const c of this.db.prepare('SELECT id FROM issues WHERE parent_id = ?').all(cur) as { id: string }[]) {
+        walk(c.id);
+      }
+    };
+    walk(id);
+    return out;
   }
 
   // Recursive DELETE only — collects deleted ids children-first; no transaction,
