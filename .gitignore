@@ -28,3 +28,6 @@ Thumbs.db
 
 # Local planning docs (not published)
 .roadmap/
+
+# Playwright MCP session artifacts
+.playwright-mcp/

@@ -1,5 +1,0 @@
-- generic [ref=f6e4]:
-  - heading "需要访问令牌" [level=2] [ref=f6e5]
-  - generic [ref=f6e6]:
-    - textbox "TASKBOARD_TOKEN" [active] [ref=f6e7]
-    - button "保存" [ref=f6e8] [cursor=pointer]

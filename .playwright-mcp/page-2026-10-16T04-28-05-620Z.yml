@@ -1,6 +1,0 @@
-- generic [active] [ref=f4e1]:
-  - text: 看板未构建 — 先运行
-  - code [ref=f4e2]: pnpm build
-  - text: ，或开发模式
-  - code [ref=f4e3]: pnpm dev
-  - text: （vite 在 :5174）
