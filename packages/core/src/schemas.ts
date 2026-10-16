@@ -61,6 +61,8 @@ export const restUpdateIssueSchema = issuePatchSchema.extend({
 // MCP update_issue requires version (optimistic-lock contract).
 export const mcpUpdateIssueSchema = issuePatchSchema.extend({
   version: z.number().int().positive(),
+  // T7-36 逃生舱（与 restUpdateIssueSchema 对齐）：人工确认后 agent 可传
+  confirm: z.boolean().optional(),
 });
 
 export const addCommentSchema = z

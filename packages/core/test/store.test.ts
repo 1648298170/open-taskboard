@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { Store, NotFoundError, ConflictError, ValidationError } from '../src/index.js';
+import { restUpdateIssueSchema } from '../src/schemas.js';
 import type { StoreEvent, Status, Priority } from '../src/index.js';
 
 // --- helpers --------------------------------------------------------------
@@ -1114,5 +1115,64 @@ describe('Store.backupTo', () => {
   it('rejects paths containing NUL bytes', () => {
     const { store } = fresh();
     throwsWith(() => store.backupTo('bad\0dir'), ValidationError, /NUL/);
+  });
+});
+
+// --- 评审修复回归（2026-10-16 双轴评审 round-2） ---
+
+describe('review regression: archive × ready (T5-24 × T4-20/21)', () => {
+  it('done-then-archived dependency does NOT block its dependents', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const dep = store.createIssue({ projectId: 'p1', title: 'dep' }).id;
+    const blocked = store.createIssue({ projectId: 'p1', title: 'blocked', parentId: null }).id;
+    store.addDependency(blocked, dep);
+
+    // 归档前：dep todo → blocked 不就绪
+    assert.ok(!store.readyIssues('p1').some(i => i.id === blocked));
+
+    store.updateIssue(dep, { status: 'done' });
+    store.archiveIssue(dep);
+    // dep 已 done（即使被归档）→ 下游就绪
+    assert.ok(store.readyIssues('p1').some(i => i.id === blocked));
+  });
+
+  it('archived TODO dependency still blocks (status map widened, blocking semantics kept)', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const dep = store.createIssue({ projectId: 'p1', title: 'dep' }).id;
+    const blocked = store.createIssue({ projectId: 'p1', title: 'blocked' }).id;
+    store.addDependency(blocked, dep);
+    store.archiveIssue(dep);
+    assert.ok(!store.readyIssues('p1').some(i => i.id === blocked));
+  });
+});
+
+describe('review regression: LIKE fallback hits comments (T6-30)', () => {
+  it('2-char query reaches comment bodies via the LIKE path', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const id = store.createIssue({ projectId: 'p1', title: 'plain' }).id;
+    store.addComment(id, { body: 'xy marker in comment' });
+    assert.deepEqual(store.search('xy').map(i => i.id), [id]);
+  });
+});
+
+describe('review regression: claim release idempotent no-op (T7-34 CAS)', () => {
+  it('releasing an unclaimed issue succeeds without version bump or event', () => {
+    const { store, events } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const id = store.createIssue({ projectId: 'p1', title: 't' }).id;
+    const v0 = store.getIssue(id)!.version;
+    const after = store.releaseIssue(id, 'someone');
+    assert.equal(after.version, v0);
+    assert.equal(events.filter(e => e.type === 'issue.updated').length, 0);
+  });
+});
+
+describe('review regression: confirm escape-hatch schema (T7-36)', () => {
+  it('restUpdateIssueSchema accepts confirm alongside status/version', () => {
+    const parsed = restUpdateIssueSchema.safeParse({ status: 'done', version: 1, confirm: true });
+    assert.equal(parsed.success, true);
   });
 });

@@ -61,7 +61,7 @@ export const issueTools: ToolTable = [
     '更新任务。状态流转 todo → in_progress → in_review → done；done 需用户确认后才能设置。必须带 version（乐观锁，取自 show_issue），冲突时重新读取再试',
     args => {
       const body: Record<string, unknown> = { version: args.version };
-      for (const k of ['title', 'description', 'status', 'priority', 'labels', 'branch', 'worktree', 'assignee', 'parentId', 'startDate', 'dueDate'] as const) {
+      for (const k of ['title', 'description', 'status', 'priority', 'labels', 'branch', 'worktree', 'assignee', 'parentId', 'startDate', 'dueDate', 'confirm'] as const) {
         const v = args[k];
         if (v !== undefined) body[k] = v;
       }

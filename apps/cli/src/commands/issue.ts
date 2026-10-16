@@ -128,6 +128,9 @@ export const issueCommands: Record<string, Command> = {
       const body: Record<string, unknown> = Object.fromEntries(
         fields.filter(([f]) => flags[f] !== undefined).map(([f, k]) => [k, flags[f]])
       );
+      // T7-36 逃生舱：--confirm（裸旗标，布尔）在 TASKBOARD_HUMAN_DONE=1 时
+      // 允许 agent 在用户确认后代为设置 done。
+      if (flags.confirm) body.confirm = true;
       if (flags['expected-version'] !== undefined) body.version = Number(flags['expected-version']);
       const i = await api('PATCH', `/api/issues/${rest[0]}`, body);
       console.log(`#${i.id} updated (v${i.version})`);
@@ -141,6 +144,8 @@ export const issueCommands: Record<string, Command> = {
       need(!!rest[0], 'issue done ID [flags]');
       const body: Record<string, unknown> = { status: 'done' };
       if (flags['expected-version'] !== undefined) body.version = Number(flags['expected-version']);
+      // T7-36 逃生舱：--confirm 在人工确认后代为设置 done。
+      if (flags.confirm) body.confirm = true;
       const i = await api('PATCH', `/api/issues/${rest[0]}`, body);
       console.log(`#${i.id} → done (v${i.version})`);
     }

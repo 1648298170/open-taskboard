@@ -1020,7 +1020,8 @@ export const openApiSpec: OpenApiDocument = {
           parentId: { type: ['string', 'null'] },
           startDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
           dueDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
-          version: { type: 'integer', minimum: 1, description: 'Optimistic lock — mismatch → 409' }
+          version: { type: 'integer', minimum: 1, description: 'Optimistic lock — mismatch → 409' },
+          confirm: { type: 'boolean', description: 'T7-36 escape hatch: with TASKBOARD_HUMAN_DONE=1, an agent may set done after the user confirmed in conversation' }
         },
         additionalProperties: false
       },

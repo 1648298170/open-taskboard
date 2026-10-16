@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { activeClaim, api_, Commit, GitRefs, Issue, IssueDetail, Status } from '../api';
+import { activeClaim, api_, Commit, GitRefs, Issue, IssueDetail, PRIORITIES, Status } from '../api';
 import { Markdown } from '../markdown';
 
 /** ISO → "MM-DD HH:mm"（活动时间线用）。 */
@@ -98,7 +98,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
           {statuses.map(s => <option key={s}>{s}</option>)}
         </select>
         <select value={detail.priority} onChange={e => void patch({ priority: e.target.value as IssueDetail['priority'] })}>
-          {(['low', 'medium', 'high', 'urgent'] as const).map(p => <option key={p}>{p}</option>)}
+            {PRIORITIES.map(p => <option key={p}>{p}</option>)}
         </select>
         {/* T2-8: 有 git-refs 数据时分支用下拉（保留当前值即使不在列表中），
             拉不到数据回退为原文本输入；改动走与原输入相同的乐观锁 patch。 */}

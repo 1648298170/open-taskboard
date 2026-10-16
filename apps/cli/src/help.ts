@@ -19,10 +19,10 @@ open-taskboard CLI
   taskboard issue dep-add ID --on DEPENDS_ON_ID
   taskboard issue dep-rm ID --on DEPENDS_ON_ID
   taskboard issue dep-list ID
-  taskboard issue update ID [--title T] [--status S] [--priority P] [--branch B] [--worktree W]
+  taskboard issue update ID [--title T] [--status S] [--priority P] [--branch B] [--worktree W] [--confirm]
         [--labels L] [--assignee W] [--description TEXT]
         [--start-date YYYY-MM-DD] [--due-date YYYY-MM-DD] [--expected-version N]
-  taskboard issue done ID [--expected-version N]
+  taskboard issue done ID [--expected-version N] [--confirm]
   taskboard issue delete ID
   taskboard issue archive ID
   taskboard issue unarchive ID

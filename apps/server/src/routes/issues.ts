@@ -87,7 +87,12 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }
         String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true) {
       return reply.code(403).send({ error: 'done requires human confirmation' });
     }
-    const { version, ...patch } = parsed.data;
+    // confirm 是门禁逃生舱字段——从 patch 剥离，不透传 Store
+    const { version, confirm, ...patch } = parsed.data;
+    if (process.env.TASKBOARD_HUMAN_DONE === '1' && parsed.data.status === 'done' &&
+        String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && confirm !== true) {
+      return reply.code(403).send({ error: 'done requires human confirmation' });
+    }
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
     return store.updateIssue(req.params.id, patch, version, actor);
   });
