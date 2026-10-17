@@ -74,6 +74,8 @@ export const api_ = {
     api<Issue>('POST', `/api/issues/${id}/release`, { agent }),
   addComment: (id: string, author: string, body: string) =>
     api<Comment>('POST', `/api/issues/${id}/comments`, { author, body }),
+  deleteComment: (commentId: string) =>
+    api<{ ok: true }>('DELETE', `/api/comments/${commentId}`),
   // T7-39: 附件上传是 multipart，不能走 JSON 的 api() —— 独立实现（同样带
   // Bearer + actor 头）；下载用 <a href> 直链，令牌经 ?token= 传递（与 SSE 同法）。
   uploadAttachment: async (id: string, file: File): Promise<Attachment> => {

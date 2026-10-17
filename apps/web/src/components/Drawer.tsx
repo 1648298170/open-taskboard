@@ -100,6 +100,12 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
         <select value={detail.priority} onChange={e => void patch({ priority: e.target.value as IssueDetail['priority'] })}>
             {PRIORITIES.map(p => <option key={p}>{p}</option>)}
         </select>
+        {/* 负责人 / 标签：与分支回退输入同款模式（defaultValue + 失焦提交），
+            此前这两个字段只能经 CLI/MCP 修改，面板上看得到改不了。 */}
+        <input style={{ width: 96 }} title="负责人" placeholder="负责人" defaultValue={detail.assignee}
+          onBlur={e => { const v = e.target.value.trim(); if (v !== detail.assignee) void patch({ assignee: v }); }} />
+        <input style={{ width: 128 }} title="标签（逗号分隔）" placeholder="标签,逗号分隔" defaultValue={detail.labels}
+          onBlur={e => { const v = e.target.value.trim(); if (v !== detail.labels) void patch({ labels: v }); }} />
         {/* T2-8: 有 git-refs 数据时分支用下拉（保留当前值即使不在列表中），
             拉不到数据回退为原文本输入；改动走与原输入相同的乐观锁 patch。 */}
         {refs && refs.branches.length > 0 ? (
@@ -310,6 +316,15 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
             <li key={c.id}>
               <span className="who">{c.author || 'anon'}</span>
               <Markdown src={c.body} />
+              <button className="icon-btn dep-remove" title="删除评论"
+                onClick={async e => {
+                  e.stopPropagation();
+                  if (!confirm('删除这条评论？')) return;
+                  try {
+                    await api_.deleteComment(c.id);
+                    onChanged(); await load();
+                  } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+                }}>✕</button>
             </li>))
           : <li style={{ color: 'var(--ink-dim)' }}>暂无评论</li>}
       </ul>
