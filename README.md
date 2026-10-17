@@ -106,7 +106,7 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 | `TASKBOARD_PORT` | `47824` | HTTP 端口 |
 | `TASKBOARD_DATA_DIR` | `.data` | SQLite 数据目录 |
 | `TASKBOARD_URL` | `http://127.0.0.1:47824` | CLI / MCP 指向的服务地址 |
-| `TASKBOARD_WEB_DIST` | 自动探测 | 看板静态目录（默认 `apps/web/dist/web`） |
+| `TASKBOARD_WEB_DIST` | 自动探测 | 看板静态目录（默认 `apps/web/dist`，vite 构建产物） |
 | `TASKBOARD_TOKEN` | 未设置 | 设置后 API 需要 Bearer 认证（`Authorization: Bearer <token>` 或 `?token=`；SSE 支持 `?token=`） |
 | `TASKBOARD_READONLY` | 未设置 | `1` 时所有写操作（POST/PATCH/DELETE）返回 403，GET/SSE 不受影响 |
 | `TASKBOARD_WEBHOOK_URL` | 未设置 | 逗号分隔的 HTTP(S) URL；设置后每个事件（project/issue/comment 变更）以 POST JSON 转发到各 URL（3s 超时，失败重试一次，失败仅告警） |
