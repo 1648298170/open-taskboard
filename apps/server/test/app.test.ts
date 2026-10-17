@@ -8,7 +8,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../src/app.js';
@@ -236,6 +236,26 @@ describe('comment deletion over HTTP', () => {
     const actions = detail.json<{ activities: { action: string }[] }>().activities.map(a => a.action);
     assert.ok(actions.includes('comment-deleted'));
     cleanup();
+  });
+});
+
+// --- manual backup (v0.4 P0) -------------------------------------------------
+
+describe('POST /api/backup', () => {
+  it('writes a snapshot file and returns its path', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tb-backup-test-'));
+    const store = new (await import('@taskboard/core')).Store(dir, new DatabaseSync(':memory:'));
+    const { app } = await buildApp({ store, env: {}, dataDir: dir });
+    try {
+      const res = await app.inject({ method: 'POST', url: '/api/backup' });
+      assert.equal(res.statusCode, 200);
+      const { path } = res.json<{ path: string }>();
+      assert.match(path, /taskboard-\d{8}-\d{6}\.sqlite$/);
+      assert.ok(existsSync(path), 'snapshot file must exist on disk');
+    } finally {
+      app.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -782,6 +782,22 @@ export const openApiSpec: OpenApiDocument = {
         }
       }
     },
+    '/api/backup': {
+      summary: 'Create a backup snapshot now',
+      post: {
+        operationId: 'createBackup',
+        summary: 'Write a VACUUM INTO snapshot under <dataDir>/backups/',
+        description:
+          'Manual on-demand snapshot — ignores TASKBOARD_BACKUPS=0 (an explicit request always backs up). ' +
+          'TASKBOARD_READONLY=1 still rejects it: a snapshot is a disk write.',
+        tags: ['projects'],
+        responses: {
+          200: { description: 'Snapshot written', ...jsonResponse({ $ref: '#/components/schemas/BackupCreated' }) },
+          500: { $ref: '#/components/responses/InternalError' },
+          ...commonResponses(true)
+        }
+      }
+    },
     '/api/search': {
       summary: 'Full-text search',
       get: {
@@ -1148,6 +1164,15 @@ export const openApiSpec: OpenApiDocument = {
           ttlMinutes: { type: 'integer', minimum: 1, maximum: 1440 }
         },
         required: ['agent'],
+        additionalProperties: false
+      },
+      BackupCreated: {
+        type: 'object',
+        description: 'POST /api/backup response — path of the freshly written snapshot',
+        properties: {
+          path: { type: 'string', description: 'Absolute path of the snapshot (taskboard-YYYYMMDD-HHMMSS.sqlite)' }
+        },
+        required: ['path'],
         additionalProperties: false
       },
       Attachment: {
