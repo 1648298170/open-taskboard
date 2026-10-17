@@ -1,4 +1,5 @@
 import { lanUrls, startServer } from '@taskboard/server';
+import { resolveServerConfig } from '@taskboard/core';
 import type { Command } from './registry.js';
 
 export const serveCommand: Command = {
@@ -7,12 +8,13 @@ export const serveCommand: Command = {
   bare: true,
   async run(ctx) {
     const { flags } = ctx;
-    const host = String(flags.host ?? process.env.TASKBOARD_HOST ?? '127.0.0.1');
-    const port = Number(flags.port ?? process.env.TASKBOARD_PORT ?? 47824);
+    const config = resolveServerConfig(process.env);
+    const host = String(flags.host ?? config.host);
+    const port = Number(flags.port ?? config.port);
     const { url } = await startServer({
       host,
       port,
-      dataDir: String(flags['data-dir'] ?? process.env.TASKBOARD_DATA_DIR ?? '.data')
+      dataDir: String(flags['data-dir'] ?? config.dataDir)
     });
     console.log(`open-taskboard listening on ${url}`);
     if (host === '0.0.0.0' || host === '::') {

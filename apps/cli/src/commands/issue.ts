@@ -248,7 +248,7 @@ export const issueCommands: Record<string, Command> = {
     summary: 'Upload a file as an attachment of an issue',
     usage: 'issue attach ID FILE',
     async run(ctx) {
-      const { base, rest } = ctx;
+      const { base, rest, token } = ctx;
       need(rest.length >= 2, 'issue attach ID FILE');
       const [id, fileArg] = [String(rest[0]), String(rest[1])];
       let buf: Buffer;
@@ -261,10 +261,10 @@ export const issueCommands: Record<string, Command> = {
       if (buf.byteLength === 0) { console.error('error: file is empty'); process.exit(1); }
       const form = new FormData();
       form.append('file', new Blob([buf]), basename(fileArg));
-      const token = process.env.TASKBOARD_TOKEN;
+      const bearer = token();
       const res = await fetch(`${base()}/api/issues/${seg(id)}/attachments`, {
         method: 'POST',
-        headers: { 'x-taskboard-actor': 'cli', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: { 'x-taskboard-actor': 'cli', ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
         body: form
       });
       const data = await res.json().catch(() => ({})) as { id?: string; filename?: string; error?: string };

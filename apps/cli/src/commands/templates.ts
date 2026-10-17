@@ -5,6 +5,7 @@
 // very next command without restarting anything.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { resolveServerConfig } from '@taskboard/core';
 import type { Command } from './registry.js';
 
 /** Fields a template may prefill on `issue create`; explicit flags always win. */
@@ -18,7 +19,7 @@ export interface TemplateFields {
 }
 
 /** Same data-dir resolution order as serve: TASKBOARD_DATA_DIR || '.data'. */
-export const templatesDataDir = (): string => process.env.TASKBOARD_DATA_DIR || '.data';
+export const templatesDataDir = (): string => resolveServerConfig(process.env).dataDir;
 
 export const templatesFile = (): string => join(templatesDataDir(), 'templates.json');
 
