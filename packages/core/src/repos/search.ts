@@ -78,7 +78,8 @@ export class SearchRepo {
     const escaped = needle.replace(/[\\%_]/g, m => `\\${m}`);
     return this.db.prepare(
       `SELECT id, project_id AS projectId, parent_id AS parentId, title, description,
-         status, priority, labels, branch, worktree, archived_at AS archivedAt, assignee, version,
+         status, priority, labels, branch, worktree, archived_at AS archivedAt,
+         claimed_by AS claimedBy, lease_expires_at AS leaseExpiresAt, assignee, version,
          start_date AS startDate, due_date AS dueDate, created_at AS createdAt, updated_at AS updatedAt
        FROM issues
        WHERE archived_at IS NULL AND (

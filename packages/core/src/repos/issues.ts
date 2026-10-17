@@ -115,11 +115,16 @@ export class IssueRepo {
   // Caller wraps in a transaction and owns preconditions / activity / events.
   setClaim(id: string, agent: string, claimedAt: string, leaseExpiresAt: string, expectedHolder: string): boolean {
     // T7-34 CAS: only fire when the lease still belongs to the holder the
-    // caller observed ('' = unclaimed) — closes the cross-process
-    // check-then-write race; changes = 0 means someone else moved first.
+    // caller observed ('' = unclaimed) AND that observation is still true —
+    // a holder that RENEWED between the caller's read and this write (active
+    // lease) must not be stolen by a third party; the holder itself renewing
+    // its own active lease stays allowed (re-entrant). Changes = 0 means
+    // someone else moved first.
     const r = this.db.prepare(
-      'UPDATE issues SET claimed_by = ?, claimed_at = ?, lease_expires_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND claimed_by = ?'
-    ).run(agent, claimedAt, leaseExpiresAt, now(), id, expectedHolder);
+      `UPDATE issues SET claimed_by = ?, claimed_at = ?, lease_expires_at = ?, version = version + 1, updated_at = ?
+       WHERE id = ? AND claimed_by = ?
+         AND (claimed_by = ? OR lease_expires_at IS NULL OR lease_expires_at <= ?)`
+    ).run(agent, claimedAt, leaseExpiresAt, now(), id, expectedHolder, agent, claimedAt);
     return Number(r.changes) > 0;
   }
 

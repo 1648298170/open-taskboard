@@ -24,6 +24,6 @@ export class CommentRepo {
   }
 
   list(issueId: string): Comment[] {
-    return this.db.prepare(`SELECT ${COMMENT_COLS} FROM comments WHERE issue_id = ? ORDER BY created_at`).all(issueId) as unknown as Comment[];
+    return this.db.prepare(`SELECT ${COMMENT_COLS} FROM comments WHERE issue_id = ? ORDER BY created_at, rowid`).all(issueId) as unknown as Comment[];
   }
 }
