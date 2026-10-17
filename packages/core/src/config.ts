@@ -19,6 +19,8 @@ export interface TaskboardServerConfig {
   humanDone: boolean;
   backupsEnabled: boolean;
   webhookUrls: string[];
+  /** Empty string = unsigned webhooks (TASKBOARD_WEBHOOK_SECRET unset). */
+  webhookSecret: string;
 }
 
 export interface TaskboardClientConfig {
@@ -46,6 +48,7 @@ export function resolveServerConfig(env: TaskboardEnv = process.env): TaskboardS
     readonly: env.TASKBOARD_READONLY === '1',
     humanDone: env.TASKBOARD_HUMAN_DONE === '1',
     backupsEnabled: env.TASKBOARD_BACKUPS !== '0',
+    webhookSecret: env.TASKBOARD_WEBHOOK_SECRET || '',
     webhookUrls: (env.TASKBOARD_WEBHOOK_URL ?? '').split(',').map(url => url.trim()).filter(url => url.length > 0)
   };
 }

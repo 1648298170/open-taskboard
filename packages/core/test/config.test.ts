@@ -18,7 +18,8 @@ describe('resolveServerConfig', () => {
       readonly: false,
       humanDone: false,
       backupsEnabled: true,
-      webhookUrls: []
+      webhookUrls: [],
+      webhookSecret: ''
     });
   });
 
@@ -55,6 +56,11 @@ describe('resolveServerConfig', () => {
   it('splits, trims and drops empty webhook urls', () => {
     const cfg = resolveServerConfig({ TASKBOARD_WEBHOOK_URL: ' http://a/x , http://b/y ,,' });
     assert.deepEqual(cfg.webhookUrls, ['http://a/x', 'http://b/y']);
+  });
+
+  it('exposes the webhook secret verbatim (empty when unset)', () => {
+    assert.equal(resolveServerConfig({ TASKBOARD_WEBHOOK_SECRET: 's3cr3t' }).webhookSecret, 's3cr3t');
+    assert.equal(resolveServerConfig({}).webhookSecret, '');
   });
 
   it('exposes the token verbatim (empty when unset)', () => {
