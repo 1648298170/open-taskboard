@@ -67,7 +67,10 @@ const webhookUrls = (): string[] =>
     .split(',').map(url => url.trim()).filter(url => url.length > 0);
 
 export async function buildApp(opts: ServerOptions = {}): Promise<{ app: FastifyInstance; store: Store }> {
-  const store = opts.store ?? new Store(opts.dataDir ?? '.data');
+  // dataDir resolution mirrors startServer's backup path (explicit opt → env →
+  // '.data') so TASKBOARD_DATA_DIR holds no matter which entrypoint spawned us.
+  const dataDir = opts.dataDir ?? process.env.TASKBOARD_DATA_DIR ?? '.data';
+  const store = opts.store ?? new Store(dataDir);
 
   // T6-34: outbound webhooks. When TASKBOARD_WEBHOOK_URL is configured, every
   // StoreEvent is fanned out to each URL via postWebhook (fire-and-forget —

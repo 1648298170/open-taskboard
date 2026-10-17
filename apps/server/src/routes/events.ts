@@ -14,8 +14,14 @@ const eventsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }
     });
     res.write(`event: hello\ndata: {"revision":${store.revision()}}\n\n`);
     const unsubscribe = store.subscribe(e => res.write(`event: change\ndata: ${JSON.stringify(e)}\n\n`));
+    // Comment ping keeps idle streams alive through proxies that cut silent
+    // connections; the 'error' listener tears the subscription down when the
+    // socket dies without a clean close ('error' has no default handler).
+    const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
     await new Promise<void>(resolve => {
-      req.raw.on('close', () => { unsubscribe(); resolve(); });
+      const teardown = (): void => { clearInterval(ping); unsubscribe(); resolve(); };
+      req.raw.on('close', teardown);
+      req.raw.on('error', teardown);
     });
   });
 };
