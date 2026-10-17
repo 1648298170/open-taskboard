@@ -503,15 +503,16 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
             showToast(`✗ #${id} 被未完成任务阻塞：${unmet.map(d => `#${d}`).join(' ')}`);
             return;
           }
-          // v0.4: 拖父任务 = 询问整组移动（列出子任务当前状态，人工同意才
-          // 级联——不做静默覆盖，保护逐任务验收语义）。确定=整组，取消=仅父。
+          // v0.4: 拖父任务 = 整组移动。嵌套渲染下子卡随父卡走，所见即所动
+          // ——静默跟随是正确语义。唯一例外：拖到 done（验收逐任务成立，
+          // 列出清单人工确认后才级联）。
           const kids = issue.parentId ? [] : issues.filter(i => i.parentId === issue.id && i.status !== status);
-          let moveKids = false;
-          if (kids.length > 0) {
+          let moveKids = kids.length > 0;
+          if (moveKids && status === 'done') {
             moveKids = confirm(
-              `同时将 ${kids.length} 个子任务移动到「${status}」？\n` +
+              `同时将 ${kids.length} 个子任务置为 done？\n` +
               kids.map(k => `#${k.id} ${k.title} [${k.status}]`).join('\n') +
-              `\n\n确定 = 整组移动；取消 = 仅移动父任务`
+              `\n\n确定 = 整组验收；取消 = 仅父任务置 done`
             );
           }
           // 乐观锁纪律「冲突即重读再改」：页面快照可能落后（他人/SSE 期间
