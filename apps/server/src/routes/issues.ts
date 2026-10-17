@@ -46,8 +46,16 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }
   app.post('/api/projects/:projectId/issues', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
     const parsed = createIssueBodySchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    // T7-36 门禁的 create 侧：直接以 status:'done' 创建与 PATCH 置 done 同责，
+    // 非 web 来源必须带 confirm 逃生舱（env 未设时零行为变化）。
+    if (process.env.TASKBOARD_HUMAN_DONE === '1' && parsed.data.status === 'done' &&
+        String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true) {
+      return reply.code(403).send({ error: 'done requires human confirmation' });
+    }
+    // confirm 是门禁逃生舱字段——从 create body 剥离，不透传 Store
+    const { confirm: _confirm, ...body } = parsed.data;
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
-    return reply.code(201).send(store.createIssue({ ...parsed.data, projectId: req.params.projectId }, actor));
+    return reply.code(201).send(store.createIssue({ ...body, projectId: req.params.projectId }, actor));
   });
 
   app.get('/api/projects/:projectId/progress', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
