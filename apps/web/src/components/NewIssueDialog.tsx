@@ -16,14 +16,24 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
     const form = e.currentTarget;
     const f = new FormData(form);
     const parent = String(f.get('parent') ?? '').trim();
+    const wake = f.get('wake') === 'on';
     try {
-      await api_.createIssue(projectId, {
+      const created = await api_.createIssue(projectId, {
         title: String(f.get('title')).trim(),
         parentId: parent || null,
         priority: f.get('priority') as Priority,
         branch: String(f.get('branch') ?? '').trim(),
         description: String(f.get('description') ?? '')
       });
+      // v0.4: 创建后唤醒 —— UI 代发 @agent 评论，走现成 watch 链路把编排
+      // 请求送达 agent 的 TUI 输入框。评论失败不阻塞创建（best-effort）。
+      if (wake) {
+        try {
+          await api_.addComment(created.id, 'web', '@agent 请认领此任务并编排（拆解子任务、排依赖）');
+        } catch (err) {
+          onError(`任务已创建，但唤醒失败：${(err as Error).message}`);
+        }
+      }
       form.reset();
       setError(null);
       onClose();
@@ -49,6 +59,8 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
           <label>分支（可选）<input name="branch" /></label>
         </div>
         <label>描述<textarea name="description" rows={5} /></label>
+        {/* v0.4: 创建后唤醒 agent（默认勾选）——替代手打 @agent 评论。 */}
+        <label className="wake-check"><input type="checkbox" name="wake" defaultChecked /> 创建后唤醒 agent 编排</label>
         {error && <p style={{ color: 'var(--danger)', fontSize: 12 }}>{error}</p>}
         <menu>
           <button type="button" className="btn" onClick={onClose}>取消</button>

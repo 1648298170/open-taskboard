@@ -180,6 +180,18 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
             }}>归档</button>
           )}
+        {/* v0.4: 一键唤醒 —— UI 代发 @agent 评论（web 来源，人工触发），
+            watch 捕获后把编排请求送达 agent 的 TUI 输入框。done 任务无编排意义。 */}
+        {detail.status !== 'done' && (
+          <button className="btn tiny" style={{ color: 'var(--accent)' }} title="唤醒 agent 编排此任务（评论 @agent，经 watch 送达 TUI）"
+            onClick={async () => {
+              try {
+                await api_.addComment(detail.id, 'web', '@agent 请认领此任务并编排（拆解子任务、排依赖）');
+                onToast('已唤醒 agent——watch 会把请求送达 TUI 输入框，回车即开工');
+                onChanged();
+              } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+            }}>🤖 唤醒</button>
+        )}
         {/* T7-34: 认领/释放（以 agent 'web' 操作，紧挨归档）。有效租约显示
             认领徽章 + 释放；无租约显示认领。他人持有的租约释放会 409 → toast。 */}
         {activeClaim(detail) !== null
