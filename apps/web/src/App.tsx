@@ -514,15 +514,29 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
               `\n\n确定 = 整组移动；取消 = 仅移动父任务`
             );
           }
+          // 乐观锁纪律「冲突即重读再改」：页面快照可能落后（他人/SSE 期间
+          // 的变更），409 时取服务器最新 version 重试一次。
+          const moveWithRetry = async (issueId: string): Promise<void> => {
+            const cur = issues.find(i => i.id === issueId);
+            if (!cur) throw new Error(`#${issueId} 不存在`);
+            try {
+              await api_.updateIssue(issueId, { status, version: cur.version });
+            } catch (err) {
+              if (err instanceof ApiError && err.status === 409) {
+                const fresh = await api_.showIssue(issueId);
+                await api_.updateIssue(issueId, { status, version: fresh.version });
+              } else throw err;
+            }
+          };
           try {
             if (moveKids) {
               for (const k of kids) {
                 try {
-                  await api_.updateIssue(k.id, { status, version: k.version });
+                  await moveWithRetry(k.id);
                 } catch (err) { showToast(`✗ 子任务 #${k.id}：${(err as Error).message}`); }
               }
             }
-            await api_.updateIssue(id, { status, version: issue.version });
+            await moveWithRetry(id);
             showToast(`#${id} → ${status}${moveKids ? `（含 ${kids.length} 个子任务）` : ''}`);
             await refresh();
           } catch (err) { showToast(`✗ ${(err as Error).message}`); void refresh(); }
