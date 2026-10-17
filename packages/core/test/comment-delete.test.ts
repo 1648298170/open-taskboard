@@ -50,6 +50,26 @@ describe('Store.deleteComment', () => {
     assert.equal(act.actor, 'bob');
   });
 
+  it('enriches comment events with author, body excerpt and issue title (v0.4 payload)', () => {
+    const { store, events, issue } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const created = store.createIssue({ projectId: 'p1', title: '被评论的任务' });
+    events.length = 0;
+
+    const comment = store.addComment(created.id, { author: 'alice', body: 'x'.repeat(500) });
+    const addEvt = events.find(e => e.type === 'comment.created')!;
+    assert.equal(addEvt.payload.author, 'alice');
+    assert.equal(addEvt.payload.body, 'x'.repeat(200), 'body excerpt capped at 200');
+    assert.equal(addEvt.payload.issueTitle, '被评论的任务');
+
+    events.length = 0;
+    store.deleteComment(comment.id, 'bob');
+    const delEvt = events.find(e => e.type === 'comment.deleted')!;
+    assert.equal(delEvt.payload.author, 'alice', 'deleted payload carries the original author');
+    assert.equal(delEvt.payload.issueTitle, '被评论的任务');
+    assert.equal(delEvt.payload.issueId, created.id);
+  });
+
   it('throws NotFoundError on an unknown comment id', () => {
     const { store } = fresh();
     throwsNotFound(() => store.deleteComment('ghost'));

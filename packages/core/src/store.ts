@@ -343,14 +343,22 @@ export class Store {
 
   // ---- comments ----
   addComment(issueId: string, input: { author?: string; body: string }, actor = ''): Comment {
-    if (!this.issues.get(issueId)) throw new NotFoundError(`issue not found: ${issueId}`);
+    const issue = this.issues.get(issueId);
+    if (!issue) throw new NotFoundError(`issue not found: ${issueId}`);
     const id = inTransaction(this.db, () => {
       const commentId = this.comments.add(issueId, input);
       this.syncFts(() => this.fts.indexComment(commentId, this.issues.get(issueId)!.projectId, input.body));
       this.logActivity(issueId, actor, 'commented', input.body.slice(0, 200));
       return commentId;
     });
-    this.emit('comment.created', { id, issueId });
+    // Payload carries author/body-excerpt/issueTitle so webhook & SSE
+    // consumers (e.g. the watch sidecar) can decide without a follow-up GET.
+    this.emit('comment.created', {
+      id, issueId,
+      author: input.author ?? '',
+      body: input.body.slice(0, 200),
+      issueTitle: issue.title
+    });
     return this.comments.get(id)!;
   }
 
@@ -360,12 +368,18 @@ export class Store {
   deleteComment(id: string, actor = ''): void {
     const comment = this.comments.get(id);
     if (!comment) throw new NotFoundError(`comment not found: ${id}`);
+    const issueTitle = this.issues.get(comment.issueId)?.title ?? '';
     inTransaction(this.db, () => {
       this.syncFts(() => this.fts.deleteCommentFts(id));
       this.comments.delete(id, comment.issueId);
       this.logActivity(comment.issueId, actor, 'comment-deleted', comment.body.slice(0, 200));
     });
-    this.emit('comment.deleted', { id, issueId: comment.issueId });
+    this.emit('comment.deleted', {
+      id, issueId: comment.issueId,
+      author: comment.author,
+      body: comment.body.slice(0, 200),
+      issueTitle
+    });
   }
 
   getComment(id: string): Comment | null {
