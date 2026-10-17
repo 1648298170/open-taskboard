@@ -49,6 +49,10 @@ taskboard project create --id my-project --name "My project"
 taskboard issue create --project my-project --title "搭建登录模块" --priority high --branch feat/login
 taskboard issue create --project my-project --parent <父任务ID> --title "登录表单 UI"
 taskboard issue done <id> --expected-version 2
+taskboard next --project my-project          # 智能取任务：依赖全 done + 优先级排序
+taskboard issue claim <id> --agent codex     # 独占租约（默认 30 分钟，taskboard ready --agent 可跳过他人租约）
+taskboard search "登录"                       # 全文搜索（标题/描述/评论）
+taskboard stats --project my-project         # 统计面板（周吞吐/平均周期/贡献榜）
 taskboard progress --project my-project
 taskboard project delete skill-test --yes
 ```
@@ -59,7 +63,13 @@ REST API 的完整契约（OpenAPI 3.1）在服务启动后可从 `/api/openapi.
 
 ### 方式一：MCP（推荐，Claude Code / Codex / Cursor / opencode 通用）
 
-MCP server 无状态转发到本地 HTTP 服务，服务未运行时自动拉起。工具：`list_projects` `create_project` `delete_project` `list_issues` `show_issue` `create_issue` `update_issue`（乐观锁 version 必填）`delete_issue` `add_comment` `progress`。
+MCP server 无状态转发到本地 HTTP 服务，服务未运行时自动拉起。工具：
+
+- 项目：`list_projects` `create_project` `delete_project`
+- 任务：`list_issues` `show_issue` `create_issue` `update_issue`（乐观锁 version 必填）`delete_issue` `archive_issue` `unarchive_issue`
+- 租约：`claim_issue` `heartbeat_issue` `release_issue`（独占租约，默认 30 分钟，过期后他人可直接认领）
+- 协作：`add_comment` `add_issue_dependency` `remove_issue_dependency` `list_attachments`
+- 视图：`progress` `project_stats` `ready_issues` `next_issue` `search_issues`
 
 ```jsonc
 // Claude Code (.mcp.json) / Cursor (~/.cursor/mcp.json)
@@ -80,7 +90,7 @@ args = ["/abs/path/open-taskboard/apps/mcp/dist/mcp.js"]
 
 建议同时在 AGENTS.md / rules 中加入：
 
-> 管理任务时使用 taskboard MCP 工具；状态流转 todo → in_progress → in_review → done，done 必须等用户确认；update_issue 必须携带 show_issue 返回的 version（乐观锁）；拆解需求时先建父任务再用 parentId 建子任务。
+> 管理任务时使用 taskboard MCP 工具；状态流转 todo → in_progress → in_review → done，done 必须等用户确认；update_issue 必须携带 show_issue 返回的 version（乐观锁）；拆解需求时先建父任务再用 parentId 建子任务；多 agent 并发先 claim 再开工，长任务定期 heartbeat 续租，完成即 release。
 
 ### 方式二：Skill + CLI（opencode 或不支持 MCP 的工具）
 
@@ -98,17 +108,23 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 | `TASKBOARD_URL` | `http://127.0.0.1:47824` | CLI / MCP 指向的服务地址 |
 | `TASKBOARD_WEB_DIST` | 自动探测 | 看板静态目录（默认 `apps/web/dist/web`） |
 | `TASKBOARD_TOKEN` | 未设置 | 设置后 API 需要 Bearer 认证（`Authorization: Bearer <token>` 或 `?token=`；SSE 支持 `?token=`） |
+| `TASKBOARD_READONLY` | 未设置 | `1` 时所有写操作（POST/PATCH/DELETE）返回 403，GET/SSE 不受影响 |
 | `TASKBOARD_WEBHOOK_URL` | 未设置 | 逗号分隔的 HTTP(S) URL；设置后每个事件（project/issue/comment 变更）以 POST JSON 转发到各 URL（3s 超时，失败重试一次，失败仅告警） |
-| `TASKBOARD_HUMAN_DONE` | 未设置 | 设置后 `status→done` 仅接受 web 来源（人工 UI），agent 只能到 `in_review`；用户确认后 agent 可传 `confirm: true` 代为设置 |
+| `TASKBOARD_HUMAN_DONE` | 未设置 | 设置后 `status→done` 仅接受 web 来源（人工 UI），agent 只能到 `in_review`；直接以 `status: "done"` 创建任务同受此门禁；用户确认后 agent 可传 `confirm: true` 代为设置（PATCH 与 create 皆可） |
+| `TASKBOARD_BACKUPS` | 未设置 | `0` 关闭启动备份；默认每次启动 `VACUUM INTO` 快照到 `<dataDir>/backups/`，保留最近 10 份 |
 
 ## 功能
 
 - 父子两层任务拆解、四列状态流转（todo → in_progress → in_review → done）
 - 乐观锁版本（`version` / `--expected-version` / MCP `update_issue` 必填）防并发覆盖
-- 评论、分支/负责人绑定、优先级、标签
+- 独占租约：claim / heartbeat / release，多 agent 并发防碰撞；`next`/`ready` 自动跳过他人租约中的任务
+- 依赖阻塞：blocked-by 边 + 循环检测 + 同项目约束；`ready`/`next` 只返回依赖全 done 的任务
 - 进度统计：一个顶层任务 = 一个单位（自身 done 或子任务全 done 即完成，父任务等权）
-- SSE 实时刷新（Web 多端 + 跨 agent 工具共享同一块板）
-- LAN 共享（`TASKBOARD_HOST=0.0.0.0`）
+- 评论、活动流、标签、负责人、分支/worktree 绑定、起止日期（校验真实日历）、归档（归档父任务连带其未归档子任务）
+- 全文搜索（FTS5 trigram，标题/描述/评论，短查询退化 LIKE）、导出 JSON/Markdown、统计面板（周吞吐/平均周期/贡献榜）、时间线视图、Mermaid 图渲染
+- 附件（元数据入库、正文落盘 `attachments/`，单文件 ≤10MB）、桌面通知、暗/亮主题、泳道分组、批量操作、j/k 键盘导航
+- SSE 实时刷新（Web 多端 + 跨 agent 工具共享同一块板；25s 心跳保活，断线指数退避重连 + 全量兜底拉取）
+- LAN 共享（`TASKBOARD_HOST=0.0.0.0`）、Bearer 令牌认证、只读模式、人工 done 门禁、webhook 事件转发
 
 ## Legacy（已清除）
 
