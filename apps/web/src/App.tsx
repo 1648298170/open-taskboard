@@ -503,9 +503,27 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
             showToast(`✗ #${id} 被未完成任务阻塞：${unmet.map(d => `#${d}`).join(' ')}`);
             return;
           }
+          // v0.4: 拖父任务 = 询问整组移动（列出子任务当前状态，人工同意才
+          // 级联——不做静默覆盖，保护逐任务验收语义）。确定=整组，取消=仅父。
+          const kids = issue.parentId ? [] : issues.filter(i => i.parentId === issue.id && i.status !== status);
+          let moveKids = false;
+          if (kids.length > 0) {
+            moveKids = confirm(
+              `同时将 ${kids.length} 个子任务移动到「${status}」？\n` +
+              kids.map(k => `#${k.id} ${k.title} [${k.status}]`).join('\n') +
+              `\n\n确定 = 整组移动；取消 = 仅移动父任务`
+            );
+          }
           try {
+            if (moveKids) {
+              for (const k of kids) {
+                try {
+                  await api_.updateIssue(k.id, { status, version: k.version });
+                } catch (err) { showToast(`✗ 子任务 #${k.id}：${(err as Error).message}`); }
+              }
+            }
             await api_.updateIssue(id, { status, version: issue.version });
-            showToast(`#${id} → ${status}`);
+            showToast(`#${id} → ${status}${moveKids ? `（含 ${kids.length} 个子任务）` : ''}`);
             await refresh();
           } catch (err) { showToast(`✗ ${(err as Error).message}`); void refresh(); }
         }} emptyHint={filtersActive ? '无匹配任务' : undefined}
