@@ -14,7 +14,8 @@
     "dev": "tsx src/cli.ts",
     "cli": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "tsx --test \"test/*.test.ts\""
   },
   "dependencies": {
     "@taskboard/core": "workspace:*",
