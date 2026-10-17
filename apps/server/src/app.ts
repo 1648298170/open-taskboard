@@ -1,7 +1,8 @@
 // Fastify app factory: wires cors, the global error handler and the route plugins.
 // The Store is accepted, not created: inject one via opts.store (tests/tooling),
 // or let the factory build it from opts.dataDir.
-import { timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { join } from 'node:path';
 import Fastify, { FastifyInstance } from 'fastify';
 import fastifyCors from '@fastify/cors';
 import { PRIORITIES, STATUSES, Store, resolveServerConfig } from '@taskboard/core';
@@ -14,6 +15,7 @@ import commentsRoutes from './routes/comments.js';
 import dependencyRoutes from './routes/dependencies.js';
 import searchRoutes from './routes/search.js';
 import attachmentRoutes from './routes/attachments.js';
+import backupRoutes from './routes/backup.js';
 import openapiRoutes from './routes/openapi.js';
 
 export interface ServerOptions {
@@ -37,16 +39,24 @@ const WEBHOOK_RETRY_DELAY_MS = 500;
  * 500ms. This function NEVER throws — residual failures only warn, because a
  * broken receiver must never take the board (or the request that caused the
  * event) down.
+ *
+ * When `secret` is non-empty the request carries
+ * `X-Taskboard-Signature: sha256=<HMAC-SHA256(rawBody, secret)>` so the
+ * receiver can authenticate the payload; receivers MUST verify over the raw
+ * bytes before JSON.parse.
  */
-async function postWebhook(url: string, event: StoreEvent): Promise<void> {
+async function postWebhook(url: string, event: StoreEvent, secret: string): Promise<void> {
+  const body = JSON.stringify(event);
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (secret) headers['x-taskboard-signature'] = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
   const attempt = async (): Promise<void> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(event),
+        headers,
+        body,
         signal: controller.signal
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -67,7 +77,8 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   // One env resolution for the whole app assembly — hooks, webhooks and the
   // issue routes all read from this object (defaults live in core/config.ts).
   const config = resolveServerConfig(opts.env ?? process.env);
-  const store = opts.store ?? new Store(opts.dataDir ?? config.dataDir);
+  const dataDir = opts.dataDir ?? config.dataDir;
+  const store = opts.store ?? new Store(dataDir);
 
   // T6-34: outbound webhooks. When TASKBOARD_WEBHOOK_URL is configured, every
   // StoreEvent is fanned out to each URL via postWebhook (fire-and-forget —
@@ -75,7 +86,7 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   const hooks = config.webhookUrls;
   if (hooks.length > 0) {
     store.subscribe(event => {
-      for (const url of hooks) void postWebhook(url, event);
+      for (const url of hooks) void postWebhook(url, event, config.webhookSecret);
     });
   }
 
@@ -134,6 +145,7 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   await app.register(dependencyRoutes, { store });
   await app.register(searchRoutes, { store });
   await app.register(attachmentRoutes, { store });
+  await app.register(backupRoutes, { store, backupDir: join(dataDir, 'backups') });
   await app.register(openapiRoutes);
 
   return { app, store };

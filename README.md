@@ -110,6 +110,7 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 | `TASKBOARD_TOKEN` | 未设置 | 设置后 API 需要 Bearer 认证（`Authorization: Bearer <token>` 或 `?token=`；SSE 支持 `?token=`） |
 | `TASKBOARD_READONLY` | 未设置 | `1` 时所有写操作（POST/PATCH/DELETE）返回 403，GET/SSE 不受影响 |
 | `TASKBOARD_WEBHOOK_URL` | 未设置 | 逗号分隔的 HTTP(S) URL；设置后每个事件（project/issue/comment 变更）以 POST JSON 转发到各 URL（3s 超时，失败重试一次，失败仅告警） |
+| `TASKBOARD_WEBHOOK_SECRET` | 未设置 | 设置后 webhook 请求带 `X-Taskboard-Signature: sha256=HMAC-SHA256(body, secret)`，接收端应对原始字节验签后再解析 |
 | `TASKBOARD_HUMAN_DONE` | 未设置 | 设置后 `status→done` 仅接受 web 来源（人工 UI），agent 只能到 `in_review`；直接以 `status: "done"` 创建任务同受此门禁；用户确认后 agent 可传 `confirm: true` 代为设置（PATCH 与 create 皆可） |
 | `TASKBOARD_BACKUPS` | 未设置 | `0` 关闭启动备份；默认每次启动 `VACUUM INTO` 快照到 `<dataDir>/backups/`，保留最近 10 份 |
 
