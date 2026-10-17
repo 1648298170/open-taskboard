@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { computePosition, flip, shift } from '@floating-ui/dom';
 import { activeClaim, api_, Commit, GitRefs, Issue, IssueDetail, PRIORITIES, Status } from '../api';
 import { Markdown } from '../markdown';
+import { confirmDialog, promptDialog } from './dialogs';
 
 /** ISO → "MM-DD HH:mm"（活动时间线用）。 */
 const fmtWhen = (iso: string): string =>
@@ -31,6 +33,20 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
   const [desc, setDesc] = useState('');
   const [editingDesc, setEditingDesc] = useState(false);
   const [comment, setComment] = useState('');
+  // v0.4: mention 候选浮层 —— floating-ui 定位（top-start，翻转+防溢出）。
+  const commentInputRef = useRef<HTMLInputElement>(null);
+  const mentionRef = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    if (!comment.trim().startsWith('@') || !commentInputRef.current || !mentionRef.current) return;
+    void computePosition(commentInputRef.current, mentionRef.current, {
+      placement: 'top-start', strategy: 'fixed', middleware: [flip(), shift()]
+    }).then(({ x, y }) => {
+      if (mentionRef.current) {
+        mentionRef.current.style.left = `${x}px`;
+        mentionRef.current.style.top = `${y}px`;
+      }
+    });
+  }, [comment]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refs, setRefs] = useState<GitRefs | null>(null);
   // T6-36: 最近提交预览。null = 加载中/不可用。
@@ -113,18 +129,18 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
         </select>
         {/* 负责人 / 标签：与分支回退输入同款模式（defaultValue + 失焦提交），
             此前这两个字段只能经 CLI/MCP 修改，面板上看得到改不了。 */}
-        <input style={{ width: 96 }} title="负责人" placeholder="负责人" defaultValue={detail.assignee}
+        <input title="负责人" placeholder="负责人" defaultValue={detail.assignee}
           onBlur={e => { const v = e.target.value.trim(); if (v !== detail.assignee) void patch({ assignee: v }); }} />
         {/* v0.4: opencode 会话绑定（@agent 唤醒续此会话）。 */}
-        <input style={{ width: 104 }} title="opencode 会话绑定（@agent 唤醒续此会话）" placeholder="ses_…"
+        <input title="opencode 会话绑定（@agent 唤醒续此会话）" placeholder="ses_…"
           defaultValue={detail.sessionId ?? ''}
           onBlur={e => { const v = e.target.value.trim() || null; if (v !== detail.sessionId) void patch({ sessionId: v }); }} />
-        <input style={{ width: 128 }} title="标签（逗号分隔）" placeholder="标签,逗号分隔" defaultValue={detail.labels}
+        <input title="标签（逗号分隔）" placeholder="标签,逗号分隔" defaultValue={detail.labels}
           onBlur={e => { const v = e.target.value.trim(); if (v !== detail.labels) void patch({ labels: v }); }} />
         {/* T2-8: 有 git-refs 数据时分支用下拉（保留当前值即使不在列表中），
             拉不到数据回退为原文本输入；改动走与原输入相同的乐观锁 patch。 */}
         {refs && refs.branches.length > 0 ? (
-          <select style={{ width: 120 }} title="分支" value={detail.branch}
+          <select title="分支" value={detail.branch}
             onChange={e => { if (e.target.value !== detail.branch) void patch({ branch: e.target.value }); }}>
             <option value="">分支 —</option>
             {detail.branch && !refs.branches.includes(detail.branch) &&
@@ -132,12 +148,12 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
             {refs.branches.map(b => <option key={b} value={b}>{b}</option>)}
           </select>
         ) : (
-          <input style={{ width: 120 }} placeholder="分支" defaultValue={detail.branch}
+          <input placeholder="分支" defaultValue={detail.branch}
             onBlur={e => { if (e.target.value !== detail.branch) void patch({ branch: e.target.value }); }} />
         )}
         {/* T2-8: 工作树字段，同样的下拉/回退模式（值为 worktree 名称）。 */}
         {refs && refs.worktrees.length > 0 ? (
-          <select style={{ width: 120 }} title="工作树" value={detail.worktree}
+          <select title="工作树" value={detail.worktree}
             onChange={e => { if (e.target.value !== detail.worktree) void patch({ worktree: e.target.value }); }}>
             <option value="">工作树 —</option>
             {detail.worktree && !refs.worktrees.some(w => w.name === detail.worktree) &&
@@ -145,7 +161,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
             {refs.worktrees.map(w => <option key={w.path} value={w.name} title={w.path}>{w.name}</option>)}
           </select>
         ) : (
-          <input style={{ width: 120 }} placeholder="工作树" defaultValue={detail.worktree}
+          <input placeholder="工作树" defaultValue={detail.worktree}
             onBlur={e => { if (e.target.value !== detail.worktree) void patch({ worktree: e.target.value }); }} />
         )}
         <input type="date" title="开始日期" defaultValue={detail.startDate ?? ''}
@@ -153,7 +169,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
         <input type="date" title="截止日期" defaultValue={detail.dueDate ?? ''}
           onChange={e => { const v = e.target.value || null; if (v !== detail.dueDate) void patch({ dueDate: v }); }} />
         <button className="btn tiny" style={{ color: 'var(--danger)' }} onClick={async () => {
-          if (!confirm(`删除 #${detail.id} 及其子任务/评论？`)) return;
+          if (!await confirmDialog({ title: `删除 #${detail.id} 及其子任务/评论？`, danger: true, confirmText: '删除' })) return;
           try {
             await api_.deleteIssue(detail.id);
             onToast('已删除');
@@ -172,7 +188,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
             }}>取消归档</button>
           : detail.status === 'done' && (
             <button className="btn tiny" style={{ color: 'var(--ink-dim)' }} onClick={async () => {
-              if (!confirm(`归档 #${detail.id}？将从看板移除（可随时取消归档）`)) return;
+              if (!await confirmDialog({ title: `归档 #${detail.id}？`, lines: ['将从看板移除（可随时取消归档）'], confirmText: '归档' })) return;
               try {
                 await api_.archiveIssue(detail.id);
                 onToast('已归档');
@@ -267,7 +283,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
 
       <h3>子任务
         <button className="btn tiny" onClick={async () => {
-          const title = prompt('子任务标题:');
+          const title = await promptDialog({ title: '子任务标题' });
           if (!title) return;
           try {
             await api_.createIssue(detail.projectId, { parentId: detail.id, title });
@@ -292,9 +308,11 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
           const v = e.target.value;
           if (!v) return;
           if (v === '__manual__') {
-            const depId = prompt('被哪个任务阻塞？（输入任务 ID，如 ab12cd34）:')?.trim();
-            if (!depId) return;
-            void addDep(depId);
+            void (async () => {
+              const depId = await promptDialog({ title: '被哪个任务阻塞？', placeholder: '输入任务 ID，如 ab12cd34' });
+              if (!depId) return;
+              await addDep(depId);
+            })();
             return;
           }
           void addDep(v);
@@ -360,7 +378,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
               <button className="icon-btn dep-remove" title="删除评论"
                 onClick={async e => {
                   e.stopPropagation();
-                  if (!confirm('删除这条评论？')) return;
+                  if (!await confirmDialog({ title: '删除这条评论？', danger: true, confirmText: '删除' })) return;
                   try {
                     await api_.deleteComment(c.id);
                     onChanged(); await load();
@@ -377,7 +395,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
           setComment(''); onChanged(); await load();
         } catch (err) { onToast(`✗ ${(err as Error).message}`); }
       }}>
-        <input value={comment} onChange={e => setComment(e.target.value)} placeholder="添加评论…（@ 唤醒 agent）" />
+        <input ref={commentInputRef} value={comment} onChange={e => setComment(e.target.value)} placeholder="添加评论…（@ 唤醒 agent）" />
         {/* 输入 @ 时弹出提及候选（chat 式）；点击填入。发送逻辑不变。 */}
         {(() => {
           const frag = /^@([\w-]*)$/.exec(comment.trim());
@@ -385,7 +403,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
           const hits = MENTION_CANDIDATES.filter(m => m.startsWith(`@${frag[1]}`) && m !== comment.trim());
           if (hits.length === 0) return null;
           return (
-            <span className="mention-hint">
+            <span ref={mentionRef} className="mention-hint">
               {hits.map(m => (
                 <button key={m} type="button" className="btn tiny" title="点击填入；watch 侧车运行时将唤醒 agent"
                   onClick={() => setComment(m + ' ')}>{m} 唤醒侧车</button>

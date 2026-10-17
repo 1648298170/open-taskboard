@@ -518,6 +518,36 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 .dep-picker { margin-bottom: 8px; }
 .dep-picker select { width: 100%; }
 
+/* ---- v0.4: 应用内对话框（原生 <dialog>）+ meta 行弹性布局 ---- */
+.tb-dialog {
+  background: var(--bg-raised); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 4px;
+  padding: 22px 24px; width: min(440px, 92vw);
+  box-shadow: 0 30px 80px #000c;
+}
+.tb-dialog::backdrop { background: rgba(16, 19, 18, .7); }
+.tb-dialog-title { margin: 0 0 12px; font-size: 14px; letter-spacing: .04em; }
+.tb-dialog-lines {
+  margin: 0 0 12px; display: grid; gap: 4px;
+  max-height: 40vh; overflow: auto;
+  font-size: 12px; color: var(--ink-dim);
+}
+.tb-dialog-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tb-dialog-menu { display: flex; gap: 8px; justify-content: flex-end; margin: 14px 0 0; padding: 0; }
+.tb-dialog-input { width: 100%; }
+.btn.danger { color: var(--danger); border-color: var(--danger); }
+/* meta 行弹性：输入/下拉按内容伸缩，窄屏不溢出（治布局偏移） */
+.meta-row > input, .meta-row > select { flex: 1 1 130px; min-width: 0; width: auto; }
+.meta-row > input[type='date'] { flex: 0 1 auto; }
+
+/* v0.4: dnd-kit 拖拽 + mention 浮层（floating-ui fixed 定位） */
+.card { touch-action: none; }
+.card.dragging { opacity: .55; }
+.mention-hint {
+  position: fixed; z-index: 40;
+  display: inline-flex; gap: 6px;
+}
+
 /* ---- v0.4: 进行中视觉强调（借鉴 dashi 琥珀脉冲）+ 子任务 ◐ 三态点阵 ---- */
 .dot.in_progress { animation: pulse-in-progress 1.6s ease-in-out infinite; }
 @keyframes pulse-in-progress {

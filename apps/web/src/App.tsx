@@ -3,6 +3,7 @@ import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, S
 import { Board, buildBlockedByMap, flattenCardOrder, GroupBy, todayStr } from './components/Board';
 import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
+import { confirmDialog, promptDialog } from './components/dialogs';
 import { Drawer } from './components/Drawer';
 import { NewIssueDialog } from './components/NewIssueDialog';
 import { StatsPanel } from './components/StatsPanel';
@@ -221,7 +222,10 @@ export default function App() {
   const runBulk = async (kind: 'done' | 'archive' | 'delete'): Promise<void> => {
     const ids = [...selected];
     if (ids.length === 0) return;
-    if (kind === 'delete' && !window.confirm(`确认删除 ${ids.length} 个任务及其子任务/评论？`)) return;
+    if (kind === 'delete') {
+      const ok = await confirmDialog({ title: `删除 ${ids.length} 个任务及其子任务/评论？`, danger: true, confirmText: '删除' });
+      if (!ok) return;
+    }
     let ok = 0;
     const failed: string[] = [];
     for (const id of ids) {
@@ -400,7 +404,7 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           <button className="icon-btn" aria-label="删除项目" title="删除当前项目（输入 id 确认）"
             onClick={async () => {
               const pid = projectId ?? '';
-              const typed = prompt(`输入项目 id 以确认删除「${pid}」（其全部任务/评论将被清除）:`);
+              const typed = await promptDialog({ title: `输入项目 id 以确认删除「${pid}」`, placeholder: '项目 id', value: '' });
               if (typed === null) return;
               if (typed.trim() !== pid) { showToast('✗ 项目 id 不匹配，未删除'); return; }
               try {
@@ -505,11 +509,12 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           const kids = issue.parentId ? [] : pickMovableChildren(issues, issue.id, status);
           let moveKids = kids.length > 0;
           if (moveKids && status === 'done') {
-            moveKids = confirm(
-              `同时将 ${kids.length} 个子任务置为 done？\n` +
-              kids.map(k => `#${k.id} ${k.title} [${k.status}]`).join('\n') +
-              `\n\n确定 = 整组验收；取消 = 仅父任务置 done`
-            );
+            moveKids = await confirmDialog({
+              title: `同时将 ${kids.length} 个子任务置为 done？`,
+              lines: kids.map(k => `#${k.id} ${k.title} [${k.status}]`),
+              confirmText: '整组验收',
+              cancelText: '仅父任务置 done'
+            });
           }
           const move = (issueId: string, curVersion: number): Promise<void> =>
             moveWithRetry({ updateIssue: api_.updateIssue, showIssue: api_.showIssue }, issueId, status, curVersion);

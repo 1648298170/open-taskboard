@@ -1,4 +1,5 @@
 import { activeClaim, Issue, STATUSES, Status } from '../api';
+import { DndContext, DragEndEvent, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import { buildLanes, buildBlockedByMap, flattenCardOrder, todayStr } from '../logic/board';
 import type { BlockedByMap } from '../logic/board';
 
@@ -7,6 +8,64 @@ import type { BlockedByMap } from '../logic/board';
 export { buildLanes, buildBlockedByMap, flattenCardOrder, todayStr };
 export type { GroupBy, Lane } from '../logic/board';
 import type { GroupBy } from '../logic/board';
+
+/** 单个状态列：droppable 目标（dnd-kit），计数=顶层卡片组数。 */
+function Column({ status, laneIssues, boardEmpty, onOpen, onDrop, blockedByMap, emptyHint,
+  batchMode, selectedIds, onToggleSelect, cursorId }: {
+  status: Status;
+  laneIssues: Issue[];
+  boardEmpty: boolean;
+  onOpen: (id: string) => void;
+  onDrop: (id: string, status: Status) => void;
+  blockedByMap?: BlockedByMap;
+  emptyHint?: string;
+  batchMode: boolean;
+  selectedIds?: ReadonlySet<string>;
+  onToggleSelect?: (id: string) => void;
+  cursorId?: string | null;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: status });
+  const list = laneIssues.filter(i => i.status === status);
+  const statusById = new Map(laneIssues.map(i => [i.id, i.status]));
+  const hasUnmetDeps = (id: string): boolean =>
+    (blockedByMap?.get(id) ?? []).some(dep => statusById.get(dep) !== 'done');
+  return (
+    <section ref={setNodeRef} className={`column${isOver ? ' drag-over' : ''}`} data-status={status}>
+      <h2>
+        <span className={`dot ${status}`} />{status}
+        {/* v0.4: 计数 = 顶层卡片组数（子任务嵌在父卡下，不计入本列）——
+            数字与所见严格一致，杜绝「有数字没卡片」。 */}
+        <span className="count">{list.filter(i => !i.parentId).length}</span>
+      </h2>
+      <div className="cards">
+        {boardEmpty && emptyHint && <div className="column-empty">{emptyHint}</div>}
+        {list.filter(i => !i.parentId).map(top => {
+          // T5-25: 子任务进度（done/total + 点阵），从扁平 issues 列表
+          // 中按 parentId 归属计算。
+          const children = laneIssues.filter(c => c.parentId === top.id);
+          const childProgress = children.length
+            ? {
+                done: children.filter(c => c.status === 'done').length,
+                inProgress: children.filter(c => c.status === 'in_progress').length,
+                total: children.length
+              }
+            : undefined;
+          return (
+            <div key={top.id}>
+              <Card issue={top} onOpen={onOpen} locked={hasUnmetDeps(top.id)} childProgress={childProgress}
+                batchMode={batchMode} checked={selectedIds?.has(top.id) ?? false}
+                onToggleSelect={onToggleSelect} active={cursorId === top.id} />
+              {children.map(child =>
+                <Card key={child.id} issue={child} child onOpen={onOpen} locked={hasUnmetDeps(child.id)}
+                  batchMode={batchMode} checked={selectedIds?.has(child.id) ?? false}
+                  onToggleSelect={onToggleSelect} active={cursorId === child.id} />)}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
 
 export function Board({ issues, onOpen, onDrop, emptyHint, blockedByMap, groupBy = 'none',
   batchMode = false, selectedIds, onToggleSelect, cursorId }: {
@@ -26,80 +85,48 @@ export function Board({ issues, onOpen, onDrop, emptyHint, blockedByMap, groupBy
   /** T5-29: j/k 高亮的卡片 id（.card-active 外框）。 */
   cursorId?: string | null;
 }) {
-  const statusById = new Map(issues.map(i => [i.id, i.status]));
-  const hasUnmetDeps = (id: string): boolean =>
-    (blockedByMap?.get(id) ?? []).some(dep => statusById.get(dep) !== 'done');
-
-  // 四列网格渲染抽成局部函数：单网格与泳道两种布局共用，避免复制粘贴。
-  const renderColumn = (status: Status, laneIssues: Issue[]) => {
-    const list = laneIssues.filter(i => i.status === status);
-    return (
-      <section key={status} className="column" data-status={status}
-        onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }}
-        onDragLeave={e => e.currentTarget.classList.remove('drag-over')}
-        onDrop={e => {
-          e.preventDefault();
-          e.currentTarget.classList.remove('drag-over');
-          onDrop(e.dataTransfer.getData('text/plain'), status);
-        }}>
-        <h2>
-          <span className={`dot ${status}`} />{status}
-          {/* v0.4: 计数 = 顶层卡片组数（子任务嵌在父卡下，不计入本列）——
-              数字与所见严格一致，杜绝「有数字没卡片」。 */}
-          <span className="count">{list.filter(i => !i.parentId).length}</span>
-        </h2>
-        <div className="cards">
-          {issues.length === 0 && emptyHint && <div className="column-empty">{emptyHint}</div>}
-          {list.filter(i => !i.parentId).map(top => {
-            // T5-25: 子任务进度（done/total + 点阵），从扁平 issues 列表
-            // 中按 parentId 归属计算。
-            const children = laneIssues.filter(c => c.parentId === top.id);
-            const childProgress = children.length
-              ? {
-                  done: children.filter(c => c.status === 'done').length,
-                  inProgress: children.filter(c => c.status === 'in_progress').length,
-                  total: children.length
-                }
-              : undefined;
-            return (
-              <div key={top.id}>
-                <Card issue={top} onOpen={onOpen} locked={hasUnmetDeps(top.id)} childProgress={childProgress}
-                  batchMode={batchMode} checked={selectedIds?.has(top.id) ?? false}
-                  onToggleSelect={onToggleSelect} active={cursorId === top.id} />
-                {children.map(child =>
-                  <Card key={child.id} issue={child} child onOpen={onOpen} locked={hasUnmetDeps(child.id)}
-                    batchMode={batchMode} checked={selectedIds?.has(child.id) ?? false}
-                    onToggleSelect={onToggleSelect} active={cursorId === child.id} />)}
-              </div>
-            );
-          })}
-        </div>
-      </section>
-    );
+  // v0.4: dnd-kit —— PointerSensor 5px 激活阈值（点击不误拖），拖完回调
+  // 既有 onDrop 契约（blocked 守卫 / done 整组确认都在 App 侧不变）。
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const handleDragEnd = (e: DragEndEvent): void => {
+    const { active, over } = e;
+    if (over && active.id !== over.id) onDrop(String(active.id), String(over.id) as Status);
   };
+  const renderColumns = (laneIssues: Issue[]): JSX.Element[] =>
+    STATUSES.map(s => (
+      <Column key={s} status={s} laneIssues={laneIssues} boardEmpty={issues.length === 0}
+        onOpen={onOpen} onDrop={onDrop} blockedByMap={blockedByMap} emptyHint={emptyHint}
+        batchMode={batchMode} selectedIds={selectedIds} onToggleSelect={onToggleSelect} cursorId={cursorId} />
+    ));
 
   // 无分组：保持原单网格 DOM（main.board 直接承载四列）。
   if (groupBy === 'none') {
-    return <main className="board">{STATUSES.map(s => renderColumn(s, issues))}</main>;
+    return (
+      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+        <main className="board">{renderColumns(issues)}</main>
+      </DndContext>
+    );
   }
 
   // T5-27: 泳道布局 —— 每条泳道一个带标题的小节，内含完整四列网格。
   const lanes = buildLanes(issues, groupBy);
   return (
-    <main className="board grouped">
-      {lanes.length === 0 && emptyHint && <div className="column-empty board-empty">{emptyHint}</div>}
-      {lanes.map(lane => (
-        <section key={lane.key || '(none)'} className="lane">
-          <h2 className="lane-title">
-            <span className="lane-glyph">▙</span>{lane.title}
-            <span className="count">{lane.issues.filter(i => !i.parentId).length}</span>
-          </h2>
-          <div className="lane-grid">
-            {STATUSES.map(s => renderColumn(s, lane.issues))}
-          </div>
-        </section>
-      ))}
-    </main>
+    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+      <main className="board grouped">
+        {lanes.length === 0 && emptyHint && <div className="column-empty board-empty">{emptyHint}</div>}
+        {lanes.map(lane => (
+          <section key={lane.key || '(none)'} className="lane">
+            <h2 className="lane-title">
+              <span className="lane-glyph">▙</span>{lane.title}
+              <span className="count">{lane.issues.filter(i => !i.parentId).length}</span>
+            </h2>
+            <div className="lane-grid">
+              {renderColumns(lane.issues)}
+            </div>
+          </section>
+        ))}
+      </main>
+    </DndContext>
   );
 }
 
@@ -148,21 +175,26 @@ function Card({ issue, child, onOpen, locked, childProgress, batchMode, checked,
   onToggleSelect?: (id: string) => void;
   active?: boolean;
 }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: issue.id,
+    disabled: batchMode === true
+  });
+  const style = {
+    ...(child ? { marginLeft: 18 } : {}),
+    ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, zIndex: 30 } : {})
+  };
   return (
-    <article className={`card${active ? ' card-active' : ''}`} data-status={issue.status}
+    <article ref={setNodeRef} className={`card${active ? ' card-active' : ''}${isDragging ? ' dragging' : ''}`}
+      data-status={issue.status}
       data-card-id={issue.id}
-      style={child ? { marginLeft: 18 } : undefined}
-      draggable={!batchMode}
+      style={style}
+      {...listeners}
+      {...attributes}
       onClick={() => {
         // 批量模式下点卡片 = 切换选中，避免误开抽屉。
         if (batchMode) onToggleSelect?.(issue.id);
         else onOpen(issue.id);
-      }}
-      onDragStart={e => {
-        e.dataTransfer.setData('text/plain', issue.id);
-        e.currentTarget.classList.add('dragging');
-      }}
-      onDragEnd={e => e.currentTarget.classList.remove('dragging')}>
+      }}>
       {batchMode && onToggleSelect && (
         <label className="card-check" title="选中"
           onClick={e => e.stopPropagation()}
