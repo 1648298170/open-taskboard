@@ -174,6 +174,11 @@ export class Store {
     if (!parent) throw new NotFoundError(`parent issue not found: ${patch.parentId}`);
     if (parent.parentId) throw new ValidationError('only one level of nesting is supported (parent must be a top-level issue)');
     if (parent.projectId !== cur.projectId) throw new ValidationError('parent issue belongs to a different project');
+    // Moving a parent under another parent would push its children to depth 3,
+    // where nothing renders or counts them — the two-level invariant wins.
+    if (this.issues.list(cur.projectId, { parentId: id, archived: 'all' }).length > 0) {
+      throw new ValidationError('cannot re-parent an issue that has children');
+    }
   }
 
   updateIssue(id: string, patch: IssuePatch, expectedVersion?: number, actor = ''): Issue {
@@ -223,19 +228,33 @@ export class Store {
   }
 
   // ---- archive (T5-24): a row mutation — bumps version + updated_at like
-  // updateIssue so optimistic-lock clients see the change. ----
+  // updateIssue so optimistic-lock clients see the change. Archiving a parent
+  // brings its non-archived children along: a visible child under an archived
+  // parent loses its lane grouping and vanishes from the board. Unarchive is
+  // single-row on purpose (a manually archived child stays archived). ----
   archiveIssue(id: string, actor = ''): Issue {
-    if (!this.issues.get(id)) throw new NotFoundError(`issue not found: ${id}`);
+    const cur = this.issues.get(id);
+    if (!cur) throw new NotFoundError(`issue not found: ${id}`);
+    if (cur.archivedAt) return cur;
+    // Default list filter = non-archived children only ('only' would select
+    // already-archived rows, the exact complement of what cascades).
+    const kids = this.issues.list(cur.projectId, { parentId: id });
     inTransaction(this.db, () => {
       this.issues.setArchived(id, now());
       this.logActivity(id, actor, 'archived', '');
+      for (const kid of kids) {
+        this.issues.setArchived(kid.id, now());
+        this.logActivity(kid.id, actor, 'archived', `with parent ${id}`);
+      }
     });
-    this.emit('issue.updated', { id });
+    for (const changedId of [id, ...kids.map(k => k.id)]) this.emit('issue.updated', { id: changedId });
     return this.issues.get(id)!;
   }
 
   unarchiveIssue(id: string, actor = ''): Issue {
-    if (!this.issues.get(id)) throw new NotFoundError(`issue not found: ${id}`);
+    const cur = this.issues.get(id);
+    if (!cur) throw new NotFoundError(`issue not found: ${id}`);
+    if (!cur.archivedAt) return cur;
     inTransaction(this.db, () => {
       this.issues.setArchived(id, null);
       this.logActivity(id, actor, 'unarchived', '');
