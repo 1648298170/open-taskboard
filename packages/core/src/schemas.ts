@@ -7,6 +7,19 @@ import { PRIORITIES, STATUSES } from './types.js';
 
 export { z };
 
+// YYYY-MM-DD that is also a real calendar day: Date.parse rolls overflow
+// dates forward ('2024-02-31' → Mar 2), so validate by round-tripping the
+// exact y/m/d components through Date.UTC.
+const isRealCalendarDate = (v: string): boolean => {
+  const [y, m, d] = v.split('-').map(Number);
+  if (y === undefined || m === undefined || d === undefined) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+};
+const nullableDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine(isRealCalendarDate, 'must be a real calendar date (YYYY-MM-DD)')
+  .nullable().optional();
+
 export const createProjectSchema = z
   .object({
     id: z.string().optional(),
@@ -28,8 +41,11 @@ export const createIssueSchema = z
     // T2-8: null creates as unbound ('' after the repo's ?? '' normalization).
     worktree: z.string().nullable().optional(),
     assignee: z.string().optional(),
-    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
-    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+    startDate: nullableDate,
+    dueDate: nullableDate,
+    // 与 restUpdateIssueSchema 的逃生舱对齐：TASKBOARD_HUMAN_DONE=1 时，
+    // 用户确认后 agent 可带 confirm: true 直接创建即 done 的任务。
+    confirm: z.boolean().optional(),
   })
   .strict();
 
@@ -45,8 +61,8 @@ export const issuePatchSchema = z
     worktree: z.string().nullable().optional(),
     assignee: z.string().optional(),
     parentId: z.string().nullable().optional(),
-    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
-    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+    startDate: nullableDate,
+    dueDate: nullableDate,
   })
   .strict();
 

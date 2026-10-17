@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { inTransaction } from './transactions.js';
 
 // The single place that knows the taskboard database shape:
 // PRAGMAs, the base schema DDL (the historical "v0" layout) and the ordered
@@ -135,13 +136,19 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
 
 // Applies pending migrations in order, stamping PRAGMA user_version after
 // each one. Version check makes it idempotent: already-migrated dbs skip.
+// Each migration runs in its own transaction together with its version stamp
+// (user_version is transactional in sqlite) — a failure mid-migration rolls
+// the DDL back, so the next start replays from a clean state instead of
+// dying on duplicate columns.
 export function runMigrations(db: DatabaseSync): void {
   const { user_version: version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
   for (let v = version; v < MIGRATIONS.length; v++) {
     const migrate = MIGRATIONS[v];
     if (!migrate) break;
-    migrate(db);
-    db.exec(`PRAGMA user_version = ${v + 1}`);
+    inTransaction(db, () => {
+      migrate(db);
+      db.exec(`PRAGMA user_version = ${v + 1}`);
+    });
   }
 }
 
