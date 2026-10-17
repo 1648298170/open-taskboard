@@ -56,6 +56,11 @@ export class SearchRepo {
     ).run(issueId, issueId);
   }
 
+  /** Single comment FTS row (comment deletion path). */
+  deleteCommentFts(commentId: string): void {
+    this.db.prepare("DELETE FROM issues_fts WHERE kind = 'comment' AND ref_id = ?").run(commentId);
+  }
+
   /** Must run BEFORE the project rows are deleted. Every fts row carries project_id. */
   deleteProjectFts(projectId: string): void {
     this.db.prepare('DELETE FROM issues_fts WHERE project_id = ?').run(projectId);

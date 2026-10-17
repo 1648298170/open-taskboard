@@ -354,6 +354,20 @@ export class Store {
     return this.comments.get(id)!;
   }
 
+  // Deleting a comment mirrors adding one: same transaction shape, FTS row
+  // dropped, activity logged, event emitted — and like add, it never bumps
+  // the issue version (only updated_at moves).
+  deleteComment(id: string, actor = ''): void {
+    const comment = this.comments.get(id);
+    if (!comment) throw new NotFoundError(`comment not found: ${id}`);
+    inTransaction(this.db, () => {
+      this.syncFts(() => this.fts.deleteCommentFts(id));
+      this.comments.delete(id, comment.issueId);
+      this.logActivity(comment.issueId, actor, 'comment-deleted', comment.body.slice(0, 200));
+    });
+    this.emit('comment.deleted', { id, issueId: comment.issueId });
+  }
+
   getComment(id: string): Comment | null {
     return this.comments.get(id);
   }
