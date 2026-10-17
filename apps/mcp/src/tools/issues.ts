@@ -16,6 +16,10 @@ import { defineTool, type ToolTable } from './registry.js';
 
 const idSchema = z.object({ id: z.string() }).strict();
 
+// Path segments come from LLM-authored tool arguments — never trust them raw
+// in URLs (a '/' or '?' would rewrite the route).
+const seg = (value: string): string => encodeURIComponent(value);
+
 interface IssueDetail { children?: { description: string }[]; activities?: unknown[] }
 
 export const issueTools: ToolTable = [
@@ -32,14 +36,14 @@ export const issueTools: ToolTable = [
       if (args.status) qs.set('status', args.status);
       if (args.parentId !== undefined) qs.set('parentId', args.parentId ?? 'null');
       if (args.archived !== undefined) qs.set('archived', args.archived);
-      return ensureServerOrThrow('GET', `/api/projects/${args.projectId}/issues?${qs}`);
+      return ensureServerOrThrow('GET', `/api/projects/${seg(args.projectId)}/issues?${qs}`);
     },
   )],
   ['show_issue', defineTool(
     idSchema,
     '查看任务详情：描述、子任务、评论、版本号',
     async args => {
-      const detail = (await ensureServerOrThrow('GET', `/api/issues/${args.id}`)) as IssueDetail;
+      const detail = (await ensureServerOrThrow('GET', `/api/issues/${seg(args.id)}`)) as IssueDetail;
       // Strip activities (token economy) — consistent with child-description stripping.
       const { activities: _activities, ...issue } = detail;
       return { ...issue, children: issue.children?.map(({ description: _d, ...c }) => c) };
@@ -47,13 +51,14 @@ export const issueTools: ToolTable = [
   )],
   ['create_issue', defineTool(
     createIssueSchema,
-    '创建任务。拆解需求时：先建顶层父任务，再用 parentId 为每个子需求建子任务（仅支持两层）',
-    args => ensureServerOrThrow('POST', `/api/projects/${args.projectId}/issues`, {
+    '创建任务。拆解需求时：先建顶层父任务，再用 parentId 为每个子需求建子任务（仅支持两层）。TASKBOARD_HUMAN_DONE=1 时创建即 done 与 PATCH 置 done 同责：非 web 来源需用户确认后传 confirm: true',
+    args => ensureServerOrThrow('POST', `/api/projects/${seg(args.projectId)}/issues`, {
       parentId: args.parentId ?? null, title: args.title, description: args.description ?? '',
       status: args.status ?? 'todo', priority: args.priority ?? 'medium',
       labels: args.labels ?? '', branch: args.branch ?? '', assignee: args.assignee ?? '',
       worktree: args.worktree ?? null,
       startDate: args.startDate ?? null, dueDate: args.dueDate ?? null,
+      ...(args.confirm !== undefined ? { confirm: args.confirm } : {}),
     }),
   )],
   ['update_issue', defineTool(
@@ -65,30 +70,30 @@ export const issueTools: ToolTable = [
         const v = args[k];
         if (v !== undefined) body[k] = v;
       }
-      return ensureServerOrThrow('PATCH', `/api/issues/${args.id}`, body);
+      return ensureServerOrThrow('PATCH', `/api/issues/${seg(args.id)}`, body);
     },
   )],
   ['delete_issue', defineTool(
     idSchema,
     '删除任务（级联删除其子任务与评论）',
-    args => ensureServerOrThrow('DELETE', `/api/issues/${args.id}`),
+    args => ensureServerOrThrow('DELETE', `/api/issues/${seg(args.id)}`),
   )],
   ['archive_issue', defineTool(
     idSchema,
-    '归档任务（从看板/就绪列表/进度统计中移除；list_issues 带 archived=only 可查看，unarchive_issue 可恢复）',
-    args => ensureServerOrThrow('POST', `/api/issues/${args.id}/archive`, {}),
+    '归档任务（连带归档其未归档子任务；从看板/就绪列表/进度统计中移除。list_issues 带 archived=only 可查看，unarchive_issue 恢复父任务本身）',
+    args => ensureServerOrThrow('POST', `/api/issues/${seg(args.id)}/archive`, {}),
   )],
   ['unarchive_issue', defineTool(
     idSchema,
-    '取消归档任务（恢复到看板）',
-    args => ensureServerOrThrow('POST', `/api/issues/${args.id}/unarchive`, {}),
+    '取消归档任务（恢复父任务本身到看板；子任务保持归档，需逐个 unarchive）',
+    args => ensureServerOrThrow('POST', `/api/issues/${seg(args.id)}/unarchive`, {}),
   )],
   // T7-34: 独占租约三件套。租约默认 30 分钟，过期后其他 agent 可直接
   // 认领（惰性过期，无需定时器）。
   ['claim_issue', defineTool(
     claimSchema.extend({ id: z.string() }),
     '认领任务（独占租约）：租约期内其他 agent 认领会 409。建议先 claim 再开工，长任务用心跳续租，完成后 release。ttlMinutes 默认 30，上限 1440',
-    args => ensureServerOrThrow('POST', `/api/issues/${args.id}/claim`, {
+    args => ensureServerOrThrow('POST', `/api/issues/${seg(args.id)}/claim`, {
       agent: args.agent,
       ...(args.ttlMinutes !== undefined ? { ttlMinutes: args.ttlMinutes } : {}),
     }),
@@ -96,12 +101,12 @@ export const issueTools: ToolTable = [
   ['heartbeat_issue', defineTool(
     claimSchema.omit({ ttlMinutes: true }).extend({ id: z.string() }),
     '心跳续租：延长自己持有任务的租约到期时间（长任务定期调用防过期；非持有人或租约已过期会 409）',
-    args => ensureServerOrThrow('POST', `/api/issues/${args.id}/heartbeat`, { agent: args.agent }),
+    args => ensureServerOrThrow('POST', `/api/issues/${seg(args.id)}/heartbeat`, { agent: args.agent }),
   )],
   ['release_issue', defineTool(
     claimSchema.omit({ ttlMinutes: true }).extend({ id: z.string() }),
     '释放任务租约（完成或放弃时调用；释放未认领/已过期的任务是幂等 no-op）',
-    args => ensureServerOrThrow('POST', `/api/issues/${args.id}/release`, { agent: args.agent }),
+    args => ensureServerOrThrow('POST', `/api/issues/${seg(args.id)}/release`, { agent: args.agent }),
   )],
   ['search_issues', defineTool(
     z.object({ query: z.string().min(1) }).strict(),
@@ -111,7 +116,7 @@ export const issueTools: ToolTable = [
   ['add_comment', defineTool(
     addCommentSchema.extend({ id: z.string() }),
     '添加评论，用于记录进展、阻塞、验证方式',
-    args => ensureServerOrThrow('POST', `/api/issues/${args.id}/comments`, {
+    args => ensureServerOrThrow('POST', `/api/issues/${seg(args.id)}/comments`, {
       author: args.author ?? 'mcp', body: args.body,
     }),
   )],
@@ -119,19 +124,19 @@ export const issueTools: ToolTable = [
   ['list_attachments', defineTool(
     idSchema,
     '列出任务附件（id/文件名/大小/上传者/时间）。附件经 Web 或 CLI (`taskboard issue attach`) 上传，MCP 仅提供列表，不含上传；下载路径为 /api/attachments/<id>/download',
-    args => ensureServerOrThrow('GET', `/api/issues/${args.id}/attachments`),
+    args => ensureServerOrThrow('GET', `/api/issues/${seg(args.id)}/attachments`),
   )],
   ['add_issue_dependency', defineTool(
     addDependencySchema.extend({ id: z.string() }),
     '添加依赖：id 任务被 dependsOnId 阻塞（dependsOnId 完成前 id 不算就绪）。禁止自依赖/跨项目/循环依赖',
-    args => ensureServerOrThrow('POST', `/api/issues/${args.id}/dependencies`, {
+    args => ensureServerOrThrow('POST', `/api/issues/${seg(args.id)}/dependencies`, {
       dependsOnId: args.dependsOnId,
     }),
   )],
   ['remove_issue_dependency', defineTool(
     z.object({ id: z.string(), dependsOnId: z.string().min(1) }).strict(),
     '移除依赖：解除 id 对 dependsOnId 的阻塞关系',
-    args => ensureServerOrThrow('DELETE', `/api/issues/${args.id}/dependencies/${args.dependsOnId}`),
+    args => ensureServerOrThrow('DELETE', `/api/issues/${seg(args.id)}/dependencies/${seg(args.dependsOnId)}`),
   )],
   ['ready_issues', defineTool(
     z.object({
@@ -144,7 +149,7 @@ export const issueTools: ToolTable = [
       const qs = new URLSearchParams();
       if (args.assignee !== undefined) qs.set('assignee', args.assignee);
       if (args.agent !== undefined) qs.set('agent', args.agent);
-      return ensureServerOrThrow('GET', `/api/projects/${args.projectId}/ready?${qs}`);
+      return ensureServerOrThrow('GET', `/api/projects/${seg(args.projectId)}/ready?${qs}`);
     },
   )],
   ['next_issue', defineTool(
@@ -158,13 +163,13 @@ export const issueTools: ToolTable = [
       const qs = new URLSearchParams();
       if (args.assignee !== undefined) qs.set('assignee', args.assignee);
       if (args.agent !== undefined) qs.set('agent', args.agent);
-      return ensureServerOrThrow('GET', `/api/projects/${args.projectId}/next?${qs}`);
+      return ensureServerOrThrow('GET', `/api/projects/${seg(args.projectId)}/next?${qs}`);
     },
   )],
   ['progress', defineTool(
     z.object({ projectId: z.string() }).strict(),
     '项目进度。weighted 口径：一个顶层任务 = 一个单位，自身 done 或子任务全 done 即完成',
-    args => ensureServerOrThrow('GET', `/api/projects/${args.projectId}/progress`),
+    args => ensureServerOrThrow('GET', `/api/projects/${seg(args.projectId)}/progress`),
   )],
   ['project_stats', defineTool(
     z.object({
@@ -174,7 +179,7 @@ export const issueTools: ToolTable = [
     '项目统计面板：近 N 周完成吞吐（周一起算）、平均周期（小时，按 updatedAt 估算）、Agent 贡献 top10、四状态分布',
     args => ensureServerOrThrow(
       'GET',
-      `/api/projects/${args.projectId}/stats${args.weeks !== undefined ? `?weeks=${args.weeks}` : ''}`,
+      `/api/projects/${seg(args.projectId)}/stats${args.weeks !== undefined ? `?weeks=${args.weeks}` : ''}`,
     ),
   )],
 ];
