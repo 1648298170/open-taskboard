@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+.data
+**/.data
+.git
+.gitignore
+apps/*/dist
+packages/*/dist
+*.log
+.claude
+.opencode
+.sisyphus
+skills
+docs

@@ -1,0 +1,25 @@
+# Deployed "stable" board — isolated from the dev instance on 127.0.0.1:47824
+# (repo ./.data). Upgrades are explicit: docker compose build && docker compose up -d.
+services:
+  taskboard:
+    build:
+      context: .
+      args:
+        # 本机网络拉 docker.io 不稳定 — 经 1ms 镜像源取 node:22-slim
+        NODE_IMAGE: docker.1ms.run/library/node:22-slim
+    image: open-taskboard:latest
+    container_name: open-taskboard
+    ports:
+      - "47825:47824"
+    volumes:
+      - taskboard-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:47824/api/meta').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  taskboard-data:
