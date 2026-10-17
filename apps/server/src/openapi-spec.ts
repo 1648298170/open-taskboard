@@ -885,6 +885,7 @@ export const openApiSpec: OpenApiDocument = {
           labels: { type: 'string', description: 'Comma-separated free-form labels' },
           branch: { type: 'string', description: 'Bound git branch; empty string = unbound' },
           worktree: { type: 'string', description: 'Bound git worktree name; empty string = unbound' },
+          sessionId: { type: ['string', 'null'], description: 'opencode session this task was split from; null = unbound (@agent wakes continue the bound session)' },
           archivedAt: { type: ['string', 'null'], format: 'date-time', description: 'Archive timestamp; null = not archived' },
           claimedBy: { type: 'string', description: 'Exclusive claim holder (T7-34); empty string = unclaimed' },
           leaseExpiresAt: { type: ['string', 'null'], format: 'date-time', description: 'Claim lease deadline; null or past = no active claim' },
@@ -897,7 +898,7 @@ export const openApiSpec: OpenApiDocument = {
         },
         required: [
           'id', 'projectId', 'parentId', 'title', 'description', 'status', 'priority', 'labels',
-          'branch', 'worktree', 'archivedAt', 'claimedBy', 'leaseExpiresAt', 'assignee', 'version',
+          'branch', 'worktree', 'sessionId', 'archivedAt', 'claimedBy', 'leaseExpiresAt', 'assignee', 'version',
           'startDate', 'dueDate', 'createdAt', 'updatedAt'
         ],
         additionalProperties: false
@@ -1107,6 +1108,7 @@ export const openApiSpec: OpenApiDocument = {
           labels: { type: 'string' },
           branch: { type: 'string' },
           worktree: { type: ['string', 'null'], description: 'null = unbound' },
+          sessionId: { type: ['string', 'null'], description: 'opencode session to bind at creation' },
           assignee: { type: 'string' },
           startDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
           dueDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
@@ -1126,6 +1128,7 @@ export const openApiSpec: OpenApiDocument = {
           labels: { type: 'string' },
           branch: { type: 'string' },
           worktree: { type: ['string', 'null'], description: 'null clears (stored as "")' },
+          sessionId: { type: ['string', 'null'], description: 'opencode session binding; null = unbind' },
           assignee: { type: 'string' },
           parentId: { type: ['string', 'null'] },
           startDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },

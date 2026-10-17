@@ -12,6 +12,9 @@ const humanSize = (bytes: number): string =>
     : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB`
       : `${bytes} B`;
 
+// 评论提及候选：与 watch 侧车默认唤醒前缀保持一致（taskboard watch --on 可改）。
+const MENTION_CANDIDATES = ['@agent'];
+
 export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToast, onOpenIssue, issues }: {
   issueId: string;
   /** 当前项目 id —— 抽屉打开时拉一次 git 分支/工作树列表（T2-8） */
@@ -104,6 +107,10 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
             此前这两个字段只能经 CLI/MCP 修改，面板上看得到改不了。 */}
         <input style={{ width: 96 }} title="负责人" placeholder="负责人" defaultValue={detail.assignee}
           onBlur={e => { const v = e.target.value.trim(); if (v !== detail.assignee) void patch({ assignee: v }); }} />
+        {/* v0.4: opencode 会话绑定（@agent 唤醒续此会话）。 */}
+        <input style={{ width: 104 }} title="opencode 会话绑定（@agent 唤醒续此会话）" placeholder="ses_…"
+          defaultValue={detail.sessionId ?? ''}
+          onBlur={e => { const v = e.target.value.trim() || null; if (v !== detail.sessionId) void patch({ sessionId: v }); }} />
         <input style={{ width: 128 }} title="标签（逗号分隔）" placeholder="标签,逗号分隔" defaultValue={detail.labels}
           onBlur={e => { const v = e.target.value.trim(); if (v !== detail.labels) void patch({ labels: v }); }} />
         {/* T2-8: 有 git-refs 数据时分支用下拉（保留当前值即使不在列表中），
@@ -336,7 +343,22 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
           setComment(''); onChanged(); await load();
         } catch (err) { onToast(`✗ ${(err as Error).message}`); }
       }}>
-        <input value={comment} onChange={e => setComment(e.target.value)} placeholder="添加评论…" />
+        <input value={comment} onChange={e => setComment(e.target.value)} placeholder="添加评论…（@ 唤醒 agent）" />
+        {/* 输入 @ 时弹出提及候选（chat 式）；点击填入。发送逻辑不变。 */}
+        {(() => {
+          const frag = /^@([\w-]*)$/.exec(comment.trim());
+          if (!frag) return null;
+          const hits = MENTION_CANDIDATES.filter(m => m.startsWith(`@${frag[1]}`) && m !== comment.trim());
+          if (hits.length === 0) return null;
+          return (
+            <span className="mention-hint">
+              {hits.map(m => (
+                <button key={m} type="button" className="btn tiny" title="点击填入；watch 侧车运行时将唤醒 agent"
+                  onClick={() => setComment(m + ' ')}>{m} 唤醒侧车</button>
+              ))}
+            </span>
+          );
+        })()}
         <button className="btn tiny" type="submit">发送</button>
       </form>
 

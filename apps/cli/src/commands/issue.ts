@@ -39,6 +39,7 @@ export const issueCommands: Record<string, Command> = {
         assignee: flags.assignee ?? ''
       };
       if (flags.worktree !== undefined) body.worktree = String(flags.worktree);
+      if (flags['session-id'] !== undefined) body.sessionId = String(flags['session-id']);
       if (flags['start-date'] !== undefined) body.startDate = String(flags['start-date']);
       if (flags['due-date'] !== undefined) body.dueDate = String(flags['due-date']);
       if (flags.confirm) body.confirm = true;
@@ -122,7 +123,7 @@ export const issueCommands: Record<string, Command> = {
       // [flag name, body key] pairs — the writable-field whitelist.
       const fields: [string, string][] = [
         ['title', 'title'], ['status', 'status'], ['priority', 'priority'], ['branch', 'branch'],
-        ['worktree', 'worktree'],
+        ['worktree', 'worktree'], ['session-id', 'sessionId'],
         ['labels', 'labels'], ['assignee', 'assignee'], ['description', 'description'],
         ['start-date', 'startDate'], ['due-date', 'dueDate']
       ];

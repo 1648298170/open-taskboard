@@ -1700,6 +1700,13 @@
             "type": "string",
             "description": "Bound git worktree name; empty string = unbound"
           },
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "opencode session this task was split from; null = unbound (@agent wakes continue the bound session)"
+          },
           "archivedAt": {
             "type": [
               "string",
@@ -1764,6 +1771,7 @@
           "labels",
           "branch",
           "worktree",
+          "sessionId",
           "archivedAt",
           "claimedBy",
           "leaseExpiresAt",
@@ -2255,6 +2263,13 @@
             ],
             "description": "null = unbound"
           },
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "opencode session to bind at creation"
+          },
           "assignee": {
             "type": "string"
           },
@@ -2313,6 +2328,13 @@
               "null"
             ],
             "description": "null clears (stored as \"\")"
+          },
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "opencode session binding; null = unbind"
           },
           "assignee": {
             "type": "string"
