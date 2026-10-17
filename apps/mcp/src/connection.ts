@@ -48,6 +48,15 @@ export async function ensureServerOrThrow(method: string, path: string, body?: u
     return await apiOnce(method, path, body);
   } catch (err) {
     if (!isNetworkFailure(err)) throw err;
+    // Pointing at a remote/deployed board (e.g. Docker) must never fall back
+    // to a local default-dir spawn — tasks would silently fork onto a shadow
+    // board. NO_AUTOSTART turns that failure into a loud, actionable error.
+    if (resolveClientConfig(process.env).noAutostart) {
+      throw new Error(
+        `无法连接 taskboard 服务 (${base()})：TASKBOARD_NO_AUTOSTART=1 已禁用自动拉起。` +
+        `请确认远端服务已启动（如 docker compose up -d）或 TASKBOARD_URL 指向正确地址`
+      );
+    }
     if (!serverStarter) {
       const env: NodeJS.ProcessEnv = { ...process.env };
       if (env.TASKBOARD_HOST === undefined) env.TASKBOARD_HOST = '127.0.0.1';

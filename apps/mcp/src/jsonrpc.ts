@@ -7,6 +7,12 @@ interface RpcMessage { jsonrpc: string; id?: number | string; method?: string; p
 
 export function runStdioServer(registry: ToolRegistry): void {
   let buf = '';
+  // Tool calls are async (HTTP fan-out); stdin 'end' must not kill in-flight
+  // handlers — piped/batched clients lose their responses otherwise. Exit
+  // only once the stream is closed AND every accepted request has drained.
+  let pending = 0;
+  let stdinEnded = false;
+  const maybeExit = (): void => { if (stdinEnded && pending === 0) process.exit(0); };
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => {
     buf += chunk;
@@ -14,10 +20,15 @@ export function runStdioServer(registry: ToolRegistry): void {
     while ((idx = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, idx).trim();
       buf = buf.slice(idx + 1);
-      if (line) void handle(line, registry).catch(e => process.stderr.write(`mcp: ${e}\n`));
+      if (line) {
+        pending++;
+        void handle(line, registry)
+          .catch(e => process.stderr.write(`mcp: ${e}\n`))
+          .finally(() => { pending--; maybeExit(); });
+      }
     }
   });
-  process.stdin.on('end', () => process.exit(0));
+  process.stdin.on('end', () => { stdinEnded = true; maybeExit(); });
 }
 
 const send = (msg: unknown): void => { process.stdout.write(JSON.stringify(msg) + '\n'); };
