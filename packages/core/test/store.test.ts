@@ -887,6 +887,25 @@ describe('Store attachments (T7-39)', () => {
     assert.equal(store.getAttachment('nope'), undefined);
   });
 
+  it('enforces per-issue attachment quotas: ≤20 files, ≤50MB total; messages carry current usage', () => {
+    const { store } = freshDir();
+    const id = seed(store);
+    const other = store.createIssue({ projectId: 'p1', title: 'other issue' }).id;
+
+    for (let i = 0; i < 20; i++) store.addAttachment(id, `f${i}.txt`, 1, 'alice');
+    throwsWith(() => store.addAttachment(id, 'over.txt', 1, 'alice'), ValidationError, /attachment quota exceeded: .* 20\/20 files/);
+
+    // size quota uses recorded metadata only — fake big sizes, no real buffers.
+    // 50MB - 20 bytes headroom: exactly-at-quota accepts, one byte over rejects.
+    const big = store.createIssue({ projectId: 'p1', title: 'big' }).id;
+    store.addAttachment(big, 'huge.bin', 50 * 1024 * 1024 - 20, 'alice');
+    throwsWith(() => store.addAttachment(big, 'onemore.bin', 21, 'alice'), ValidationError, /bytes used of 52428800 byte quota/);
+
+    // quotas are per-issue: the untouched issue still accepts freely.
+    store.addAttachment(other, 'fine.txt', 1024, 'alice');
+    assert.equal(store.listAttachments(other).length, 1);
+  });
+
   it('pathFor lands under the injected dir and creates it on demand; deleteIssue removes rows AND the dir', () => {
     const { store, dir } = freshDir();
     const id = seed(store);

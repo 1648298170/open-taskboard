@@ -55,6 +55,7 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 export const api_ = {
   listProjects: () => api<Project[]>('GET', '/api/projects'),
   createProject: (p: { id?: string; name: string; workspacePath?: string }) => api<Project>('POST', '/api/projects', p),
+  deleteProject: (id: string) => api<void>('DELETE', `/api/projects/${id}`),
   listIssues: (projectId: string) => api<Issue[]>('GET', `/api/projects/${projectId}/issues`),
   showIssue: (id: string) => api<IssueDetail>('GET', `/api/issues/${id}`),
   createIssue: (projectId: string, body: Partial<Issue> & { title: string }) =>

@@ -86,6 +86,14 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
     } catch (err) { onToast(`✗ ${(err as Error).message}`); }
   };
 
+  const addDep = async (dependsOnId: string): Promise<void> => {
+    try {
+      await api_.addDependency(detail.id, dependsOnId);
+      onToast(`#${detail.id} 被 #${dependsOnId} 阻塞`);
+      onChanged(); await load();
+    } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+  };
+
   return (
     <aside className="drawer">
       <div className="drawer-head">
@@ -264,17 +272,31 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
           : <li style={{ color: 'var(--ink-dim)' }}>暂无子任务</li>}
       </ul>
 
-      <h3>依赖
-        <button className="btn tiny" onClick={async () => {
-          const depId = prompt('被哪个任务阻塞？（输入任务 ID，如 ab12cd34）:')?.trim();
-          if (!depId) return;
-          try {
-            await api_.addDependency(detail.id, depId);
-            onToast(`#${detail.id} 被 #${depId} 阻塞`);
-            onChanged(); await load();
-          } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-        }}>＋ 添加依赖</button>
-      </h3>
+      <h3>依赖</h3>
+      {/* v0.4: 依赖选择器 —— 下拉选择后立即建边；「手动输入 ID…」保留原 prompt 回退。
+          候选：本项目未完成任务，排除自身与已存在的边（双向）。 */}
+      <div className="dep-picker">
+        <select value="" onChange={e => {
+          const v = e.target.value;
+          if (!v) return;
+          if (v === '__manual__') {
+            const depId = prompt('被哪个任务阻塞？（输入任务 ID，如 ab12cd34）:')?.trim();
+            if (!depId) return;
+            void addDep(depId);
+            return;
+          }
+          void addDep(v);
+        }}>
+          <option value="">＋ 添加依赖（选择任务…）</option>
+          {issues
+            .filter(i => i.id !== detail.id
+              && i.status !== 'done'
+              && !(detail.blockedBy ?? []).includes(i.id)
+              && !(detail.blocks ?? []).includes(i.id))
+            .map(c => <option key={c.id} value={c.id}>#{c.id} {c.title} [{c.status}]</option>)}
+          <option value="__manual__">手动输入 ID…</option>
+        </select>
+      </div>
       <ul className="deps">
         {(() => {
           const byId = new Map(issues.map(i => [i.id, i]));

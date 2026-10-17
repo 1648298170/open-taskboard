@@ -158,7 +158,7 @@ export function Board({ issues, onOpen, onDrop, emptyHint, blockedByMap, groupBy
 }
 
 /** 本地时区的今天，YYYY-MM-DD —— 与 dueDate 直接字符串比较。 */
-function todayStr(): string {
+export function todayStr(): string {
   const t = new Date();
   return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
 }

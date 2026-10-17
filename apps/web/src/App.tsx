@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUSES } from './api';
-import { Board, buildBlockedByMap, flattenCardOrder, GroupBy } from './components/Board';
+import { Board, buildBlockedByMap, flattenCardOrder, GroupBy, todayStr } from './components/Board';
 import { Drawer } from './components/Drawer';
 import { NewIssueDialog } from './components/NewIssueDialog';
 import { StatsPanel } from './components/StatsPanel';
@@ -25,7 +25,7 @@ export default function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [connError, setConnError] = useState(false);
   const [sortBy, setSortBy] = useState<SortBy>('priority');
-  const [filters, setFilters] = useState({ text: '', assignee: '', label: '' });
+  const [filters, setFilters] = useState({ text: '', assignee: '', label: '', due: '' as '' | 'overdue' | 'today' });
   // T2-9: 令牌认证 —— 任一 API 调用 401 时置 true，渲染令牌输入浮层。
   const [needToken, setNeedToken] = useState(false);
   const [tokenInput, setTokenInput] = useState('');
@@ -48,6 +48,11 @@ export default function App() {
   const [stats, setStats] = useState<Stats | null>(null);
   // T7-37: 时间线视图开关（打开时替代看板主体渲染）。
   const [timelineOpen, setTimelineOpen] = useState(false);
+  // v0.4: 项目管理（新建对话框浮层；删除走 prompt 输入 id 确认）。
+  const [projCreateOpen, setProjCreateOpen] = useState(false);
+  const [projName, setProjName] = useState('');
+  const [projId, setProjId] = useState('');
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   // T6-35: refresh 回调里读的最新通知开关 + 上次数据签名（ref 防 SSE 闭包过期）。
@@ -148,7 +153,7 @@ export default function App() {
   }, [statsOpen, projectId]);
 
   // ---- 过滤 / 排序 ----
-  const filtersActive = filters.text.trim() !== '' || filters.assignee !== '' || filters.label !== '';
+  const filtersActive = filters.text.trim() !== '' || filters.assignee !== '' || filters.label !== '' || filters.due !== '';
 
   const assigneeOptions = useMemo(() => {
     const s = new Set<string>();
@@ -175,10 +180,14 @@ export default function App() {
       [...list].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
     if (!filtersActive) return sortBy === 'created' ? byCreatedDesc(issues) : issues;
     const q = filters.text.trim().toLowerCase();
+    // due 过滤复用 DuePill 同款纯字符串日期比较（本地时区今天）。
+    const today = todayStr();
     const matches = (i: Issue): boolean =>
       (!q || i.title.toLowerCase().includes(q) || i.description.toLowerCase().includes(q))
       && (!filters.assignee || i.assignee === filters.assignee)
-      && (!filters.label || i.labels.split(',').map(s => s.trim()).includes(filters.label));
+      && (!filters.label || i.labels.split(',').map(s => s.trim()).includes(filters.label))
+      && (!filters.due || (i.dueDate !== null
+        && (filters.due === 'overdue' ? i.dueDate < today : i.dueDate === today)));
     const visible = new Set<string>();
     for (const i of issues) {
       if (!matches(i)) continue;
@@ -247,7 +256,8 @@ export default function App() {
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.isComposing) return;
       if (e.key === 'Escape') {
-        // 优先级：对话框 > 抽屉 > 批量选择。输入框里也生效——通用逃生键。
+        // 优先级：帮助 > 对话框 > 抽屉 > 批量选择。输入框里也生效——通用逃生键。
+        if (helpOpen) { setHelpOpen(false); return; }
         if (dialogOpen) { setDialogOpen(false); return; }
         if (openId !== null) { closeDrawer(); return; }
         if (batchMode && selected.size > 0) setSelected(new Set());
@@ -260,6 +270,7 @@ export default function App() {
         searchInputRef.current?.focus();
         return;
       }
+      if (e.key === '?') { setHelpOpen(true); return; }
       if (e.key === 'n') { setDialogOpen(true); return; }
       if (e.key === 'j' || e.key === 'k') {
         if (flatIds.length === 0) return;
@@ -278,7 +289,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [dialogOpen, openId, batchMode, selected, flatIds, cursorId, closeDrawer, openIssue]);
+  }, [dialogOpen, openId, batchMode, selected, flatIds, cursorId, closeDrawer, openIssue, helpOpen]);
 
   // 高亮卡片滚入可视区（j/k 移动可能超出视口）。
   useEffect(() => {
@@ -387,6 +398,21 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
               {projects.map(p => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
             </select>
           </label>
+          {/* v0.4: 项目管理 —— 新建对话框；删除需输入项目 id 确认（防误删）。 */}
+          <button className="icon-btn" aria-label="新建项目" title="新建项目"
+            onClick={() => { setProjName(''); setProjId(''); setProjCreateOpen(true); }}>＋</button>
+          <button className="icon-btn" aria-label="删除项目" title="删除当前项目（输入 id 确认）"
+            onClick={async () => {
+              const pid = projectId ?? '';
+              const typed = prompt(`输入项目 id 以确认删除「${pid}」（其全部任务/评论将被清除）:`);
+              if (typed === null) return;
+              if (typed.trim() !== pid) { showToast('✗ 项目 id 不匹配，未删除'); return; }
+              try {
+                await api_.deleteProject(pid);
+                showToast(`已删除项目 ${pid}`);
+                loadProjects();
+              } catch (err) { showToast(`✗ ${(err as Error).message}`); }
+            }}>🗑</button>
           <div className="progress" title="weighted: 父任务等权统计">
             <div className="progress-fill" style={{ width: `${pct}%` }} />
             <span className="progress-label">
@@ -406,6 +432,9 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           {/* T7-37 时间线视图开关（激活时替代看板主体）。 */}
           <button className={`icon-btn${timelineOpen ? ' on' : ''}`} aria-label="时间线" title="时间线视图（甘特 lite）"
             onClick={() => setTimelineOpen(o => !o)}>📅</button>
+          {/* v0.4: 快捷键帮助（? 键同效）。 */}
+          <button className={`icon-btn${helpOpen ? ' on' : ''}`} aria-label="快捷键帮助" title="快捷键帮助（?）"
+            onClick={() => setHelpOpen(o => !o)}>?</button>
         </div>
       </header>
 
@@ -420,6 +449,13 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           <option value="">全部</option>
           {labelOptions.map(l => <option key={l} value={l}>{l}</option>)}
         </select>
+        {/* v0.4: 逾期 / 今日截止 chip —— 与文本/负责人/标签过滤天然可叠加。 */}
+        <button type="button" title="截止日期已过且未完成"
+          className={`btn tiny${filters.due === 'overdue' ? ' active' : ''}`}
+          onClick={() => setFilters(f => ({ ...f, due: f.due === 'overdue' ? '' : 'overdue' }))}>逾期</button>
+        <button type="button" title="截止日期是今天"
+          className={`btn tiny${filters.due === 'today' ? ' active' : ''}`}
+          onClick={() => setFilters(f => ({ ...f, due: f.due === 'today' ? '' : 'today' }))}>今日截止</button>
         {/* T5-27: 泳道分组维度。 */}
         <select title="分组" value={groupBy} onChange={e => setGroupBy(e.target.value as GroupBy)}>
           <option value="none">无</option>
@@ -492,6 +528,54 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
         onClose={() => setDialogOpen(false)}
         onCreated={id => { void refresh(); if (id) openIssue(id); }}
         onError={msg => showToast(`✗ ${msg}`)} />
+
+      {/* v0.4: 新建项目对话框（id 可选留空由后端定，name 必填）。 */}
+      {projCreateOpen && (
+        <div className="token-overlay" onClick={() => setProjCreateOpen(false)}>
+          <form className="token-card" onClick={e => e.stopPropagation()}
+            onSubmit={async e => {
+              e.preventDefault();
+              const name = projName.trim();
+              if (!name) return;
+              const id = projId.trim();
+              try {
+                const p = await api_.createProject(id ? { id, name } : { name });
+                setProjCreateOpen(false);
+                setProjects(prev => [...prev, p]);
+                setProjectId(p.id);
+                showToast(`已创建项目 ${p.id}`);
+              } catch (err) { showToast(`✗ ${(err as Error).message}`); }
+            }}>
+            <h2>新建项目</h2>
+            <input autoFocus value={projName} placeholder="名称（必填）"
+              onChange={e => setProjName(e.target.value)} />
+            <input style={{ marginTop: 8 }} value={projId} placeholder="id（可选，留空自动生成）"
+              onChange={e => setProjId(e.target.value)} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
+              <button className="btn" type="button" onClick={() => setProjCreateOpen(false)}>取消</button>
+              <button className="btn primary" type="submit">创建</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* v0.4: 快捷键帮助浮层（? 呼出，Esc / 点击遮罩关闭）。 */}
+      {helpOpen && (
+        <div className="token-overlay" onClick={() => setHelpOpen(false)}>
+          <div className="token-card help-card" onClick={e => e.stopPropagation()}>
+            <h2>快捷键</h2>
+            <ul className="help-list">
+              <li><kbd>/</kbd> 聚焦搜索</li>
+              <li><kbd>n</kbd> 新建任务</li>
+              <li><kbd>j</kbd>/<kbd>k</kbd> 下 / 上移动光标</li>
+              <li><kbd>Enter</kbd> 打开光标卡片</li>
+              <li><kbd>Esc</kbd> 关闭浮层 / 抽屉 / 清空批量选择</li>
+              <li><kbd>?</kbd> 本帮助</li>
+            </ul>
+            <p className="help-note">批量模式、泳道分组、逾期过滤在工具栏切换。</p>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div className="toast">

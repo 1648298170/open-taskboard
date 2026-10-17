@@ -19,6 +19,10 @@ import { AttachmentRepo } from './repos/attachments.js';
 
 const now = (): string => new Date().toISOString();
 
+// Per-issue attachment quotas (enforced in addAttachment before any write).
+const MAX_ISSUE_ATTACHMENTS = 20;
+const MAX_ISSUE_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
 // T6-31 stats helpers -------------------------------------------------------
 // Monday 00:00 LOCAL of the given date (getDay(): 0=Sun…6=Sat → shifted 0=Mon…6=Sun).
 const mondayOf = (d: Date): Date => {
@@ -408,6 +412,14 @@ export class Store {
    */
   addAttachment(issueId: string, filename: string, size: number, actor = ''): Attachment {
     if (!this.issues.get(issueId)) throw new NotFoundError(`issue not found: ${issueId}`);
+    const existing = this.attachments.listByIssue(issueId);
+    if (existing.length >= MAX_ISSUE_ATTACHMENTS) {
+      throw new ValidationError(`attachment quota exceeded: ${issueId} already holds ${existing.length}/${MAX_ISSUE_ATTACHMENTS} files`);
+    }
+    const usedBytes = existing.reduce((sum, a) => sum + a.size, 0);
+    if (usedBytes + size > MAX_ISSUE_ATTACHMENT_BYTES) {
+      throw new ValidationError(`attachment quota exceeded: ${existing.length} files / ${usedBytes} bytes used of ${MAX_ISSUE_ATTACHMENT_BYTES} byte quota — ${filename} (${size} bytes) does not fit`);
+    }
     const attachment = inTransaction(this.db, () => {
       const row = this.attachments.record(issueId, filename, size, actor);
       this.logActivity(issueId, actor, 'attachment', filename);
