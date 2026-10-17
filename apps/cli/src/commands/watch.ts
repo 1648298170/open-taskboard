@@ -173,7 +173,8 @@ export const watchCommand: Command = {
             const stripped = String(p.body ?? '').slice(prefix.length).trim();
             const by = typeof p.author === 'string' && p.author ? ` (${p.author})` : '';
             console.log(`watch: wake${by}: ${stripped}`);
-            queue = queue.then(() => executeWake(issueId, buildWakePrompt(issueId, issueTitle, stripped)));
+            queue = queue.then(() => executeWake(issueId, buildWakePrompt(issueId, issueTitle, stripped)))
+              .catch(err => console.error(`watch: wake failed: ${(err as Error).message}`));
           });
           const decoder = new TextDecoder();
           for await (const chunk of res.body) parser.push(decoder.decode(chunk, { stream: true }));
