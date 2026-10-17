@@ -9,6 +9,7 @@ import { statsCommand } from './stats.js';
 import { nextCommand, readyCommand } from './pickup.js';
 import { searchCommand } from './search.js';
 import { serveCommand } from './serve.js';
+import { backupCommand } from './backup.js';
 import { exportCommand } from './export.js';
 import { importCommand } from './import.js';
 import { templatesCommand } from './templates.js';
@@ -51,6 +52,7 @@ export const registry: Record<string, Command> = {
   ready: readyCommand,
   search: searchCommand,
   serve: serveCommand,
+  backup: backupCommand,
   export: exportCommand,
   import: importCommand,
   templates: templatesCommand

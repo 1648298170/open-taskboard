@@ -40,6 +40,7 @@ open-taskboard CLI
   taskboard search QUERY
   taskboard export [--project ID] [--format json|md] [--out FILE]
   taskboard import FILE [--project NEW_ID] [--dry-run]
+  taskboard backup
   taskboard templates
 
 Env: ${URL_ENV} to point at another host (e.g. LAN teammate's board).
