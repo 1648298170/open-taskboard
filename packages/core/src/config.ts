@@ -24,6 +24,8 @@ export interface TaskboardServerConfig {
 export interface TaskboardClientConfig {
   baseUrl: string;
   token: string;
+  /** TASKBOARD_NO_AUTOSTART=1: MCP must fail loudly instead of spawning a local shadow server. */
+  noAutostart: boolean;
 }
 
 const DEFAULT_PORT = 47824;
@@ -51,6 +53,6 @@ export function resolveServerConfig(env: TaskboardEnv = process.env): TaskboardS
 export function resolveClientConfig(env: TaskboardEnv = process.env): TaskboardClientConfig {
   const token = env.TASKBOARD_TOKEN || '';
   const url = env.TASKBOARD_URL || '';
-  if (url) return { baseUrl: url, token };
-  return { baseUrl: `http://${DEFAULT_HOST}:${parsePort(env.TASKBOARD_PORT)}`, token };
+  const baseUrl = url || `http://${DEFAULT_HOST}:${parsePort(env.TASKBOARD_PORT)}`;
+  return { baseUrl, token, noAutostart: env.TASKBOARD_NO_AUTOSTART === '1' };
 }

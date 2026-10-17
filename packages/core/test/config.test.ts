@@ -64,8 +64,12 @@ describe('resolveServerConfig', () => {
 });
 
 describe('resolveClientConfig', () => {
-  it('defaults to http://127.0.0.1:47824 with no token', () => {
-    assert.deepEqual(resolveClientConfig({}), { baseUrl: 'http://127.0.0.1:47824', token: '' });
+  it('defaults to http://127.0.0.1:47824 with no token and autostart on', () => {
+    assert.deepEqual(resolveClientConfig({}), {
+      baseUrl: 'http://127.0.0.1:47824',
+      token: '',
+      noAutostart: false
+    });
   });
 
   it('TASKBOARD_URL wins over TASKBOARD_PORT', () => {
@@ -84,5 +88,11 @@ describe('resolveClientConfig', () => {
 
   it('carries the token', () => {
     assert.equal(resolveClientConfig({ TASKBOARD_TOKEN: 't' }).token, 't');
+  });
+
+  it('parses TASKBOARD_NO_AUTOSTART strictly as "1" (guards MCP against zombie local spawns)', () => {
+    assert.equal(resolveClientConfig({ TASKBOARD_NO_AUTOSTART: '1' }).noAutostart, true);
+    assert.equal(resolveClientConfig({ TASKBOARD_NO_AUTOSTART: 'true' }).noAutostart, false);
+    assert.equal(resolveClientConfig({}).noAutostart, false);
   });
 });
