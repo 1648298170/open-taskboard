@@ -5,7 +5,7 @@ import { timingSafeEqual } from 'node:crypto';
 import Fastify, { FastifyInstance } from 'fastify';
 import fastifyCors from '@fastify/cors';
 import { PRIORITIES, STATUSES, Store, resolveServerConfig } from '@taskboard/core';
-import type { StoreEvent, TaskboardServerConfig } from '@taskboard/core';
+import type { StoreEvent, TaskboardServerConfig, TaskboardEnv } from '@taskboard/core';
 import { registerErrorHandler } from './error-handler.js';
 import eventsRoutes from './routes/events.js';
 import projectsRoutes from './routes/projects.js';
@@ -23,6 +23,8 @@ export interface ServerOptions {
   webDist?: string;
   /** Inject an existing Store; otherwise a new one is created from dataDir. */
   store?: Store;
+  /** Test seam: resolve every TASKBOARD_* from this env instead of process.env. */
+  env?: TaskboardEnv;
 }
 
 const WEBHOOK_TIMEOUT_MS = 3000;
@@ -64,7 +66,7 @@ async function postWebhook(url: string, event: StoreEvent): Promise<void> {
 export async function buildApp(opts: ServerOptions = {}): Promise<{ app: FastifyInstance; store: Store }> {
   // One env resolution for the whole app assembly — hooks, webhooks and the
   // issue routes all read from this object (defaults live in core/config.ts).
-  const config = resolveServerConfig(process.env);
+  const config = resolveServerConfig(opts.env ?? process.env);
   const store = opts.store ?? new Store(opts.dataDir ?? config.dataDir);
 
   // T6-34: outbound webhooks. When TASKBOARD_WEBHOOK_URL is configured, every
