@@ -459,6 +459,14 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
         : <Board issues={visibleIssues} onOpen={openIssue} blockedByMap={blockedByMap} onDrop={async (id, status) => {
           const issue = issues.find(i => i.id === id);
           if (!issue || issue.status === status) return;
+          // 🔒 守卫：被未完成任务阻塞的卡片不允许拖列（服务端无状态机约束，
+          // 这是唯一的流转防线）。
+          const unmet = (blockedByMap.get(id) ?? [])
+            .filter(dep => issues.find(i => i.id === dep)?.status !== 'done');
+          if (unmet.length > 0) {
+            showToast(`✗ #${id} 被未完成任务阻塞：${unmet.map(d => `#${d}`).join(' ')}`);
+            return;
+          }
           try {
             await api_.updateIssue(id, { status, version: issue.version });
             showToast(`#${id} → ${status}`);

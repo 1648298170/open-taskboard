@@ -111,10 +111,10 @@ export const api_ = {
 };
 
 export function connectSSE(onChange: () => void): () => void {
-  let revision: number | null = null;
   let closed = false;
   let es: EventSource | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let delay = 2000;
 
   const connect = (): void => {
     if (closed) return;
@@ -122,21 +122,22 @@ export function connectSSE(onChange: () => void): () => void {
     // 重新读取，保存新令牌后的自动重连即可恢复）。
     const token = bearerToken();
     es = new EventSource(`/api/events${token ? `?token=${encodeURIComponent(token)}` : ''}`);
-    es.addEventListener('hello', e => {
-      revision = JSON.parse((e as MessageEvent).data).revision;
-      // hello（首次连接与每次重连）都全量刷新：断线期间的变更只会
-      // 体现在新 revision 里且 change 事件已错过，靠这次兜底拉取。
-      // 首次连接时无害——数据本就要加载。
+    es.addEventListener('hello', () => {
+      delay = 2000;
+      // hello（首次连接与每次重连）都全量刷新：断线期间的变更只会体现在
+      // 新数据里且 change 事件已错过，靠这次兜底拉取。首次连接无害——数据
+      // 本就要加载。
       onChange();
     });
-    es.addEventListener('change', e => {
-      const ev = JSON.parse((e as MessageEvent).data);
-      if (ev.revision !== revision) { revision = ev.revision; onChange(); }
-    });
+    // 每个 change 事件对应一次 store 变更，直接刷新——不能按 revision 去重：
+    // heartbeat 不 bump version，revision 不变，按 revision 过滤会把租约
+    // 徽章的刷新吞掉。
+    es.addEventListener('change', () => onChange());
     es.onerror = () => {
       es?.close();
       if (timer !== null) clearTimeout(timer);
-      timer = setTimeout(connect, 2000);
+      timer = setTimeout(connect, delay);
+      delay = Math.min(delay * 2, 30_000); // 指数退避，hello 成功后复位
     };
   };
   connect();
