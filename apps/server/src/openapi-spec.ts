@@ -649,6 +649,20 @@ export const openApiSpec: OpenApiDocument = {
         }
       }
     },
+    '/api/comments/{commentId}': {
+      summary: 'Delete a comment',
+      delete: {
+        operationId: 'deleteComment',
+        summary: 'Delete a comment (FTS index cleaned, activity logged)',
+        tags: ['comments'],
+        parameters: [{ $ref: '#/components/parameters/CommentId' }],
+        responses: {
+          200: { description: 'Deleted', ...jsonResponse({ $ref: '#/components/schemas/Ok' }) },
+          404: { $ref: '#/components/responses/NotFound' },
+          ...commonResponses(true)
+        }
+      }
+    },
     '/api/issues/{id}/dependencies': {
       summary: 'Add a dependency edge',
       post: {
@@ -1179,6 +1193,13 @@ export const openApiSpec: OpenApiDocument = {
         in: 'path',
         required: true,
         description: 'Issue id this one depends on',
+        schema: { type: 'string' }
+      },
+      CommentId: {
+        name: 'commentId',
+        in: 'path',
+        required: true,
+        description: 'Comment id',
         schema: { type: 'string' }
       },
       Actor: {

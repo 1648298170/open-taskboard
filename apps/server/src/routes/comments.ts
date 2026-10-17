@@ -4,6 +4,7 @@ import { Store, ValidationError } from '@taskboard/core';
 import { addCommentSchema, z } from '@taskboard/core/schemas';
 
 interface IssueParams { id: string }
+interface CommentParams { commentId: string }
 
 // One readable line per zod issue: "field: message; field: message".
 const validationMessage = (error: z.ZodError): string =>
@@ -22,6 +23,12 @@ const commentsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
     return reply.code(201).send(store.addComment(req.params.id, parsed.data, actor));
+  });
+
+  app.delete('/api/comments/:commentId', async (req: FastifyRequest<{ Params: CommentParams }>) => {
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    store.deleteComment(req.params.commentId, actor);
+    return { ok: true };
   });
 };
 
