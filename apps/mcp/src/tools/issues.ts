@@ -120,6 +120,11 @@ export const issueTools: ToolTable = [
       author: args.author ?? 'mcp', body: args.body,
     }),
   )],
+  ['delete_comment', defineTool(
+    idSchema,
+    '删除评论（id 为评论 id，非任务 id；级联清理全文索引并留活动痕）',
+    args => ensureServerOrThrow('DELETE', `/api/comments/${seg(args.id)}`),
+  )],
   // T7-39: 附件只读视图 —— 上传走 Web/CLI（multipart 不适合 MCP stdio），MCP 提供列表。
   ['list_attachments', defineTool(
     idSchema,
