@@ -373,11 +373,11 @@ describe('Store.revision', () => {
 // --- (j) migrations ---------------------------------------------------------------
 
 describe('migrations', () => {
-  it('sets user_version to 8 on a fresh store (base schema + all migrations)', () => {
+  it('sets user_version to 9 on a fresh store (base schema + all migrations)', () => {
     const db = new DatabaseSync(':memory:');
     new Store('.unused', db); // configureDatabase runs schema + migrations
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(row.user_version, 8);
+    assert.equal(row.user_version, 9);
   });
 
   it('is idempotent: re-configuring an already-migrated db is a no-op', () => {
@@ -388,7 +388,7 @@ describe('migrations', () => {
     // Second Store over the same db replays configureDatabase (idempotent path).
     new Store('.unused', db);
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(row.user_version, 8);
+    assert.equal(row.user_version, 9);
     assert.ok(store.getIssue(issue.id));
   });
 });
