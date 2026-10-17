@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react';
-import { api_, Priority } from '../api';
+import { api_, PRIORITIES, Priority } from '../api';
 
 export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }: {
   open: boolean;
@@ -43,7 +43,7 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
         <div className="row">
           <label>优先级
             <select name="priority" defaultValue="medium">
-              <option>low</option><option>medium</option><option>high</option><option>urgent</option>
+              {PRIORITIES.map(p => <option key={p}>{p}</option>)}
             </select>
           </label>
           <label>分支（可选）<input name="branch" /></label>
