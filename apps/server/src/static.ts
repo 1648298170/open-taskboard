@@ -7,8 +7,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// monorepo layout: apps/server/dist -> ../../ -> repo root -> apps/web/dist/web
-export const WEB_DIST = join(__dirname, '..', '..', '..', 'apps', 'web', 'dist', 'web');
+// monorepo layout: apps/server/dist -> ../../ -> repo root -> apps/web/dist
+// (vite's outDir is 'dist' — NOT dist/web; the old default matched nothing
+// and every no-env start silently fell back to the hint page).
+export const WEB_DIST = join(__dirname, '..', '..', '..', 'apps', 'web', 'dist');
 
 export interface StaticOptions {
   webDist: string;
