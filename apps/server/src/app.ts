@@ -4,8 +4,8 @@
 import { timingSafeEqual } from 'node:crypto';
 import Fastify, { FastifyInstance } from 'fastify';
 import fastifyCors from '@fastify/cors';
-import { PRIORITIES, STATUSES, Store } from '@taskboard/core';
-import type { StoreEvent } from '@taskboard/core';
+import { PRIORITIES, STATUSES, Store, resolveServerConfig } from '@taskboard/core';
+import type { StoreEvent, TaskboardServerConfig } from '@taskboard/core';
 import { registerErrorHandler } from './error-handler.js';
 import eventsRoutes from './routes/events.js';
 import projectsRoutes from './routes/projects.js';
@@ -61,21 +61,16 @@ async function postWebhook(url: string, event: StoreEvent): Promise<void> {
   }
 }
 
-/** Parse TASKBOARD_WEBHOOK_URL: comma-separated HTTP(S) URLs; empty/unset = off. */
-const webhookUrls = (): string[] =>
-  (process.env.TASKBOARD_WEBHOOK_URL ?? '')
-    .split(',').map(url => url.trim()).filter(url => url.length > 0);
-
 export async function buildApp(opts: ServerOptions = {}): Promise<{ app: FastifyInstance; store: Store }> {
-  // dataDir resolution mirrors startServer's backup path (explicit opt → env →
-  // '.data') so TASKBOARD_DATA_DIR holds no matter which entrypoint spawned us.
-  const dataDir = opts.dataDir ?? process.env.TASKBOARD_DATA_DIR ?? '.data';
-  const store = opts.store ?? new Store(dataDir);
+  // One env resolution for the whole app assembly — hooks, webhooks and the
+  // issue routes all read from this object (defaults live in core/config.ts).
+  const config = resolveServerConfig(process.env);
+  const store = opts.store ?? new Store(opts.dataDir ?? config.dataDir);
 
   // T6-34: outbound webhooks. When TASKBOARD_WEBHOOK_URL is configured, every
   // StoreEvent is fanned out to each URL via postWebhook (fire-and-forget —
   // `void`, never awaited by the emit path, never throws).
-  const hooks = webhookUrls();
+  const hooks = config.webhookUrls;
   if (hooks.length > 0) {
     store.subscribe(event => {
       for (const url of hooks) void postWebhook(url, event);
@@ -91,7 +86,7 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   // or `?token=<token>`. Static files stay open (page shell loads; the API
   // calls gate the data). Unset env → hook not registered, zero behavior
   // change. Registered BEFORE all routes so it covers every API endpoint.
-  const token = process.env.TASKBOARD_TOKEN;
+  const token = config.token;
   if (token) {
     const expected = Buffer.from(token);
     app.addHook('onRequest', async (req, reply) => {
@@ -118,7 +113,7 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   // request gets 403 before any route handler runs; GET (incl. SSE) is
   // untouched. Registered AFTER the auth hook, as a separate hook; HEAD and
   // OPTIONS (CORS preflight) are read-equivalents and pass through.
-  if (process.env.TASKBOARD_READONLY === '1') {
+  if (config.readonly) {
     app.addHook('onRequest', async (req, reply) => {
       if (!req.url.startsWith('/api/')) return;
       const method = req.raw.method ?? '';
@@ -132,7 +127,7 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
 
   await app.register(eventsRoutes, { store });
   await app.register(projectsRoutes, { store });
-  await app.register(issuesRoutes, { store });
+  await app.register(issuesRoutes, { store, config });
   await app.register(commentsRoutes, { store });
   await app.register(dependencyRoutes, { store });
   await app.register(searchRoutes, { store });

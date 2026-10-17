@@ -4,7 +4,7 @@
 // hand-rolled type assertions.
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { STATUSES, Store, ValidationError } from '@taskboard/core';
-import type { Status } from '@taskboard/core';
+import type { Status, TaskboardServerConfig } from '@taskboard/core';
 import { claimSchema, createIssueSchema, restUpdateIssueSchema, z } from '@taskboard/core/schemas';
 
 interface IssueParams { id: string }
@@ -17,7 +17,7 @@ const createIssueBodySchema = createIssueSchema.omit({ projectId: true });
 const validationMessage = (error: z.ZodError): string =>
   error.issues.map(i => (i.path.length > 0 ? `${i.path.map(String).join('.')}: ` : '') + i.message).join('; ');
 
-const issuesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }) => {
+const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerConfig }> = async (app, { store, config }) => {
   app.get('/api/projects/:projectId/issues', async (req: FastifyRequest<{ Params: ProjectParams; Querystring: { status?: Status; parentId?: string; includeDone?: string; archived?: string } }>, reply) => {
     if (!store.getProject(req.params.projectId)) {
       return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
@@ -48,7 +48,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     // T7-36 门禁的 create 侧：直接以 status:'done' 创建与 PATCH 置 done 同责，
     // 非 web 来源必须带 confirm 逃生舱（env 未设时零行为变化）。
-    if (process.env.TASKBOARD_HUMAN_DONE === '1' && parsed.data.status === 'done' &&
+    if (config.humanDone && parsed.data.status === 'done' &&
         String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true) {
       return reply.code(403).send({ error: 'done requires human confirmation' });
     }
@@ -91,7 +91,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }
     // T7-36 逃生舱（spec：默认仅 web）：用户在对话中确认后，agent 可传
     // confirm: true 代为设置。已知边界（本地优先工具）：actor 是客户端自报
     // 头，可被伪造——门禁约束的是守规矩的 stock cli/mcp 客户端，非恶意对手。
-    if (process.env.TASKBOARD_HUMAN_DONE === '1' && parsed.data.status === 'done' &&
+    if (config.humanDone && parsed.data.status === 'done' &&
         String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true) {
       return reply.code(403).send({ error: 'done requires human confirmation' });
     }

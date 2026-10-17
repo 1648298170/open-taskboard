@@ -3,6 +3,7 @@
 import os from 'node:os';
 import { readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { resolveServerConfig } from '@taskboard/core';
 import type { Store } from '@taskboard/core';
 import { buildApp } from './app.js';
 import { ServerOptions } from './app.js';
@@ -45,9 +46,11 @@ export function lanUrls(port: number): string[] {
 }
 
 export async function startServer(opts: ServerOptions = {}) {
-  const host = opts.host ?? process.env.TASKBOARD_HOST ?? '127.0.0.1';
-  const port = opts.port ?? Number(process.env.TASKBOARD_PORT ?? 47824);
-  const { app, store } = await buildApp(opts);
+  const config = resolveServerConfig(process.env);
+  const host = opts.host ?? config.host;
+  const port = opts.port ?? config.port;
+  const dataDir = opts.dataDir ?? config.dataDir;
+  const { app, store } = await buildApp({ ...opts, dataDir });
 
   await registerStatic(app, {
     webDist: opts.webDist ?? process.env.TASKBOARD_WEB_DIST ?? WEB_DIST
@@ -56,12 +59,8 @@ export async function startServer(opts: ServerOptions = {}) {
   await app.listen({ host, port });
 
   // T6-32: post-listen startup backup. On by default; TASKBOARD_BACKUPS=0
-  // disables. dataDir mirrors what the Store was built from (explicit opt →
-  // env → '.data', matching every spawn path of this entrypoint).
-  if (process.env.TASKBOARD_BACKUPS !== '0') {
-    const dataDir = opts.dataDir ?? (process.env.TASKBOARD_DATA_DIR || '.data');
-    backupAndPrune(store, dataDir);
-  }
+  // disables. dataDir mirrors the Store's dir (explicit opt → config).
+  if (config.backupsEnabled) backupAndPrune(store, dataDir);
   return { app, store, url: `http://${host}:${port}` };
 }
 
@@ -72,13 +71,12 @@ const invokedDirectly = process.argv[1]?.replace(/\\/g, '/').endsWith('server.ts
   || process.argv[1]?.replace(/\\/g, '/').endsWith('server.js')
   || process.argv[1]?.replace(/\\/g, '/').endsWith('dist/index.js');
 if (invokedDirectly) {
-  startServer({ dataDir: process.env.TASKBOARD_DATA_DIR || '.data' }).then(({ url }) => {
+  startServer().then(({ url }) => {
     console.log(`open-taskboard listening on ${url}`);
-    console.log(`data dir: ${process.env.TASKBOARD_DATA_DIR || '.data'}/taskboard.sqlite`);
-    // 与 startServer 相同的 host 解析（此处未传 opts.host）
-    const host = process.env.TASKBOARD_HOST ?? '127.0.0.1';
-    if (host === '0.0.0.0' || host === '::') {
-      for (const lan of lanUrls(Number(process.env.TASKBOARD_PORT ?? 47824))) {
+    const config = resolveServerConfig(process.env);
+    console.log(`data dir: ${config.dataDir}/taskboard.sqlite`);
+    if (config.host === '0.0.0.0' || config.host === '::') {
+      for (const lan of lanUrls(config.port)) {
         console.log(`LAN: ${lan}`);
       }
     }
