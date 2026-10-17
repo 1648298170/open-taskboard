@@ -132,6 +132,12 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       CREATE INDEX IF NOT EXISTS idx_attachments_issue ON attachments(issue_id);
     `);
   },
+  // v8 → v9: opencode session binding (v0.4) — issues may carry the session
+  // they were split from, so @agent wakes continue the same conversation.
+  // NULL = unbound (CLI-created tasks, or the session is gone).
+  (db: DatabaseSync) => {
+    db.exec('ALTER TABLE issues ADD COLUMN session_id TEXT');
+  },
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after

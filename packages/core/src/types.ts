@@ -23,6 +23,8 @@ export interface Issue {
   branch: string;
   /** Bound git worktree name (T2-8); empty string = unbound. */
   worktree: string;
+  /** opencode session this task was split from (v0.4); null = unbound. */
+  sessionId: string | null;
   /** Archive timestamp (T5-24); null = not archived. */
   archivedAt: string | null;
   /** Exclusive claim holder (T7-34); '' = unclaimed. */
@@ -64,6 +66,8 @@ export interface IssuePatch {
   branch?: string;
   /** T2-8: null clears (stored as ''); the column itself is NOT NULL ''. */
   worktree?: string | null;
+  /** v0.4: opencode session binding; null = unbind. */
+  sessionId?: string | null;
   assignee?: string;
   parentId?: string | null;
   startDate?: string | null;

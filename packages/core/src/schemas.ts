@@ -40,6 +40,8 @@ export const createIssueSchema = z
     branch: z.string().optional(),
     // T2-8: null creates as unbound ('' after the repo's ?? '' normalization).
     worktree: z.string().nullable().optional(),
+    // v0.4: opencode session binding — null/absent = unbound.
+    sessionId: z.string().min(1).nullable().optional(),
     assignee: z.string().optional(),
     startDate: nullableDate,
     dueDate: nullableDate,
@@ -59,6 +61,7 @@ export const issuePatchSchema = z
     branch: z.string().optional(),
     // T2-8: null clears (stored as '').
     worktree: z.string().nullable().optional(),
+    sessionId: z.string().min(1).nullable().optional(),
     assignee: z.string().optional(),
     parentId: z.string().nullable().optional(),
     startDate: nullableDate,
