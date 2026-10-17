@@ -1,4 +1,4 @@
-import { need, type Command } from './registry.js';
+import { need, seg, type Command } from './registry.js';
 
 export const projectCommands: Record<string, Command> = {
   'project create': {
@@ -24,7 +24,7 @@ export const projectCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, rest } = ctx;
       need(!!rest[0], 'project refs ID');
-      const refs = await api('GET', `/api/projects/${rest[0]}/git-refs`);
+      const refs = await api('GET', `/api/projects/${seg(rest[0])}/git-refs`);
       for (const b of refs.branches) console.log(`branch: ${b}`);
       for (const w of refs.worktrees) console.log(`worktree: ${w.name}  ${w.path}`);
     }
@@ -41,7 +41,7 @@ export const projectCommands: Record<string, Command> = {
         const answer = await new Promise<string>(r => process.stdin.once('data', d => r(String(d).trim())));
         if (!/^y(es)?$/i.test(answer)) { console.log('aborted'); return; }
       }
-      await api('DELETE', `/api/projects/${rest[0]}`);
+      await api('DELETE', `/api/projects/${seg(rest[0])}`);
       console.log(`deleted project ${rest[0]}`);
     }
   }

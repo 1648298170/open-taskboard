@@ -1,4 +1,4 @@
-import { need, type Command } from './registry.js';
+import { need, seg, type Command } from './registry.js';
 
 export const commentCommands: Record<string, Command> = {
   'comment add': {
@@ -7,7 +7,7 @@ export const commentCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, flags, rest } = ctx;
       need(!!rest[0] && !!flags.body, 'comment add ID --body TEXT');
-      const c = await api('POST', `/api/issues/${rest[0]}/comments`, { author: flags.author ?? 'cli', body: flags.body });
+      const c = await api('POST', `/api/issues/${seg(rest[0])}/comments`, { author: flags.author ?? 'cli', body: flags.body });
       console.log(`comment ${c.id} added`);
     }
   },
@@ -17,7 +17,7 @@ export const commentCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, rest } = ctx;
       need(!!rest[0], 'comment list ID');
-      for (const c of await api('GET', `/api/issues/${rest[0]}/comments`)) console.log(`${c.createdAt} ${c.author}: ${c.body}`);
+      for (const c of await api('GET', `/api/issues/${seg(rest[0])}/comments`)) console.log(`${c.createdAt} ${c.author}: ${c.body}`);
     }
   }
 };

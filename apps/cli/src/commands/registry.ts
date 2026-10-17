@@ -35,6 +35,9 @@ export const need = (cond: boolean, usage: string): void => {
   if (!cond) { console.error(`usage: ${usage}`); process.exit(1); }
 };
 
+/** Path segment encoder — ids come from user args, never trust them raw in URLs. */
+export const seg = (value: unknown): string => encodeURIComponent(String(value));
+
 export const registry: Record<string, Command> = {
   ...projectCommands,
   ...issueCommands,

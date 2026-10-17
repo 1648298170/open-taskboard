@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { need, type Command } from './registry.js';
+import { need, seg, type Command } from './registry.js';
 import { resolveTemplate } from './templates.js';
 
 export interface IssueLike {
@@ -41,7 +41,8 @@ export const issueCommands: Record<string, Command> = {
       if (flags.worktree !== undefined) body.worktree = String(flags.worktree);
       if (flags['start-date'] !== undefined) body.startDate = String(flags['start-date']);
       if (flags['due-date'] !== undefined) body.dueDate = String(flags['due-date']);
-      const i = await api('POST', `/api/projects/${flags.project}/issues`, body);
+      if (flags.confirm) body.confirm = true;
+      const i = await api('POST', `/api/projects/${seg(flags.project)}/issues`, body);
       console.log(`created #${i.id} [${i.status}] ${i.title}`);
     }
   },
@@ -56,7 +57,7 @@ export const issueCommands: Record<string, Command> = {
       if (flags.parent) qs.set('parentId', String(flags.parent));
       // T5-24: --archived → archived=only (default already excludes archived).
       if (flags.archived) qs.set('archived', 'only');
-      for (const i of await api('GET', `/api/projects/${flags.project}/issues?${qs}`)) {
+      for (const i of await api('GET', `/api/projects/${seg(flags.project)}/issues?${qs}`)) {
         console.log(`#${i.id} [${String(i.status).padEnd(11)}] (${String(i.priority).padEnd(6)}) ${i.parentId ? '  └ ' : ''}${i.title}${i.branch ? `  ⟂ ${i.branch}` : ''}`);
       }
     }
@@ -67,7 +68,7 @@ export const issueCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, rest } = ctx;
       need(!!rest[0], 'issue show ID');
-      const i: IssueLike = await api('GET', `/api/issues/${rest[0]}`);
+      const i: IssueLike = await api('GET', `/api/issues/${seg(rest[0])}`);
       show(i);
       if (i.blockedBy?.length || i.blocks?.length) {
         console.log('\n依赖:');
@@ -84,7 +85,7 @@ export const issueCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, flags, rest } = ctx;
       need(!!rest[0] && !!flags.on && typeof flags.on === 'string', 'issue dep-add ID --on DEPENDS_ON_ID');
-      await api('POST', `/api/issues/${rest[0]}/dependencies`, { dependsOnId: String(flags.on) });
+      await api('POST', `/api/issues/${seg(rest[0])}/dependencies`, { dependsOnId: String(flags.on) });
       console.log(`#${rest[0]} now depends on #${flags.on}`);
     }
   },
@@ -94,7 +95,7 @@ export const issueCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, flags, rest } = ctx;
       need(!!rest[0] && !!flags.on && typeof flags.on === 'string', 'issue dep-rm ID --on DEPENDS_ON_ID');
-      await api('DELETE', `/api/issues/${rest[0]}/dependencies/${flags.on}`);
+      await api('DELETE', `/api/issues/${seg(rest[0])}/dependencies/${seg(flags.on)}`);
       console.log(`#${rest[0]} no longer depends on #${flags.on}`);
     }
   },
@@ -104,7 +105,7 @@ export const issueCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, rest } = ctx;
       need(!!rest[0], 'issue dep-list ID');
-      const i: IssueLike = await api('GET', `/api/issues/${rest[0]}`);
+      const i: IssueLike = await api('GET', `/api/issues/${seg(rest[0])}`);
       const blockedBy = i.blockedBy ?? [];
       const blocks = i.blocks ?? [];
       if (!blockedBy.length && !blocks.length) { console.log(`#${i.id}: no dependencies`); return; }
@@ -128,11 +129,18 @@ export const issueCommands: Record<string, Command> = {
       const body: Record<string, unknown> = Object.fromEntries(
         fields.filter(([f]) => flags[f] !== undefined).map(([f, k]) => [k, flags[f]])
       );
+      // `--title` without a value parses as a bare boolean; send the human a
+      // clear message instead of a confusing zod 400 from the server.
+      const missingValue = fields.filter(([f]) => flags[f] === true).map(([f]) => `--${f}`);
+      if (missingValue.length > 0) {
+        console.error(`error: flag(s) ${missingValue.join(', ')} need a value`);
+        process.exit(1);
+      }
       // T7-36 逃生舱：--confirm（裸旗标，布尔）在 TASKBOARD_HUMAN_DONE=1 时
       // 允许 agent 在用户确认后代为设置 done。
       if (flags.confirm) body.confirm = true;
       if (flags['expected-version'] !== undefined) body.version = Number(flags['expected-version']);
-      const i = await api('PATCH', `/api/issues/${rest[0]}`, body);
+      const i = await api('PATCH', `/api/issues/${seg(rest[0])}`, body);
       console.log(`#${i.id} updated (v${i.version})`);
     }
   },
@@ -146,7 +154,7 @@ export const issueCommands: Record<string, Command> = {
       if (flags['expected-version'] !== undefined) body.version = Number(flags['expected-version']);
       // T7-36 逃生舱：--confirm 在人工确认后代为设置 done。
       if (flags.confirm) body.confirm = true;
-      const i = await api('PATCH', `/api/issues/${rest[0]}`, body);
+      const i = await api('PATCH', `/api/issues/${seg(rest[0])}`, body);
       console.log(`#${i.id} → done (v${i.version})`);
     }
   },
@@ -156,7 +164,7 @@ export const issueCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, rest } = ctx;
       need(!!rest[0], 'issue delete ID');
-      await api('DELETE', `/api/issues/${rest[0]}`);
+      await api('DELETE', `/api/issues/${seg(rest[0])}`);
       console.log(`deleted #${rest[0]}`);
     }
   },
@@ -166,7 +174,7 @@ export const issueCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, rest } = ctx;
       need(!!rest[0], 'issue archive ID');
-      await api('POST', `/api/issues/${rest[0]}/archive`, {});
+      await api('POST', `/api/issues/${seg(rest[0])}/archive`, {});
       console.log(`archived #${rest[0]}`);
     }
   },
@@ -176,7 +184,7 @@ export const issueCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, rest } = ctx;
       need(!!rest[0], 'issue unarchive ID');
-      await api('POST', `/api/issues/${rest[0]}/unarchive`, {});
+      await api('POST', `/api/issues/${seg(rest[0])}/unarchive`, {});
       console.log(`unarchived #${rest[0]}`);
     }
   },
@@ -191,7 +199,7 @@ export const issueCommands: Record<string, Command> = {
       need(!!rest[0] && !!flags.agent && typeof flags.agent === 'string', 'issue claim ID --agent NAME [--ttl MIN]');
       const body: Record<string, unknown> = { agent: String(flags.agent) };
       if (flags.ttl !== undefined) body.ttlMinutes = Number(flags.ttl);
-      const i = await api('POST', `/api/issues/${rest[0]}/claim`, body);
+      const i = await api('POST', `/api/issues/${seg(rest[0])}/claim`, body);
       console.log(`#${i.id} claimed by ${i.claimedBy} until ${i.leaseExpiresAt}`);
     }
   },
@@ -201,7 +209,7 @@ export const issueCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, flags, rest } = ctx;
       need(!!rest[0] && !!flags.agent && typeof flags.agent === 'string', 'issue heartbeat ID --agent NAME');
-      const i = await api('POST', `/api/issues/${rest[0]}/heartbeat`, { agent: String(flags.agent) });
+      const i = await api('POST', `/api/issues/${seg(rest[0])}/heartbeat`, { agent: String(flags.agent) });
       console.log(`#${i.id} heartbeat ok (until ${i.leaseExpiresAt})`);
     }
   },
@@ -211,7 +219,7 @@ export const issueCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, flags, rest } = ctx;
       need(!!rest[0] && !!flags.agent && typeof flags.agent === 'string', 'issue release ID --agent NAME');
-      const i = await api('POST', `/api/issues/${rest[0]}/release`, { agent: String(flags.agent) });
+      const i = await api('POST', `/api/issues/${seg(rest[0])}/release`, { agent: String(flags.agent) });
       console.log(`#${i.id} released`);
     }
   },
@@ -224,7 +232,7 @@ export const issueCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, rest } = ctx;
       need(!!rest[0], 'issue attachments ID');
-      const rows = await api('GET', `/api/issues/${rest[0]}/attachments`);
+      const rows = await api('GET', `/api/issues/${seg(rest[0])}/attachments`);
       if (!rows.length) { console.log(`#${rest[0]}: no attachments`); return; }
       const human = (bytes: number): string =>
         bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)}MB`
@@ -254,7 +262,7 @@ export const issueCommands: Record<string, Command> = {
       const form = new FormData();
       form.append('file', new Blob([buf]), basename(fileArg));
       const token = process.env.TASKBOARD_TOKEN;
-      const res = await fetch(`${base()}/api/issues/${id}/attachments`, {
+      const res = await fetch(`${base()}/api/issues/${seg(id)}/attachments`, {
         method: 'POST',
         headers: { 'x-taskboard-actor': 'cli', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: form

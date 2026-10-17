@@ -5,7 +5,7 @@
 // payloads (children/activities) are skipped; children stay FLAT with their
 // parentId — no artificial nesting in either format.
 import { writeFileSync } from 'node:fs';
-import { need, type ApiClient, type Command } from './registry.js';
+import { need, seg, type ApiClient, type Command } from './registry.js';
 
 export interface ExportComment {
   id: string;
@@ -49,10 +49,10 @@ export interface ExportPayload {
 
 /** Fetch one project + its issues + per-issue comments over the HTTP API. */
 export async function gatherProject(api: ApiClient, projectId: string): Promise<ExportProject> {
-  const project = await api('GET', `/api/projects/${projectId}`);
-  const issues: ExportIssue[] = await api('GET', `/api/projects/${projectId}/issues?archived=all`);
+  const project = await api('GET', `/api/projects/${seg(projectId)}`);
+  const issues: ExportIssue[] = await api('GET', `/api/projects/${seg(projectId)}/issues?archived=all`);
   for (const issue of issues) {
-    issue.comments = await api('GET', `/api/issues/${issue.id}/comments`);
+    issue.comments = await api('GET', `/api/issues/${seg(issue.id)}/comments`);
   }
   return { ...project, issues };
 }

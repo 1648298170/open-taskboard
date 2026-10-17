@@ -1,7 +1,7 @@
 // T6-31: `taskboard stats --project ID [--weeks 8]` — the stats panel in
 // terminal form: weekly throughput bars (█), avg cycle, agent contributions,
 // status breakdown. Same /api/projects/:id/stats endpoint the web panel uses.
-import { need, type Command } from './registry.js';
+import { need, seg, type Command } from './registry.js';
 
 interface StatsPayload {
   weeklyDone: { weekStart: string; count: number }[];
@@ -18,7 +18,7 @@ export const statsCommand: Command = {
     need(!!flags.project, 'stats --project ID [--weeks 8]');
     const weeks = Number.parseInt(String(flags.weeks ?? '8'), 10);
     need(Number.isFinite(weeks), 'stats --project ID [--weeks 8]');
-    const s: StatsPayload = await api('GET', `/api/projects/${flags.project}/stats?weeks=${weeks}`);
+    const s: StatsPayload = await api('GET', `/api/projects/${seg(flags.project)}/stats?weeks=${weeks}`);
 
     console.log(`周吞吐（近 ${s.weeklyDone.length} 周）:`);
     const max = Math.max(...s.weeklyDone.map(w => w.count), 1);
