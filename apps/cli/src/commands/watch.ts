@@ -1,8 +1,10 @@
 // v0.4: 看板反向驱动 — 评论唤醒 agent 侧车。常驻订阅 SSE，发现 @agent 开头
-// 的评论即 spawn headless agent（默认 `opencode run`，--exec 可替换以便测试
-// 或接入其他工具）。约束：headless run 是全新会话——适合"板上任务驱动"型
-// 指令（上下文在任务里），不适合引用对话历史的指令。串行执行唤醒（排队，
-// 不并发轰炸）；流断开 2s 后重连。
+// 的评论即按通道优先级唤醒 agent：TUI 注入（--tui-url，附着的 TUI 输入框
+// 出现指令文本，人工回车提交——同会话、全上下文、模型由 TUI 决定）→ 绑定
+// 会话 v2 prompt 注入（--opencode，1.19.3 上游只入队不执行，留作升级后通道）
+// → headless spawn（--exec/--model，全新会话兜底）。注意：TUI 未附着时
+// append-prompt 可能静默成功且不降级——这是有意的：人不在场就不该无人审核地
+// 自动跑 agent。串行执行唤醒（排队，不并发轰炸）；流断开 2s 后重连。
 import { spawn } from 'node:child_process';
 // Type-only import: a value import here would close a runtime cycle with
 // registry.js (registry imports this file for the command table) and crash
@@ -57,7 +59,7 @@ export function decideWake(sessionId: string | null | undefined, opencodeBase: s
 
 export const watchCommand: Command = {
   summary: 'Wake an agent when a comment starts with @agent',
-  usage: 'watch [--on PREFIX] [--exec CMD] [--model M]',
+  usage: 'watch [--on PREFIX] [--tui-url URL] [--opencode URL] [--exec CMD] [--model M]',
   bare: true,
   async run(ctx) {
     const { base, token, flags } = ctx;
@@ -70,10 +72,39 @@ export const watchCommand: Command = {
     // opencode server base — when set, tasks bound to a session wake via
     // prompt injection instead of a headless spawn.
     const opencodeBase = String(flags.opencode ?? process.env.OPENCODE_SERVER_URL ?? '').replace(/\/+$/, '') || undefined;
-    console.log(`watch: ${base()}/api/events — wake on "${prefix}…" → ${opencodeBase ? `opencode ${opencodeBase} (fallback: ${execParts.join(' ')})` : execParts.join(' ')}`);
+    // opencode TUI remote-control base — when set, wakes append the prompt
+    // into the attached TUI's input box (POST /tui/append-prompt). The human
+    // reviews and presses enter: same session, full context, TUI-visible.
+    const tuiBase = String(flags['tui-url'] ?? process.env.OPENCODE_TUI_URL ?? '').replace(/\/+$/, '') || undefined;
+    const channels = [
+      tuiBase ? `tui(${tuiBase})` : null,
+      opencodeBase ? `session(${opencodeBase})` : null,
+      `spawn(${execParts.join(' ')})`
+    ].filter(Boolean).join(' → ');
+    console.log(`watch: ${base()}/api/events — wake on "${prefix}…" → ${channels}`);
 
     let queue: Promise<void> = Promise.resolve();
     const executeWake = async (issueId: string, prompt: string): Promise<void> => {
+      // 通道 1：TUI 注入（附着的 TUI 输入框出现唤醒文本，人工回车提交）。
+      // 同会话、全上下文、实时可见，且模型/agent 由 TUI 自身决定。
+      if (tuiBase) {
+        try {
+          const res = await fetch(`${tuiBase}/tui/append-prompt`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ text: prompt })
+          });
+          if (res.ok) {
+            console.log(`watch: appended wake to TUI (${tuiBase}) — 等待人工回车提交`);
+            return;
+          }
+          console.error(`watch: TUI append failed (HTTP ${res.status}) — 尝试下一通道`);
+        } catch (err) {
+          console.error(`watch: TUI append failed (${(err as Error).message}) — 尝试下一通道`);
+        }
+      }
+      // 通道 2：绑定会话的 v2 prompt 注入（opencode 1.19.3 只入队不执行
+      // LLM turn，留作上游修复后的通道；失败自动降级 spawn）。
       if (opencodeBase) {
         let sessionId: string | null = null;
         try {

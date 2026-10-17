@@ -34,3 +34,6 @@ Thumbs.db
 
 # Agent verification screenshots
 t738-*.png
+
+# Machine-local opencode config（绑定本机 provider/model，入库会破坏他机解析）
+/opencode.json
