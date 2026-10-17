@@ -90,7 +90,7 @@ args = ["/abs/path/open-taskboard/apps/mcp/dist/mcp.js"]
 
 建议同时在 AGENTS.md / rules 中加入：
 
-> 管理任务时使用 taskboard MCP 工具；状态流转 todo → in_progress → in_review → done，done 必须等用户确认；update_issue 必须携带 show_issue 返回的 version（乐观锁）；拆解需求时先建父任务再用 parentId 建子任务；多 agent 并发先 claim 再开工，长任务定期 heartbeat 续租，完成即 release。
+> 管理任务时使用 taskboard MCP 工具；状态流转 todo → in_progress → in_review → done，**不流转不许开工**（服务端 claim 会把 todo 自动置为 in_progress，认领即开工），done 必须等用户确认；update_issue 必须携带 show_issue 返回的 version（乐观锁）；拆解需求时先建父任务再用 parentId 建子任务；多 agent 并发先 claim 再开工，长任务定期 heartbeat 续租，完成即 release。
 
 ### 方式二：Skill + CLI（opencode 或不支持 MCP 的工具）
 

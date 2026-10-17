@@ -697,21 +697,41 @@ describe('Store claims (T7-34)', () => {
 
     const first = store.claimIssue(id, 'alpha', 30);
     assert.equal(first.claimedBy, 'alpha');
-    assert.equal(first.version, 2, 'claim bumps version');
+    assert.equal(first.status, 'in_progress', 'claim auto-flows todo → in_progress');
+    assert.equal(first.version, 3, 'claim bumps version twice (lease + auto-flow)');
     assert.ok(first.leaseExpiresAt);
     assert.ok(Date.parse(first.leaseExpiresAt!) > Date.now(), 'lease is in the future');
 
-    // same agent claims again → renew, not a conflict
+    // same agent claims again → renew, not a conflict; status untouched
     const second = store.claimIssue(id, 'alpha', 60);
     assert.equal(second.claimedBy, 'alpha');
-    assert.equal(second.version, 3, 're-claim bumps version again');
+    assert.equal(second.status, 'in_progress');
+    assert.equal(second.version, 4, 're-claim bumps version again (lease only)');
     assert.ok(Date.parse(second.leaseExpiresAt!) >= Date.parse(first.leaseExpiresAt!));
 
-    // activity logged per claim
+    // activity logged per claim; auto-flow logged exactly once
     const claims = store.listActivities(id).filter(a => a.action === 'claimed');
     assert.equal(claims.length, 2);
+    const flows = store.listActivities(id).filter(a => a.action === 'status' && a.detail === 'todo → in_progress (claim)');
+    assert.equal(flows.length, 1, 'auto-flow logs once (first claim only)');
     assert.equal(claims[0]!.actor, 'alpha');
     assert.equal(claims[0]!.detail, 'by alpha ttl 60m');
+  });
+
+  it('claim auto-flow touches only todo: in_review and done stay put', () => {
+    const { store } = freshDb();
+    store.createProject({ id: 'p1', name: 'P' });
+    const review = store.createIssue({ projectId: 'p1', title: 'in review' }).id;
+    store.updateIssue(review, { status: 'in_review' }, 1);
+    const done = store.createIssue({ projectId: 'p1', title: 'done' }).id;
+    store.updateIssue(done, { status: 'done' }, 1);
+
+    store.claimIssue(review, 'alpha', 30);
+    assert.equal(store.getIssue(review)!.status, 'in_review', 'in_review not regressed');
+    store.claimIssue(done, 'alpha', 30);
+    assert.equal(store.getIssue(done)!.status, 'done', 'done not reopened');
+    const flowed = store.listActivities(review).filter(a => a.action === 'status');
+    assert.equal(flowed.length, 0, 'no auto-flow activity for non-todo');
   });
 
   it('rejects a second agent while the lease is active — exact ConflictError message', () => {
@@ -741,7 +761,7 @@ describe('Store claims (T7-34)', () => {
   it('heartbeat by the holder extends the lease and bumps nothing', () => {
     const { store, db } = freshDb();
     const id = seed(store);
-    store.claimIssue(id, 'alpha', 1); // v2, lease = now + 1m
+    store.claimIssue(id, 'alpha', 1); // v3: lease + auto-flow
     const before = store.getIssue(id);
     assert.ok(before);
     const actsBefore = store.listActivities(id).length;
@@ -756,7 +776,7 @@ describe('Store claims (T7-34)', () => {
     const row = db.prepare('SELECT claimed_by, claimed_at, version FROM issues WHERE id = ?').get(id) as { claimed_by: string; claimed_at: string | null; version: number };
     assert.equal(row.claimed_by, 'alpha');
     assert.ok(row.claimed_at);
-    assert.equal(row.version, 2);
+    assert.equal(row.version, 3);
   });
 
   it('heartbeat by a non-holder → ConflictError; heartbeat on an expired lease → claim again', () => {
@@ -773,12 +793,12 @@ describe('Store claims (T7-34)', () => {
   it('release clears the claim and bumps version; releasing an unclaimed issue is a no-op', () => {
     const { store, events } = freshDb();
     const id = seed(store);
-    store.claimIssue(id, 'alpha', 30); // v2
+    store.claimIssue(id, 'alpha', 30); // v3: lease + auto-flow
 
     const released = store.releaseIssue(id, 'alpha');
     assert.equal(released.claimedBy, '', 'claim cleared');
     assert.equal(released.leaseExpiresAt, null, 'lease cleared');
-    assert.equal(released.version, 3, 'release bumps version');
+    assert.equal(released.version, 4, 'release bumps version');
     const act = store.listActivities(id).find(a => a.action === 'released');
     assert.ok(act);
     assert.equal(act.actor, 'alpha');
@@ -787,7 +807,7 @@ describe('Store claims (T7-34)', () => {
 
     // no-op release: no version bump, no extra activity
     const again = store.releaseIssue(id, 'alpha');
-    assert.equal(again.version, 3, 'no-op release does not bump version');
+    assert.equal(again.version, 4, 'no-op release does not bump version');
     assert.equal(store.listActivities(id).filter(a => a.action === 'released').length, 1);
   });
 

@@ -278,7 +278,9 @@ export class Store {
    * Take (or renew) the exclusive lease of an issue. Re-entrant for the same
    * agent — a second claim simply renews. Another holder's ACTIVE claim →
    * ConflictError; an expired lease is fair game. Bumps version + updated_at
-   * like archiveIssue and logs a 'claimed' activity.
+   * like archiveIssue and logs a 'claimed' activity. A claimable `todo` is
+   * auto-moved to `in_progress` in the same transaction (认领即开工，dashi
+   * 语义): the board's in_progress column never lies about started work.
    */
   claimIssue(id: string, agent: string, ttlMinutes = 30, actor = agent): Issue {
     if (!agent) throw new ValidationError('agent must be non-empty');
@@ -295,7 +297,14 @@ export class Store {
     let claimed = false;
     inTransaction(this.db, () => {
       claimed = this.issues.setClaim(id, agent, t, expires, issue.claimedBy);
-      if (claimed) this.logActivity(id, actor, 'claimed', `by ${agent} ttl ${ttlMinutes}m`);
+      if (!claimed) return;
+      this.logActivity(id, actor, 'claimed', `by ${agent} ttl ${ttlMinutes}m`);
+      // dashi 语义：认领即开工 —— todo 单向自动流转，「进行中」列从此
+      // 机器级真实（agent 想跳过都跳不掉）。in_review/done 不回退。
+      if (issue.status === 'todo') {
+        this.issues.update(id, { status: 'in_progress' });
+        this.logActivity(id, actor, 'status', 'todo → in_progress (claim)');
+      }
     });
     if (!claimed) throw new ConflictError('claim state changed concurrently, retry');
     this.emit('issue.updated', { id });

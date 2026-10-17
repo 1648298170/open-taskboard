@@ -104,7 +104,9 @@ export function Board({ issues, onOpen, onDrop, emptyHint, blockedByMap, groupBy
         }}>
         <h2>
           <span className={`dot ${status}`} />{status}
-          <span className="count">{list.length}</span>
+          {/* v0.4: 计数 = 顶层卡片组数（子任务嵌在父卡下，不计入本列）——
+              数字与所见严格一致，杜绝「有数字没卡片」。 */}
+          <span className="count">{list.filter(i => !i.parentId).length}</span>
         </h2>
         <div className="cards">
           {issues.length === 0 && emptyHint && <div className="column-empty">{emptyHint}</div>}
@@ -113,7 +115,11 @@ export function Board({ issues, onOpen, onDrop, emptyHint, blockedByMap, groupBy
             // 中按 parentId 归属计算。
             const children = laneIssues.filter(c => c.parentId === top.id);
             const childProgress = children.length
-              ? { done: children.filter(c => c.status === 'done').length, total: children.length }
+              ? {
+                  done: children.filter(c => c.status === 'done').length,
+                  inProgress: children.filter(c => c.status === 'in_progress').length,
+                  total: children.length
+                }
               : undefined;
             return (
               <div key={top.id}>
@@ -171,13 +177,16 @@ function DuePill({ dueDate }: { dueDate: string }) {
   return <span className={`due-pill ${cls}`}>{label}</span>;
 }
 
-/** T5-25: 父卡片子任务进度 — `2/5 ●●●○○`，● 用 accent，○ 弱化。 */
-function ChildProgress({ done, total }: { done: number; total: number }) {
+/** T5-25: 父卡片子任务进度 — `2/5 ●◐○○○`：● done / ◐ in_progress / ○ 其余。 */
+function ChildProgress({ done, inProgress, total }: { done: number; inProgress: number; total: number }) {
   return (
-    <div className="child-progress" title={`子任务 ${done}/${total} done`}>
+    <div className="child-progress" title={`子任务 ${done}/${total} done · ${inProgress} 进行中`}>
       {done}/{total}{' '}
-      {Array.from({ length: total }, (_, i) =>
-        <span key={i} className={i < done ? 'dot-on' : 'dot-off'}>{i < done ? '●' : '○'}</span>)}
+      {Array.from({ length: total }, (_, i) => {
+        const cls = i < done ? 'dot-on' : i < done + inProgress ? 'dot-prog' : 'dot-off';
+        const glyph = cls === 'dot-on' ? '●' : cls === 'dot-prog' ? '◐' : '○';
+        return <span key={i} className={cls}>{glyph}</span>;
+      })}
     </div>
   );
 }
@@ -199,7 +208,7 @@ function Card({ issue, child, onOpen, locked, childProgress, batchMode, checked,
   child?: boolean;
   onOpen: (id: string) => void;
   locked?: boolean;
-  childProgress?: { done: number; total: number };
+  childProgress?: { done: number; inProgress: number; total: number };
   batchMode?: boolean;
   checked?: boolean;
   onToggleSelect?: (id: string) => void;
@@ -228,7 +237,7 @@ function Card({ issue, child, onOpen, locked, childProgress, batchMode, checked,
         </label>
       )}
       <div className="card-title">{child ? '└ ' : ''}{issue.title}</div>
-      {!child && childProgress && <ChildProgress done={childProgress.done} total={childProgress.total} />}
+      {!child && childProgress && <ChildProgress done={childProgress.done} inProgress={childProgress.inProgress} total={childProgress.total} />}
       <div className="card-meta">
         {locked && <span className="dep-lock" title="被未完成的依赖阻塞">🔒</span>}
         <ClaimBadge issue={issue} />

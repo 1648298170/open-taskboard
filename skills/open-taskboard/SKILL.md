@@ -18,6 +18,7 @@ description: 管理 opencode Taskboard 的任务：查看、拆解、领取、�
 todo → in_progress → in_review → done
 ```
 
+- **不流转不许开工**（dashi 语义）：服务端 `claim` 会把 `todo` 自动置为 `in_progress`（认领即开工）——开工必须先 claim，不存在"干着活但状态还在 todo"的合法状态。认领冲突（409）重读一次，条件不变才重试，绝不抢他人的认领。
 - **done 只能由用户确认后设置**。完成工作并验证后，把任务置为 `in_review`，向用户报告，等用户明确认可（或明确要求标记完成）才置 `done`。
 - 每次修改任务用乐观锁：先 `issue show` 读取 `version`，更新时带上 `--expected-version N`。版本冲突说明别人改过，重新读取再操作。
 
@@ -58,7 +59,7 @@ taskboard progress --project my-project
 
 ## 跟踪任务的规则
 
-1. 开始做某个任务前：`issue update --status in_progress`。
+1. 开始做某个任务前：`issue claim <id> --agent <名字>`（todo 任务认领即自动流转 `in_progress`；手动 `issue update --status in_progress` 等价）。
 2. 遇到阻塞或重要结论：写 `comment add`，而不是只留在对话里。
 3. 完成并自验后：`--status in_review` + 评论写明验证方式，请用户验收。
 4. 用户确认后才 `issue done`。
