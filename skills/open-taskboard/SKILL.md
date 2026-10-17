@@ -19,6 +19,7 @@ todo → in_progress → in_review → done
 ```
 
 - **不流转不许开工**（dashi 语义）：服务端 `claim` 会把 `todo` 自动置为 `in_progress`（认领即开工）——开工必须先 claim，不存在"干着活但状态还在 todo"的合法状态。认领冲突（409）重读一次，条件不变才重试，绝不抢他人的认领。
+- **会话绑定**：agent 创建任务带自己的 sessionId；认领未绑定任务时传 `claim_issue sessionId` / `claim --session-id`（认领即绑定，只绑空位）；已绑他人会话不抢绑——绑定即所有权，接管需显式解绑。
 - **done 只能由用户确认后设置**。完成工作并验证后，把任务置为 `in_review`，向用户报告，等用户明确认可（或明确要求标记完成）才置 `done`。
 - 每次修改任务用乐观锁：先 `issue show` 读取 `version`，更新时带上 `--expected-version N`。版本冲突说明别人改过，重新读取再操作。
 
@@ -56,10 +57,11 @@ taskboard progress --project my-project
 2. 子任务标题用动词开头、可验证的粒度（一次会话能完成）。
 3. 每个子任务尽量绑定分支（`--branch`）。
 4. 拆解后向用户展示任务清单（`issue list`）确认。
+5. 子任务开工（认领或手动流转）会自动把 `todo` 父任务拉到 `in_progress`（单向）；父任务的 `in_review`/`done` 始终人工——全子 done 也不自动关闭父任务。
 
 ## 跟踪任务的规则
 
-1. 开始做某个任务前：`issue claim <id> --agent <名字>`（todo 任务认领即自动流转 `in_progress`；手动 `issue update --status in_progress` 等价）。
+1. 开始做某个任务前：`issue claim <id> --agent <名字>`（todo 任务认领即自动流转 `in_progress`；手动 `issue update --status in_progress` 等价）。认领未绑定任务时带 `--session-id` 绑定自己的 opencode 会话。
 2. 遇到阻塞或重要结论：写 `comment add`，而不是只留在对话里。
 3. 完成并自验后：`--status in_review` + 评论写明验证方式，请用户验收。
 4. 用户确认后才 `issue done`。

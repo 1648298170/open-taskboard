@@ -46,7 +46,8 @@ pnpm start      # 启动服务 http://127.0.0.1:47824（0.0.0.0 时额外打印 
 - `done` 必须等用户确认后才能设置；自验完成先置 `in_review` 并在评论写明验证方式；服务端可用 `TASKBOARD_HUMAN_DONE=1` 强制——届时 agent 来源改 done 将被 403 拒绝，除非用户已确认且请求带 `confirm: true`。
 - `update_issue` 必须携带 `show_issue` 返回的 `version`（乐观锁）；版本冲突说明别人改过，重读再改。认领冲突（409）同理：重读一次，条件不变才重试，**绝不抢他人的认领**。
 - **多 agent 并发**：开工前先 `claim`（租约默认 30 分钟，todo 任务认领即自动流转 in_progress），长任务定期 `heartbeat` 续租，完成即 `release`；`next`/`ready` 会自动跳过他人租约中的任务。
-- 拆解需求：先建父任务（顶层），再用 parentId 建子任务（仅两层），一个可独立交付的子需求一个任务。
+- **会话绑定**：agent 创建任务带自己的 sessionId（`create_issue sessionId`）；认领未绑定任务时传 `claim --session-id` / `claim_issue sessionId`（认领即绑定，只绑空位）；**已绑他人会话不抢绑**——绑定即所有权，接管需显式解绑。
+- 拆解需求：先建父任务（顶层），再用 parentId 建子任务（仅两层），一个可独立交付的子需求一个任务。子任务开工（认领或手动流转）会自动把 `todo` 父任务拉到 `in_progress`（单向）；父任务的 `in_review`/`done` 始终人工——全子 done 也不自动关闭父任务。
 - 进展与重要结论写入评论（`add_comment`），不要只留在对话里；有依赖关系用 dep-add 标注，不要靠对话约定。
 - 顶层父任务在所有子任务 done 后才算完成，不要提前关闭父任务。
 

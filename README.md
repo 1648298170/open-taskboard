@@ -90,7 +90,7 @@ args = ["/abs/path/open-taskboard/apps/mcp/dist/mcp.js"]
 
 建议同时在 AGENTS.md / rules 中加入：
 
-> 管理任务时使用 taskboard MCP 工具；状态流转 todo → in_progress → in_review → done，**不流转不许开工**（服务端 claim 会把 todo 自动置为 in_progress，认领即开工），done 必须等用户确认；update_issue 必须携带 show_issue 返回的 version（乐观锁）；拆解需求时先建父任务再用 parentId 建子任务；多 agent 并发先 claim 再开工，长任务定期 heartbeat 续租，完成即 release。
+> 管理任务时使用 taskboard MCP 工具；状态流转 todo → in_progress → in_review → done，**不流转不许开工**（服务端 claim 会把 todo 自动置为 in_progress，认领即开工），done 必须等用户确认；update_issue 必须携带 show_issue 返回的 version（乐观锁）；拆解需求时先建父任务再用 parentId 建子任务；多 agent 并发先 claim 再开工，长任务定期 heartbeat 续租，完成即 release；agent 创建任务带 sessionId，认领未绑定任务用 claim sessionId 绑定自己的会话（只绑空位，不抢绑）。
 
 ### 方式二：Skill + CLI（opencode 或不支持 MCP 的工具）
 
@@ -116,7 +116,7 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 
 ## 功能
 
-- 父子两层任务拆解、四列状态流转（todo → in_progress → in_review → done）
+- 父子两层任务拆解、四列状态流转（todo → in_progress → in_review → done）；子任务开工自动把 `todo` 父任务拉到 `in_progress`（单向），父任务 `in_review`/`done` 始终人工
 - 乐观锁版本（`version` / `--expected-version` / MCP `update_issue` 必填）防并发覆盖
 - 独占租约：claim / heartbeat / release，多 agent 并发防碰撞；`next`/`ready` 自动跳过他人租约中的任务
 - 依赖阻塞：blocked-by 边 + 循环检测 + 同项目约束；`ready`/`next` 只返回依赖全 done 的任务
