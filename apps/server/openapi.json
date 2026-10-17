@@ -919,6 +919,180 @@
         }
       }
     },
+    "/api/issues/{id}/claim": {
+      "summary": "Claim an issue (exclusive lease)",
+      "post": {
+        "operationId": "claimIssue",
+        "summary": "Take or renew the exclusive lease",
+        "description": "T7-34: re-entrant for the same agent (a second claim renews). Another agent's ACTIVE lease → 409; an expired lease is fair game. Row mutation: bumps version + updated_at and logs a claimed activity.",
+        "tags": [
+          "issues"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IssueId"
+          },
+          {
+            "$ref": "#/components/parameters/Actor"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The claimed issue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Issue"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/issues/{id}/heartbeat": {
+      "summary": "Renew the lease of an issue you hold",
+      "post": {
+        "operationId": "heartbeatIssue",
+        "summary": "Renew the caller's lease (heartbeat)",
+        "description": "T7-34: extends lease_expires_at by ttlMinutes (default 30). Pure lease op — no version bump, no updated_at touch, no activity; still emits issue.updated. Non-holder or expired lease → 409.",
+        "tags": [
+          "issues"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IssueId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The issue with the renewed lease",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Issue"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/issues/{id}/release": {
+      "summary": "Release the lease of an issue",
+      "post": {
+        "operationId": "releaseIssue",
+        "summary": "Give the lease back",
+        "description": "T7-34: clearing an ACTIVE claim bumps version + updated_at and logs a released activity; releasing an unclaimed or expired issue is an idempotent no-op (200, no side effects). Another holder's ACTIVE claim → 409. ttlMinutes in the body is tolerated and ignored.",
+        "tags": [
+          "issues"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IssueId"
+          },
+          {
+            "$ref": "#/components/parameters/Actor"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The released issue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Issue"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
     "/api/issues/{id}/comments": {
       "summary": "List / add comments on an issue",
       "get": {
@@ -1463,6 +1637,18 @@
             "format": "date-time",
             "description": "Archive timestamp; null = not archived"
           },
+          "claimedBy": {
+            "type": "string",
+            "description": "Exclusive claim holder (T7-34); empty string = unclaimed"
+          },
+          "leaseExpiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Claim lease deadline; null or past = no active claim"
+          },
           "assignee": {
             "type": "string"
           },
@@ -1508,6 +1694,8 @@
           "branch",
           "worktree",
           "archivedAt",
+          "claimedBy",
+          "leaseExpiresAt",
           "assignee",
           "version",
           "startDate",
@@ -2014,6 +2202,10 @@
             ],
             "format": "date",
             "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "confirm": {
+            "type": "boolean",
+            "description": "T7-36 escape hatch: with TASKBOARD_HUMAN_DONE=1, an agent may create an issue directly at done after the user confirmed in conversation"
           }
         },
         "required": [
@@ -2117,6 +2309,26 @@
         },
         "required": [
           "dependsOnId"
+        ],
+        "additionalProperties": false
+      },
+      "ClaimRequest": {
+        "type": "object",
+        "description": "POST /api/issues/{id}/claim|heartbeat|release body (strict). ttlMinutes: lease duration on claim (default 30, max 1440), a fresh duration on heartbeat, tolerated-and-ignored on release.",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Claim holder identity"
+          },
+          "ttlMinutes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1440
+          }
+        },
+        "required": [
+          "agent"
         ],
         "additionalProperties": false
       },

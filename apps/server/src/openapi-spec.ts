@@ -23,6 +23,7 @@ export type JsonSchemaObject = {
   additionalProperties?: boolean;
   minLength?: number;
   minimum?: number;
+  maximum?: number;
   allOf?: JsonSchemaObject[];
   anyOf?: JsonSchemaObject[];
   $ref?: string;
@@ -539,6 +540,82 @@ export const openApiSpec: OpenApiDocument = {
         }
       }
     },
+    '/api/issues/{id}/claim': {
+      summary: 'Claim an issue (exclusive lease)',
+      post: {
+        operationId: 'claimIssue',
+        summary: 'Take or renew the exclusive lease',
+        description:
+          'T7-34: re-entrant for the same agent (a second claim renews). Another agent\'s ACTIVE lease → 409; ' +
+          'an expired lease is fair game. Row mutation: bumps version + updated_at and logs a claimed activity.',
+        tags: ['issues'],
+        parameters: [
+          { $ref: '#/components/parameters/IssueId' },
+          { $ref: '#/components/parameters/Actor' }
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/ClaimRequest' } } }
+        },
+        responses: {
+          200: { description: 'The claimed issue', ...jsonResponse(ISSUE_REF) },
+          400: { $ref: '#/components/responses/BadRequest' },
+          404: { $ref: '#/components/responses/NotFound' },
+          409: { $ref: '#/components/responses/Conflict' },
+          ...commonResponses(true)
+        }
+      }
+    },
+    '/api/issues/{id}/heartbeat': {
+      summary: 'Renew the lease of an issue you hold',
+      post: {
+        operationId: 'heartbeatIssue',
+        summary: 'Renew the caller\'s lease (heartbeat)',
+        description:
+          'T7-34: extends lease_expires_at by ttlMinutes (default 30). Pure lease op — no version bump, no ' +
+          'updated_at touch, no activity; still emits issue.updated. Non-holder or expired lease → 409.',
+        tags: ['issues'],
+        parameters: [{ $ref: '#/components/parameters/IssueId' }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/ClaimRequest' } } }
+        },
+        responses: {
+          200: { description: 'The issue with the renewed lease', ...jsonResponse(ISSUE_REF) },
+          400: { $ref: '#/components/responses/BadRequest' },
+          404: { $ref: '#/components/responses/NotFound' },
+          409: { $ref: '#/components/responses/Conflict' },
+          ...commonResponses(true)
+        }
+      }
+    },
+    '/api/issues/{id}/release': {
+      summary: 'Release the lease of an issue',
+      post: {
+        operationId: 'releaseIssue',
+        summary: 'Give the lease back',
+        description:
+          'T7-34: clearing an ACTIVE claim bumps version + updated_at and logs a released activity; releasing ' +
+          'an unclaimed or expired issue is an idempotent no-op (200, no side effects). Another holder\'s ' +
+          'ACTIVE claim → 409. ttlMinutes in the body is tolerated and ignored.',
+        tags: ['issues'],
+        parameters: [
+          { $ref: '#/components/parameters/IssueId' },
+          { $ref: '#/components/parameters/Actor' }
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/ClaimRequest' } } }
+        },
+        responses: {
+          200: { description: 'The released issue', ...jsonResponse(ISSUE_REF) },
+          400: { $ref: '#/components/responses/BadRequest' },
+          404: { $ref: '#/components/responses/NotFound' },
+          409: { $ref: '#/components/responses/Conflict' },
+          ...commonResponses(true)
+        }
+      }
+    },
     '/api/issues/{id}/comments': {
       summary: 'List / add comments on an issue',
       get: {
@@ -779,6 +856,8 @@ export const openApiSpec: OpenApiDocument = {
           branch: { type: 'string', description: 'Bound git branch; empty string = unbound' },
           worktree: { type: 'string', description: 'Bound git worktree name; empty string = unbound' },
           archivedAt: { type: ['string', 'null'], format: 'date-time', description: 'Archive timestamp; null = not archived' },
+          claimedBy: { type: 'string', description: 'Exclusive claim holder (T7-34); empty string = unclaimed' },
+          leaseExpiresAt: { type: ['string', 'null'], format: 'date-time', description: 'Claim lease deadline; null or past = no active claim' },
           assignee: { type: 'string' },
           version: { type: 'integer', minimum: 1, description: 'Optimistic-lock version; include it in PATCH to guard concurrent writes' },
           startDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
@@ -788,8 +867,8 @@ export const openApiSpec: OpenApiDocument = {
         },
         required: [
           'id', 'projectId', 'parentId', 'title', 'description', 'status', 'priority', 'labels',
-          'branch', 'worktree', 'archivedAt', 'assignee', 'version', 'startDate', 'dueDate',
-          'createdAt', 'updatedAt'
+          'branch', 'worktree', 'archivedAt', 'claimedBy', 'leaseExpiresAt', 'assignee', 'version',
+          'startDate', 'dueDate', 'createdAt', 'updatedAt'
         ],
         additionalProperties: false
       },
@@ -1000,7 +1079,8 @@ export const openApiSpec: OpenApiDocument = {
           worktree: { type: ['string', 'null'], description: 'null = unbound' },
           assignee: { type: 'string' },
           startDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
-          dueDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' }
+          dueDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+          confirm: { type: 'boolean', description: 'T7-36 escape hatch: with TASKBOARD_HUMAN_DONE=1, an agent may create an issue directly at done after the user confirmed in conversation' }
         },
         required: ['title'],
         additionalProperties: false
@@ -1042,6 +1122,18 @@ export const openApiSpec: OpenApiDocument = {
           dependsOnId: { type: 'string', minLength: 1, description: 'The issue blocking {id}' }
         },
         required: ['dependsOnId'],
+        additionalProperties: false
+      },
+      ClaimRequest: {
+        type: 'object',
+        description:
+          'POST /api/issues/{id}/claim|heartbeat|release body (strict). ttlMinutes: lease duration on claim ' +
+          '(default 30, max 1440), a fresh duration on heartbeat, tolerated-and-ignored on release.',
+        properties: {
+          agent: { type: 'string', minLength: 1, description: 'Claim holder identity' },
+          ttlMinutes: { type: 'integer', minimum: 1, maximum: 1440 }
+        },
+        required: ['agent'],
         additionalProperties: false
       },
       Attachment: {
