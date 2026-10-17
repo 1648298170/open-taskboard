@@ -22,7 +22,8 @@ export function runStdioServer(registry: ToolRegistry): void {
       buf = buf.slice(idx + 1);
       if (line) {
         pending++;
-        void handle(line, registry)
+        void handleMessage(line, registry)
+          .then(out => { if (out !== undefined) send(out); })
           .catch(e => process.stderr.write(`mcp: ${e}\n`))
           .finally(() => { pending--; maybeExit(); });
       }
@@ -33,22 +34,25 @@ export function runStdioServer(registry: ToolRegistry): void {
 
 const send = (msg: unknown): void => { process.stdout.write(JSON.stringify(msg) + '\n'); };
 
-async function handle(line: string, registry: ToolRegistry): Promise<void> {
+/** Frame one newline-delimited request and return the outgoing message
+ * (undefined = nothing to send: parse failure or notification). Kept
+ * transport-free so the dispatch table is testable without stdio. */
+export async function handleMessage(line: string, registry: ToolRegistry): Promise<unknown | undefined> {
   let msg: RpcMessage;
-  try { msg = JSON.parse(line); } catch { return; }
+  try { msg = JSON.parse(line); } catch { return undefined; }
   const { id, method, params } = msg;
   if (method === 'initialize') {
-    return send({
+    return {
       jsonrpc: '2.0', id, result: {
         protocolVersion: params?.protocolVersion ?? '2024-11-05',
         capabilities: { tools: {} },
         serverInfo: { name: 'open-taskboard', version: '0.3.0' }
       }
-    });
+    };
   }
-  if (method?.startsWith('notifications/')) return;
-  if (method === 'ping') return send({ jsonrpc: '2.0', id, result: {} });
-  if (method === 'tools/list') return send({ jsonrpc: '2.0', id, result: toolsListResult(registry) });
+  if (method?.startsWith('notifications/')) return undefined;
+  if (method === 'ping') return { jsonrpc: '2.0', id, result: {} };
+  if (method === 'tools/list') return { jsonrpc: '2.0', id, result: toolsListResult(registry) };
   if (method === 'tools/call') {
     try {
       const name = params?.name;
@@ -58,13 +62,14 @@ async function handle(line: string, registry: ToolRegistry): Promise<void> {
       // A plain-string handler result IS the tool text (e.g. export_board);
       // every other shape is pretty-printed JSON as before.
       const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-      return send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text }] } });
+      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text }] } };
     } catch (err) {
-      return send({
+      return {
         jsonrpc: '2.0', id,
         result: { content: [{ type: 'text', text: `error: ${(err as Error).message}` }], isError: true }
-      });
+      };
     }
   }
-  if (id !== undefined) send({ jsonrpc: '2.0', id, error: { code: -32601, message: `method not found: ${method}` } });
+  if (id !== undefined) return { jsonrpc: '2.0', id, error: { code: -32601, message: `method not found: ${method}` } };
+  return undefined;
 }

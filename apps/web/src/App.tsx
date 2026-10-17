@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUSES } from './api';
 import { Board, buildBlockedByMap, flattenCardOrder, GroupBy, todayStr } from './components/Board';
+import { issueMatchesFilters } from './logic/filters';
+import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
 import { Drawer } from './components/Drawer';
 import { NewIssueDialog } from './components/NewIssueDialog';
 import { StatsPanel } from './components/StatsPanel';
@@ -179,15 +181,9 @@ export default function App() {
     const byCreatedDesc = (list: Issue[]): Issue[] =>
       [...list].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
     if (!filtersActive) return sortBy === 'created' ? byCreatedDesc(issues) : issues;
-    const q = filters.text.trim().toLowerCase();
     // due 过滤复用 DuePill 同款纯字符串日期比较（本地时区今天）。
     const today = todayStr();
-    const matches = (i: Issue): boolean =>
-      (!q || i.title.toLowerCase().includes(q) || i.description.toLowerCase().includes(q))
-      && (!filters.assignee || i.assignee === filters.assignee)
-      && (!filters.label || i.labels.split(',').map(s => s.trim()).includes(filters.label))
-      && (!filters.due || (i.dueDate !== null
-        && (filters.due === 'overdue' ? i.dueDate < today : i.dueDate === today)));
+    const matches = (i: Issue): boolean => issueMatchesFilters(i, filters, today);
     const visible = new Set<string>();
     for (const i of issues) {
       if (!matches(i)) continue;
@@ -506,7 +502,7 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           // v0.4: 拖父任务 = 整组移动。嵌套渲染下子卡随父卡走，所见即所动
           // ——静默跟随是正确语义。唯一例外：拖到 done（验收逐任务成立，
           // 列出清单人工确认后才级联）。
-          const kids = issue.parentId ? [] : issues.filter(i => i.parentId === issue.id && i.status !== status);
+          const kids = issue.parentId ? [] : pickMovableChildren(issues, issue.id, status);
           let moveKids = kids.length > 0;
           if (moveKids && status === 'done') {
             moveKids = confirm(
@@ -515,29 +511,17 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
               `\n\n确定 = 整组验收；取消 = 仅父任务置 done`
             );
           }
-          // 乐观锁纪律「冲突即重读再改」：页面快照可能落后（他人/SSE 期间
-          // 的变更），409 时取服务器最新 version 重试一次。
-          const moveWithRetry = async (issueId: string): Promise<void> => {
-            const cur = issues.find(i => i.id === issueId);
-            if (!cur) throw new Error(`#${issueId} 不存在`);
-            try {
-              await api_.updateIssue(issueId, { status, version: cur.version });
-            } catch (err) {
-              if (err instanceof ApiError && err.status === 409) {
-                const fresh = await api_.showIssue(issueId);
-                await api_.updateIssue(issueId, { status, version: fresh.version });
-              } else throw err;
-            }
-          };
+          const move = (issueId: string, curVersion: number): Promise<void> =>
+            moveWithRetry({ updateIssue: api_.updateIssue, showIssue: api_.showIssue }, issueId, status, curVersion);
           try {
             if (moveKids) {
               for (const k of kids) {
                 try {
-                  await moveWithRetry(k.id);
+                  await move(k.id, k.version);
                 } catch (err) { showToast(`✗ 子任务 #${k.id}：${(err as Error).message}`); }
               }
             }
-            await moveWithRetry(id);
+            await move(id, issue.version);
             showToast(`#${id} → ${status}${moveKids ? `（含 ${kids.length} 个子任务）` : ''}`);
             await refresh();
           } catch (err) { showToast(`✗ ${(err as Error).message}`); void refresh(); }

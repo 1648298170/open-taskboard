@@ -174,6 +174,49 @@ describe('TASKBOARD_HUMAN_DONE gate', () => {
   });
 });
 
+describe('claim endpoints (lease + session binding)', () => {
+  it('claim binds sessionId on an unbound issue and auto-flows todo → in_progress', async () => {
+    const { app, cleanup } = await makeApp();
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    const res = await app.inject({
+      method: 'POST', url: `/api/issues/${issueId}/claim`, headers: json,
+      payload: { agent: 'sisyphus', sessionId: 'ses_x' }
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json<{ status: string; sessionId: string | null; claimedBy: string }>();
+    assert.equal(body.status, 'in_progress', '认领即开工');
+    assert.equal(body.sessionId, 'ses_x', '认领即绑定');
+    assert.equal(body.claimedBy, 'sisyphus');
+    cleanup();
+  });
+
+  it('claiming an already-bound issue never overwrites the binding', async () => {
+    const { app, cleanup } = await makeApp();
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    const patched = await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`, headers: json, payload: { sessionId: 'ses_owner' }
+    });
+    assert.equal(patched.statusCode, 200);
+    const res = await app.inject({
+      method: 'POST', url: `/api/issues/${issueId}/claim`, headers: json,
+      payload: { agent: 'intruder', sessionId: 'ses_intruder' }
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.json<{ sessionId: string | null }>().sessionId, 'ses_owner', '只绑空位，不抢绑');
+    cleanup();
+  });
+
+  it('served openapi documents ClaimRequest.sessionId (contract stays honest)', async () => {
+    const { app, cleanup } = await makeApp();
+    const res = await app.inject({ method: 'GET', url: '/api/openapi.json' });
+    const spec = res.json<{ components: { schemas: { ClaimRequest: { properties: Record<string, unknown> } } } }>();
+    assert.ok(spec.components.schemas.ClaimRequest.properties.sessionId, 'ClaimRequest.sessionId must be documented');
+    cleanup();
+  });
+});
+
 // --- error mapping --------------------------------------------------------------
 
 describe('error mapping', () => {
