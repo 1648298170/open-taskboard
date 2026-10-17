@@ -39,6 +39,7 @@ open-taskboard CLI
   taskboard ready --project ID [--assignee WHO] [--agent WHO]
   taskboard search QUERY
   taskboard export [--project ID] [--format json|md] [--out FILE]
+  taskboard import FILE [--project NEW_ID] [--dry-run]
   taskboard templates
 
 Env: ${URL_ENV} to point at another host (e.g. LAN teammate's board).

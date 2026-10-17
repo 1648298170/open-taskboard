@@ -10,6 +10,7 @@ import { nextCommand, readyCommand } from './pickup.js';
 import { searchCommand } from './search.js';
 import { serveCommand } from './serve.js';
 import { exportCommand } from './export.js';
+import { importCommand } from './import.js';
 import { templatesCommand } from './templates.js';
 
 /** Same signature as `api()` from ../http.js, injected via CommandContext. */
@@ -51,5 +52,6 @@ export const registry: Record<string, Command> = {
   search: searchCommand,
   serve: serveCommand,
   export: exportCommand,
+  import: importCommand,
   templates: templatesCommand
 };

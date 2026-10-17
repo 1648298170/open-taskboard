@@ -11,6 +11,16 @@ export const commentCommands: Record<string, Command> = {
       console.log(`comment ${c.id} added`);
     }
   },
+  'comment rm': {
+    summary: 'Delete a comment by its id',
+    usage: 'comment rm COMMENT_ID',
+    async run(ctx) {
+      const { api, rest } = ctx;
+      need(!!rest[0], 'comment rm COMMENT_ID');
+      await api('DELETE', `/api/comments/${seg(rest[0])}`);
+      console.log(`deleted comment #${rest[0]}`);
+    }
+  },
   'comment list': {
     summary: 'List comments of an issue',
     usage: 'comment list ID',

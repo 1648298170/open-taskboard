@@ -33,11 +33,17 @@ export interface ExportIssue {
   [field: string]: unknown;
 }
 
+export interface ExportDependency {
+  issueId: string;
+  dependsOnId: string;
+}
+
 /** One project with its flat issue list (children included, parentId kept). */
 export interface ExportProject {
   id: string;
   name: string;
   issues: ExportIssue[];
+  dependencies?: ExportDependency[];
   [field: string]: unknown;
 }
 
@@ -47,14 +53,15 @@ export interface ExportPayload {
   projects: ExportProject[];
 }
 
-/** Fetch one project + its issues + per-issue comments over the HTTP API. */
+/** Fetch one project + its issues + per-issue comments + dep edges over the HTTP API. */
 export async function gatherProject(api: ApiClient, projectId: string): Promise<ExportProject> {
   const project = await api('GET', `/api/projects/${seg(projectId)}`);
   const issues: ExportIssue[] = await api('GET', `/api/projects/${seg(projectId)}/issues?archived=all`);
   for (const issue of issues) {
     issue.comments = await api('GET', `/api/issues/${seg(issue.id)}/comments`);
   }
-  return { ...project, issues };
+  const dependencies = await api('GET', `/api/projects/${seg(projectId)}/dependencies`);
+  return { ...project, issues, dependencies };
 }
 
 /** Assemble the full export payload: all projects (or the one requested). */
