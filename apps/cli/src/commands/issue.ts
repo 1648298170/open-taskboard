@@ -194,12 +194,14 @@ export const issueCommands: Record<string, Command> = {
   // via the shared api() error path.
   'issue claim': {
     summary: 'Claim an issue (exclusive lease) for an agent',
-    usage: 'issue claim ID --agent NAME [--ttl MIN]',
+    usage: 'issue claim ID --agent NAME [--ttl MIN] [--session-id SES_ID]',
     async run(ctx) {
       const { api, flags, rest } = ctx;
-      need(!!rest[0] && !!flags.agent && typeof flags.agent === 'string', 'issue claim ID --agent NAME [--ttl MIN]');
+      need(!!rest[0] && !!flags.agent && typeof flags.agent === 'string', 'issue claim ID --agent NAME [--ttl MIN] [--session-id SES_ID]');
       const body: Record<string, unknown> = { agent: String(flags.agent) };
       if (flags.ttl !== undefined) body.ttlMinutes = Number(flags.ttl);
+      // 认领即绑定：绑空位不抢绑（服务端裁决）。
+      if (flags['session-id'] !== undefined) body.sessionId = String(flags['session-id']);
       const i = await api('POST', `/api/issues/${seg(rest[0])}/claim`, body);
       console.log(`#${i.id} claimed by ${i.claimedBy} until ${i.leaseExpiresAt}`);
     }

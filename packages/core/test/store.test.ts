@@ -734,6 +734,65 @@ describe('Store claims (T7-34)', () => {
     assert.equal(flowed.length, 0, 'no auto-flow activity for non-todo');
   });
 
+  it('claim with sessionId binds unbound issues only — never steals an existing binding', () => {
+    const { store } = freshDb();
+    store.createProject({ id: 'p1', name: 'P' });
+    const free = store.createIssue({ projectId: 'p1', title: 'unbound' }).id;
+    const taken = store.createIssue({ projectId: 'p1', title: 'already bound' }).id;
+    store.updateIssue(taken, { sessionId: 'ses_other' }, 1);
+
+    // 绑空位：绑定落库 + 活动留痕 + 与自动流转叠加（todo → in_progress）
+    const bound = store.claimIssue(free, 'alpha', 30, 'alpha', 'ses_mine');
+    assert.equal(bound.sessionId, 'ses_mine');
+    assert.equal(bound.status, 'in_progress');
+    assert.ok(store.listActivities(free).some(a => a.action === 'session-bound' && a.detail === 'ses_mine'));
+
+    // 抢绑被拒：已有绑定原样保留
+    const stolen = store.claimIssue(taken, 'beta', 30, 'beta', 'ses_beta');
+    assert.equal(stolen.sessionId, 'ses_other', 'existing binding never overwritten');
+
+    // 不传 sessionId：绑定不变
+    const renewed = store.claimIssue(free, 'alpha', 60);
+    assert.equal(renewed.sessionId, 'ses_mine', 'renew without sessionId keeps binding');
+  });
+
+  it('a child starting (claim or manual move) pulls a todo parent to in_progress — one-way, human statuses untouched', () => {
+    const { store } = freshDb();
+    store.createProject({ id: 'p1', name: 'P' });
+    const parent = store.createIssue({ projectId: 'p1', title: 'parent' }).id;
+    const c1 = store.createIssue({ projectId: 'p1', title: 'child 1', parentId: parent }).id;
+    const c2 = store.createIssue({ projectId: 'p1', title: 'child 2', parentId: parent }).id;
+
+    // 子任务 claim → 父 todo 被拉起 + 活动留痕
+    store.claimIssue(c1, 'alpha', 30);
+    assert.equal(store.getIssue(parent)!.status, 'in_progress', 'parent pulled by child claim');
+    assert.ok(store.listActivities(parent).some(a => a.detail?.includes('(child started)')));
+
+    // 父已 in_progress：再次拉起是 no-op（不重复活动）
+    const actsBefore = store.listActivities(parent).length;
+    store.claimIssue(c2, 'alpha', 30);
+    assert.equal(store.getIssue(parent)!.status, 'in_progress');
+    assert.equal(store.listActivities(parent).length, actsBefore);
+
+    // 父 in_review / done：子开工不回退、不动（parent 已被 rollup 到 v2）
+    store.updateIssue(parent, { status: 'in_review' }, 2);
+    const c3 = store.createIssue({ projectId: 'p1', title: 'child 3', parentId: parent }).id;
+    store.updateIssue(c3, { status: 'in_progress' }, 1);
+    assert.equal(store.getIssue(parent)!.status, 'in_review', 'in_review untouched');
+
+    const p2 = store.createIssue({ projectId: 'p1', title: 'done parent' }).id;
+    store.updateIssue(p2, { status: 'done' }, 1);
+    const c4 = store.createIssue({ projectId: 'p1', title: 'child 4', parentId: p2 }).id;
+    store.updateIssue(c4, { status: 'in_progress' }, 1);
+    assert.equal(store.getIssue(p2)!.status, 'done', 'done untouched');
+
+    // 手动 update 路径同样拉起：新父 + todo
+    const p3 = store.createIssue({ projectId: 'p1', title: 'manual parent' }).id;
+    const c5 = store.createIssue({ projectId: 'p1', title: 'child 5', parentId: p3 }).id;
+    store.updateIssue(c5, { status: 'in_progress' }, 1);
+    assert.equal(store.getIssue(p3)!.status, 'in_progress', 'manual update path also rolls up');
+  });
+
   it('rejects a second agent while the lease is active — exact ConflictError message', () => {
     const { store } = freshDb();
     const id = seed(store);

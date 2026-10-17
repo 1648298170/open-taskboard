@@ -104,6 +104,8 @@ export const claimSchema = z
   .object({
     agent: z.string().min(1),
     ttlMinutes: z.number().int().positive().max(1440).optional(),
+    // 认领即绑定：绑空位不抢绑（已有绑定被忽略），语义见 store.claimIssue。
+    sessionId: z.string().min(1).optional(),
   })
   .strict();
 

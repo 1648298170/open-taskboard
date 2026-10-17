@@ -204,6 +204,9 @@ export class Store {
         const updated = this.issues.get(id)!;
         this.syncFts(() => this.fts.reindexIssue(id, updated.projectId, updated.title, updated.description));
         this.logActivity(id, actor, 'updated', detail);
+        if (patch.status === 'in_progress' && cur.status !== 'in_progress') {
+          this.flowParentOnChildStart(cur, actor);
+        }
       }
       return result.changed;
     });
@@ -275,14 +278,31 @@ export class Store {
   // the future); expired rows read as unclaimed until overwritten.
 
   /**
+   * When a child starts (claim auto-flow or a manual move to in_progress),
+   * pull a `todo` parent up to `in_progress` in the same transaction — the
+   * workstream as a whole has started. One-way from todo only: in_review /
+   * done stay human-decided (全子 done 也绝不自动关闭父任务).
+   */
+  private flowParentOnChildStart(child: Issue, actor: string): void {
+    if (!child.parentId) return;
+    const parent = this.issues.get(child.parentId);
+    if (!parent || parent.status !== 'todo') return;
+    this.issues.update(parent.id, { status: 'in_progress' });
+    this.logActivity(parent.id, actor, 'status', 'todo → in_progress (child started)');
+  }
+
+  /**
    * Take (or renew) the exclusive lease of an issue. Re-entrant for the same
    * agent — a second claim simply renews. Another holder's ACTIVE claim →
    * ConflictError; an expired lease is fair game. Bumps version + updated_at
    * like archiveIssue and logs a 'claimed' activity. A claimable `todo` is
    * auto-moved to `in_progress` in the same transaction (认领即开工，dashi
    * 语义): the board's in_progress column never lies about started work.
+   * When `sessionId` is given and the issue is unbound, it binds the
+   * claimer's session in the same transaction (认领即绑定); an existing
+   * binding is never overwritten (只绑空位，不抢绑).
    */
-  claimIssue(id: string, agent: string, ttlMinutes = 30, actor = agent): Issue {
+  claimIssue(id: string, agent: string, ttlMinutes = 30, actor = agent, sessionId?: string): Issue {
     if (!agent) throw new ValidationError('agent must be non-empty');
     const issue = this.issues.get(id);
     if (!issue) throw new NotFoundError(`issue not found: ${id}`);
@@ -305,6 +325,13 @@ export class Store {
         this.issues.update(id, { status: 'in_progress' });
         this.logActivity(id, actor, 'status', 'todo → in_progress (claim)');
       }
+      // 认领即绑定：只绑空位，绝不接管他人会话的绑定（所有权语义）。
+      if (sessionId && !issue.sessionId) {
+        this.issues.update(id, { sessionId });
+        this.logActivity(id, actor, 'session-bound', sessionId);
+      }
+      // 子任务开工 → 父任务拉起（同一聚合真相：这组工作已经启动）。
+      this.flowParentOnChildStart(issue, actor);
     });
     if (!claimed) throw new ConflictError('claim state changed concurrently, retry');
     this.emit('issue.updated', { id });

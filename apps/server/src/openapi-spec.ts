@@ -1161,10 +1161,13 @@ export const openApiSpec: OpenApiDocument = {
         type: 'object',
         description:
           'POST /api/issues/{id}/claim|heartbeat|release body (strict). ttlMinutes: lease duration on claim ' +
-          '(default 30, max 1440), a fresh duration on heartbeat, tolerated-and-ignored on release.',
+          '(default 30, max 1440), a fresh duration on heartbeat, tolerated-and-ignored on release. ' +
+          'sessionId (claim only): binds the claimer\'s opencode session when the issue is unbound; ' +
+          'an existing binding is never overwritten (tolerated-and-ignored on heartbeat/release).',
         properties: {
           agent: { type: 'string', minLength: 1, description: 'Claim holder identity' },
-          ttlMinutes: { type: 'integer', minimum: 1, maximum: 1440 }
+          ttlMinutes: { type: 'integer', minimum: 1, maximum: 1440 },
+          sessionId: { type: 'string', minLength: 1, description: 'Claimer\'s opencode session (bind-only-if-unbound)' }
         },
         required: ['agent'],
         additionalProperties: false

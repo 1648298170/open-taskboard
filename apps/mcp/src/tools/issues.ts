@@ -93,10 +93,11 @@ export const issueTools: ToolTable = [
   // 认领（惰性过期，无需定时器）。
   ['claim_issue', defineTool(
     claimSchema.extend({ id: z.string() }),
-    '认领任务（独占租约）：租约期内其他 agent 认领会 409。建议先 claim 再开工，长任务用心跳续租，完成后 release。ttlMinutes 默认 30，上限 1440',
+    '认领任务（独占租约）：租约期内其他 agent 认领会 409。建议先 claim 再开工，长任务用心跳续租，完成后 release。ttlMinutes 默认 30，上限 1440。可带 sessionId：认领未绑定任务时绑定自己的 opencode 会话（认领即绑定；已绑他人会话不抢绑）',
     args => ensureServerOrThrow('POST', `/api/issues/${seg(args.id)}/claim`, {
       agent: args.agent,
       ...(args.ttlMinutes !== undefined ? { ttlMinutes: args.ttlMinutes } : {}),
+      ...(args.sessionId !== undefined ? { sessionId: args.sessionId } : {}),
     }),
   )],
   ['heartbeat_issue', defineTool(
