@@ -46,7 +46,9 @@ export function resolveServerConfig(env: TaskboardEnv = process.env): TaskboardS
     dataDir: env.TASKBOARD_DATA_DIR || DEFAULT_DATA_DIR,
     token: env.TASKBOARD_TOKEN || '',
     readonly: env.TASKBOARD_READONLY === '1',
-    humanDone: env.TASKBOARD_HUMAN_DONE === '1',
+    // 默认开启：docs 承诺「done 必须等用户确认」，默认行为必须与之一致；
+    // 纯自动化看板用 TASKBOARD_HUMAN_DONE=0 显式关闭（opt-out）。
+    humanDone: env.TASKBOARD_HUMAN_DONE !== '0',
     backupsEnabled: env.TASKBOARD_BACKUPS !== '0',
     webhookSecret: env.TASKBOARD_WEBHOOK_SECRET || '',
     webhookUrls: (env.TASKBOARD_WEBHOOK_URL ?? '').split(',').map(url => url.trim()).filter(url => url.length > 0)

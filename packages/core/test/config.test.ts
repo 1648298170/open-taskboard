@@ -16,7 +16,7 @@ describe('resolveServerConfig', () => {
       dataDir: '.data',
       token: '',
       readonly: false,
-      humanDone: false,
+      humanDone: true,
       backupsEnabled: true,
       webhookUrls: [],
       webhookSecret: ''
@@ -47,10 +47,15 @@ describe('resolveServerConfig', () => {
     const on = resolveServerConfig({ TASKBOARD_READONLY: '1', TASKBOARD_HUMAN_DONE: '1' });
     assert.equal(on.readonly, true);
     assert.equal(on.humanDone, true);
-    const off = resolveServerConfig({ TASKBOARD_READONLY: 'true', TASKBOARD_HUMAN_DONE: 'yes', TASKBOARD_BACKUPS: '0' });
-    assert.equal(off.readonly, false);
-    assert.equal(off.humanDone, false);
-    assert.equal(off.backupsEnabled, false);
+    // humanDone 默认开（opt-out 语义）：任何非 '0' 值（含未设置）都启用。
+    const yes = resolveServerConfig({ TASKBOARD_READONLY: 'true', TASKBOARD_HUMAN_DONE: 'yes', TASKBOARD_BACKUPS: '0' });
+    assert.equal(yes.readonly, false);
+    assert.equal(yes.humanDone, true);
+    assert.equal(yes.backupsEnabled, false);
+  });
+
+  it('humanDone opts out only via TASKBOARD_HUMAN_DONE=0', () => {
+    assert.equal(resolveServerConfig({ TASKBOARD_HUMAN_DONE: '0' }).humanDone, false);
   });
 
   it('splits, trims and drops empty webhook urls', () => {

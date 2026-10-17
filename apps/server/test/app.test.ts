@@ -276,7 +276,8 @@ describe('ready/next views', () => {
     assert.equal(before.json<{ issue: { id: string } | null }>().issue?.id, a);
     assert.equal(before.json<{ issue: { id: string } | null }>().issue?.status, 'todo');
 
-    await app.inject({ method: 'PATCH', url: `/api/issues/${a}`, headers: json, payload: { status: 'done' } });
+    // 默认开启的 HUMAN_DONE 门禁下，非 web 来源置 done 需显式 confirm 逃生舱。
+    await app.inject({ method: 'PATCH', url: `/api/issues/${a}`, headers: json, payload: { status: 'done', confirm: true } });
     const after = await app.inject({ method: 'GET', url: '/api/projects/p1/next' });
     assert.equal(after.json<{ issue: { id: string } | null }>().issue?.id, b);
     cleanup();
