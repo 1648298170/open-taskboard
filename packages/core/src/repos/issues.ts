@@ -4,7 +4,7 @@ import { Issue, IssuePatch, PRIORITIES, Priority, STATUSES, Status } from '../ty
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
 const ISSUE_COLS = `id, project_id AS projectId, parent_id AS parentId, title, description,
-  status, priority, labels, branch, worktree, archived_at AS archivedAt,
+  status, priority, labels, branch, worktree, session_id AS sessionId, archived_at AS archivedAt,
   claimed_by AS claimedBy, lease_expires_at AS leaseExpiresAt, assignee, version,
   start_date AS startDate, due_date AS dueDate,
   created_at AS createdAt, updated_at AS updatedAt`;
@@ -26,6 +26,7 @@ export class IssueRepo {
     projectId: string; parentId: string | null; title: string;
     description?: string; status?: Status; priority?: Priority;
     labels?: string; branch?: string; worktree?: string | null; assignee?: string;
+    sessionId?: string | null;
     startDate?: string | null; dueDate?: string | null;
   }): string {
     const status = input.status ?? 'todo';
@@ -35,10 +36,10 @@ export class IssueRepo {
     const id = shortId();
     const t = now();
     this.db.prepare(
-      `INSERT INTO issues (id, project_id, parent_id, title, description, status, priority, labels, branch, worktree, assignee, version, start_date, due_date, claimed_by, lease_expires_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '', NULL, ?, ?)`
+      `INSERT INTO issues (id, project_id, parent_id, title, description, status, priority, labels, branch, worktree, session_id, assignee, version, start_date, due_date, claimed_by, lease_expires_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '', NULL, ?, ?)`
     ).run(id, input.projectId, input.parentId, input.title, input.description ?? '', status, priority,
-      input.labels ?? '', input.branch ?? '', input.worktree ?? '', input.assignee ?? '', input.startDate ?? null,
+      input.labels ?? '', input.branch ?? '', input.worktree ?? '', input.sessionId ?? null, input.assignee ?? '', input.startDate ?? null,
       input.dueDate ?? null, t, t);
     return id;
   }
@@ -79,7 +80,7 @@ export class IssueRepo {
     const colMap: [keyof IssuePatch, string][] = [
       ['title', 'title'], ['description', 'description'], ['status', 'status'],
       ['priority', 'priority'], ['labels', 'labels'], ['branch', 'branch'],
-      ['worktree', 'worktree'],
+      ['worktree', 'worktree'], ['sessionId', 'session_id'],
       ['assignee', 'assignee'], ['parentId', 'parent_id'],
       ['startDate', 'start_date'], ['dueDate', 'due_date']
     ];

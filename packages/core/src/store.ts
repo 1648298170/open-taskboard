@@ -133,6 +133,7 @@ export class Store {
     projectId: string; parentId?: string | null; title: string;
     description?: string; status?: Status; priority?: Priority;
     labels?: string; branch?: string; worktree?: string | null; assignee?: string;
+    sessionId?: string | null;
     startDate?: string | null; dueDate?: string | null;
   }, actor = ''): Issue {
     const parentId = input.parentId ?? null;
@@ -146,6 +147,7 @@ export class Store {
         projectId: input.projectId, parentId, title: input.title,
         description: input.description, status: input.status, priority: input.priority,
         labels: input.labels, branch: input.branch, worktree: input.worktree,
+        sessionId: input.sessionId,
         assignee: input.assignee,
         startDate: input.startDate, dueDate: input.dueDate
       });
