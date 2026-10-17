@@ -14,6 +14,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@taskboard/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@taskboard/server':
         specifier: workspace:*
         version: link:../server

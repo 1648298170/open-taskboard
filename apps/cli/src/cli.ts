@@ -3,7 +3,7 @@
 // Thin entry: argv → registry → dispatch → central error handling.
 import { parseFlags } from './flags.js';
 import { HELP } from './help.js';
-import { api, base } from './http.js';
+import { api, base, clientToken } from './http.js';
 import { registry } from './commands/registry.js';
 
 async function main(): Promise<void> {
@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   }
   const { flags, rest } = parseFlags(args);
   if (flags.help) { console.log(HELP); return; }
-  await command.run({ api, base, flags, rest });
+  await command.run({ api, base, token: clientToken, flags, rest });
 }
 
 main().catch(e => {

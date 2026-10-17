@@ -3,8 +3,12 @@
   "version": "0.3.0",
   "description": "taskctl-style CLI for open-taskboard",
   "type": "module",
-  "bin": { "taskboard": "dist/cli.js" },
-  "files": ["dist"],
+  "bin": {
+    "taskboard": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts",
@@ -13,6 +17,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
+    "@taskboard/core": "workspace:*",
     "@taskboard/server": "workspace:*"
   },
   "devDependencies": {
@@ -20,6 +25,8 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   },
-  "engines": { "node": ">=22.5.0" },
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "license": "MIT"
 }

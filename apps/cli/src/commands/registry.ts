@@ -18,6 +18,8 @@ export type ApiClient = (method: string, path: string, body?: unknown) => Promis
 export interface CommandContext {
   api: ApiClient;
   base: () => string;
+  /** TASKBOARD_TOKEN as presented by the client env ('' when unset). */
+  token: () => string;
   flags: Flags;
   rest: string[];
 }
