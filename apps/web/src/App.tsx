@@ -57,6 +57,10 @@ export default function App() {
   const [projName, setProjName] = useState('');
   const [projId, setProjId] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
+  // v0.4: 旧标签页检测 —— SPA 部署后旧标签页继续跑旧 bundle（多次坑用户的根源）。
+  // 周期比对服务器最新 bundle 与当前运行版本，不一致则提示刷新。
+  const [staleBundle, setStaleBundle] = useState(false);
+  const [bundleHintDismissed, setBundleHintDismissed] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   // T6-35: refresh 回调里读的最新通知开关 + 上次数据签名（ref 防 SSE 闭包过期）。
@@ -147,6 +151,24 @@ export default function App() {
   }, []);
 
   useEffect(() => { loadProjects(); }, [loadProjects]);
+
+  // v0.4: bundle 版本检测（挂载时 + 每分钟 + 回到标签页时）
+  useEffect(() => {
+    const check = async (): Promise<void> => {
+      try {
+        const html = await (await fetch(location.href, { cache: 'no-store' })).text();
+        const latest = (html.match(/assets\/index-[^"]+\.js/) || [])[0]?.split('/').pop();
+        const running = [...document.querySelectorAll('script[src]')]
+          .map(s => (s as HTMLScriptElement).src.split('/').pop()).find(name => name?.startsWith('index-'));
+        if (latest && running) setStaleBundle(running !== latest);
+      } catch { /* 离线忽略 */ }
+    };
+    void check();
+    const timer = setInterval(() => void check(), 60_000);
+    const onVis = (): void => { if (document.visibilityState === 'visible') void check(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVis); };
+  }, []);
 
   useEffect(() => { if (projectId) { localStorage.setItem('project', projectId); void refresh(projectId); } }, [projectId, refresh]);
   useEffect(() => connectSSE(() => void refresh()), [refresh]);
@@ -589,6 +611,15 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
             </ul>
             <p className="help-note">批量模式、泳道分组、逾期过滤在工具栏切换。</p>
           </div>
+        </div>
+      )}
+
+      {/* v0.4: 新版本提示条（旧标签页检测） */}
+      {staleBundle && !bundleHintDismissed && (
+        <div className="update-banner">
+          <span>🚀 面板有新版本（当前页面可能缺少新功能/修复）</span>
+          <button className="btn tiny primary" onClick={() => location.reload()}>立即刷新</button>
+          <button className="icon-btn" aria-label="关闭提示" onClick={() => setBundleHintDismissed(true)}>✕</button>
         </div>
       )}
 
