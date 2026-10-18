@@ -3,6 +3,11 @@
 // heartbeat_issue / release_issue / add_comment / progress +
 // dependencies (add/remove), the smart pickup views (ready_issues /
 // next_issue) and full-text search (search_issues). create/update/comment/
+// v0.4: 会话记忆 —— 本 MCP 进程服务单个 agent；该 agent 任意一次声明
+// sessionId（create/update）后即被记住，后续 claim 未显式传 sessionId 时
+// 自动补绑，根治「认领后没绑定」的纪律性遗漏。
+let rememberedSessionId: string | null = null;
+
 // claim schemas come from @taskboard/core (update_issue uses
 // mcpUpdateIssueSchema: version REQUIRED); the rest are small local zod
 // schemas with STATUSES imported from core/types — no hardcoded enum
@@ -52,7 +57,9 @@ export const issueTools: ToolTable = [
   ['create_issue', defineTool(
     createIssueSchema,
     '创建任务。拆解需求时：先建顶层父任务，再用 parentId 为每个子需求建子任务（仅支持两层）。TASKBOARD_HUMAN_DONE=1 时创建即 done 与 PATCH 置 done 同责：非 web 来源需用户确认后传 confirm: true',
-    args => ensureServerOrThrow('POST', `/api/projects/${seg(args.projectId)}/issues`, {
+    args => {
+      if (args.sessionId) rememberedSessionId = args.sessionId;
+      return ensureServerOrThrow('POST', `/api/projects/${seg(args.projectId)}/issues`, {
       parentId: args.parentId ?? null, title: args.title, description: args.description ?? '',
       status: args.status ?? 'todo', priority: args.priority ?? 'medium',
       labels: args.labels ?? '', branch: args.branch ?? '', assignee: args.assignee ?? '',
@@ -60,7 +67,8 @@ export const issueTools: ToolTable = [
       sessionId: args.sessionId ?? null,
       startDate: args.startDate ?? null, dueDate: args.dueDate ?? null,
       ...(args.confirm !== undefined ? { confirm: args.confirm } : {}),
-    }),
+    });
+    },
   )],
   ['update_issue', defineTool(
     mcpUpdateIssueSchema.extend({ id: z.string() }),
@@ -71,6 +79,7 @@ export const issueTools: ToolTable = [
         const v = args[k];
         if (v !== undefined) body[k] = v;
       }
+      if (args.sessionId) rememberedSessionId = args.sessionId;
       return ensureServerOrThrow('PATCH', `/api/issues/${seg(args.id)}`, body);
     },
   )],
@@ -93,12 +102,16 @@ export const issueTools: ToolTable = [
   // 认领（惰性过期，无需定时器）。
   ['claim_issue', defineTool(
     claimSchema.extend({ id: z.string() }),
-    '认领任务（独占租约）：租约期内其他 agent 认领会 409。建议先 claim 再开工，长任务用心跳续租，完成后 release。ttlMinutes 默认 30，上限 1440。可带 sessionId：认领未绑定任务时绑定自己的 opencode 会话（认领即绑定；已绑他人会话不抢绑）',
-    args => ensureServerOrThrow('POST', `/api/issues/${seg(args.id)}/claim`, {
+    '认领任务（独占租约）：租约期内其他 agent 认领会 409。建议先 claim 再开工，长任务用心跳续租，完成后 release。ttlMinutes 默认 30，上限 1440。可带 sessionId：认领未绑定任务时绑定自己的 opencode 会话（认领即绑定；已绑他人会话不抢绑）。未传时自动使用本工具进程最近一次声明过的 sessionId。',
+    args => {
+      const effectiveSession = args.sessionId ?? rememberedSessionId ?? undefined;
+      if (effectiveSession) rememberedSessionId = effectiveSession;
+      return ensureServerOrThrow('POST', `/api/issues/${seg(args.id)}/claim`, {
       agent: args.agent,
       ...(args.ttlMinutes !== undefined ? { ttlMinutes: args.ttlMinutes } : {}),
-      ...(args.sessionId !== undefined ? { sessionId: args.sessionId } : {}),
-    }),
+      ...(effectiveSession ? { sessionId: effectiveSession } : {}),
+    });
+    },
   )],
   ['heartbeat_issue', defineTool(
     claimSchema.omit({ ttlMinutes: true }).extend({ id: z.string() }),

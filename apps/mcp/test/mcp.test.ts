@@ -130,3 +130,26 @@ describe('connection policy', () => {
     await assert.rejects(ensureServerOrThrow('GET', '/api/projects'), /TASKBOARD_NO_AUTOSTART=1 已禁用自动拉起/);
   });
 });
+
+describe('issueTools 会话记忆（认领自动补绑）', () => {
+  const origFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = origFetch; });
+
+  it('a declared sessionId (create/update) is auto-carried into later claims', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (url: unknown, init?: { method?: string; body?: string }) => {
+      if (String(url).includes('/claim')) bodies.push(JSON.parse(init?.body as string));
+      return new Response(JSON.stringify({ id: 'x', version: 2 }), { status: 200 });
+    }) as typeof fetch;
+    const { issueTools } = await import('../src/tools/issues.js');
+    const table = new Map(issueTools);
+    // 先声明（create 带 sessionId）
+    await table.get('create_issue')!.handler({ projectId: 'p', title: 't', sessionId: 'ses_mem' });
+    // 后续 claim 未传 sessionId → 自动补绑
+    await table.get('claim_issue')!.handler({ id: 'I1', agent: 'a' });
+    // 显式传值仍优先生效
+    await table.get('claim_issue')!.handler({ id: 'I2', agent: 'a', sessionId: 'ses_explicit' });
+    assert.deepEqual(bodies[0], { agent: 'a', sessionId: 'ses_mem' });
+    assert.deepEqual(bodies[1], { agent: 'a', sessionId: 'ses_explicit' });
+  });
+});
