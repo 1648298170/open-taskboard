@@ -32,6 +32,9 @@ pnpm install      # 需要 pnpm 9+（npm i -g pnpm）；一键安装依赖并自
 pnpm build        # 手动重新构建：core → server/cli/mcp + web
 pnpm clean        # 一键删除依赖：移除根目录及各子包的 node_modules
 pnpm start        # http://127.0.0.1:47824
+```
+
+> **全平台兼容**：macOS / Windows / Linux 均可运行——Node ≥22.5 + pnpm 即可，零原生编译依赖（SQLite 用 Node 内置模块）。下文 shell 样例是 zsh/bash 语法，Windows 用户把 `&` 换成 `start /b`、或直接用 pm2 托管（见「评论唤醒 agent」的常驻方案对照表）。
 
 # 开发模式（先构建 core，再并行起 server watch + vite 热更新）
 pnpm dev          # API :47824, Vite :5174
@@ -131,7 +134,7 @@ todo → in_progress → in_review → done
 
 ## 评论唤醒 agent（watch 侧车）
 
-不打开 TUI 也能派活：`taskboard watch` 常驻订阅看板事件，`@agent` 开头的评论按通道优先级唤醒 AI：
+不打开 TUI 也能派活：`taskboard watch` 常驻订阅看板事件（macOS / Windows / Linux 均可，常驻方案见下表），`@agent` 开头的评论按通道优先级唤醒 AI：
 
 ```bash
 taskboard watch --tui-url http://127.0.0.1:4096   # 兜底通道：项目未绑端口时的 @agent 送这里（可选参数）
@@ -152,18 +155,26 @@ opencode                                   # 终端 1：交互式 TUI
 # 面板建项目时填该端口，或 project set --wake-port <端口>
 ```
 
-**B 多实例（多终端接管不同项目，推荐）**：每终端一组 serve + attach，端口互不重复。serve 是一次性部署（交给 launchd/systemd 常驻即可），日常每终端只有一条命令：
+**B 多实例（多终端接管不同项目，推荐）**：每终端一组 serve + attach，端口互不重复。serve 是一次性部署，交给进程管理器常驻（mac/linux 用后台方式即可零依赖上手；Windows 推荐 pm2，见下方对照表），日常每终端只有一条命令：
 
 ```bash
-# ── 一次性部署 ──────────────────────────────
+# ── 一次性部署（macOS / Linux，Windows 见下表）─────────────
 opencode serve --port 4096 &                # 无界面 server，交给进程管理器常驻
 opencode serve --port 4097 &
 # 面板「新建项目」填对应唤醒端口（或 taskboard project set --wake-port …）
 
-# ── 用户日常（每只终端一个 attach）──────────
+# ── 用户日常（每只终端一个 attach，全平台相同）──────────────
 opencode attach http://127.0.0.1:4096        # 终端 1：接管绑定了 4096 的项目
 opencode attach http://127.0.0.1:4097        # 终端 2：接管绑定了 4097 的项目
 ```
+
+**常驻方案对照（macOS / Windows / Linux 全覆盖）**：`opencode serve --port N` 与 `taskboard watch …` 都是普通进程，谁来托管无差别：
+
+| 平台 | 快速上手 | 常驻（开机自启 + 崩溃自愈） |
+|---|---|---|
+| macOS / Linux | 命令后加 `&`（或 systemd 用户单元） | launchd：`ai.taskboard.*` plist；systemd：`systemctl --user enable …` |
+| Windows（推荐） | `pm2 start "opencode serve --port 4096" --name serve-4096` | `pm2 save && pm2 startup`（按提示执行） |
+| Windows（原生） | `start /b opencode serve --port 4096` | NSSM 注册为 Windows 服务，或 `schtasks /create /sc onstart …` |
 
 - attach 的端口必须对应一个**已经在跑**的 `opencode serve`；attach 只是"界面"，随时断/重连，serve 挂了 watch 自动降级下一通道
 - 唤醒时指令出现在该终端 TUI 输入框，**人工回车提交**；不用 TUI 时 watch 不带 `--tui-url`、走 headless

@@ -73,6 +73,7 @@ taskboard next --project my-project           # 智能取下一个该做的任�
 - 你自己在评论里写 `@agent` 开头的内容**不会**唤醒你自己（actor 过滤由部署方配置）
 - 多终端部署（README「评论唤醒 agent」）：watch 按项目数据里的 `wake_channel` 绑定路由（面板/CLI 建项目时绑端口）——你只会收到管道通到你端口的项目 `@agent` 评论；同一 serve 端口被多终端 attach 时注入是广播，只入库一次信息即可，不要重复认领
 - 路由机制备忘：`任务 → 项目 → wake_channel` 存在看板数据里；watch 单实例即可覆盖多项目（`--tui-url` 仅作未绑定项目的兜底，`--project` 仅作可选过滤）。改路由 = `project set --wake-port` 改绑即时生效，不用重启 watch
+- 部署平台：macOS / Windows / Linux 全兼容（Node ≥22.5 即可，零原生依赖）；常驻方案按平台选——mac/linux 后台进程或 launchd/systemd，Windows 用 pm2（`pm2 start … && pm2 save && pm2 startup`）或 NSSM，见 README「常驻方案对照」表
 
 ## 5. 状态机
 
