@@ -36,6 +36,8 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
   const [comment, setComment] = useState('');
   // v0.4: 评论删除两步内联确认——✕ 点击后变「确认删除」，3s 不点自动还原（无弹窗）。
   const [confirmingComment, setConfirmingComment] = useState<string | null>(null);
+  // v0.4: 依赖边移除同款两步内联确认（全局删除必须有二次确认）。
+  const [confirmingDep, setConfirmingDep] = useState<string | null>(null);
   // v0.4: mention 候选浮层 —— floating-ui 定位（top-start，翻转+防溢出）。
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const mentionRef = useRef<HTMLSpanElement>(null);
@@ -334,8 +336,17 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
                 <span className="st">[{dep?.status ?? '?'}]</span>
                 <span className="dep-title">{dep ? dep.title : `#${id}`}</span>
                 <span className="dep-id">#{id}</span>
-                {onRemove && <button className="icon-btn dep-remove" title="移除依赖"
-                  onClick={e => { e.stopPropagation(); void onRemove(); }}>✕</button>}
+                {onRemove && (confirmingDep === id ? (
+                  <button className="btn tiny danger" title="再次点击确认移除"
+                    onClick={e => { e.stopPropagation(); setConfirmingDep(null); void onRemove(); }}>确认移除</button>
+                ) : (
+                  <button className="icon-btn dep-remove" title="移除依赖"
+                    onClick={e => {
+                      e.stopPropagation();
+                      setConfirmingDep(id);
+                      setTimeout(() => setConfirmingDep(cur => cur === id ? null : cur), 3000);
+                    }}>✕</button>
+                ))}
               </li>
             );
           };
