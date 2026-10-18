@@ -7,6 +7,7 @@ import type { Issue } from '../src/api';
 import { buildLanes, flattenCardOrder, todayStr } from '../src/logic/board';
 import { issueMatchesFilters } from '../src/logic/filters';
 import { moveWithRetry, pickMovableChildren } from '../src/logic/groupMove';
+import { mentionCandidatesFor, nextHi, applyMention } from '../src/logic/mention';
 
 const mk = (over: Partial<Issue> & Pick<Issue, 'id' | 'title'>): Issue => ({
   projectId: 'p1',
@@ -190,5 +191,33 @@ describe('fmtWhenLocal / fmtHMLocal（时间本地化）', () => {
     const { fmtWhenLocal, fmtHMLocal } = await import('../src/logic/time.js');
     assert.equal(fmtWhenLocal('垃圾'), '垃圾');
     assert.equal(fmtHMLocal(''), '');
+  });
+});
+
+describe('mention 补全纯逻辑', () => {
+  const CANDS = [
+    { value: '@agent', label: '@agent 唤醒侧车' },
+    { value: '@reviewer', label: '@reviewer 审阅' }
+  ];
+
+  it('matches candidates by value or label prefix, case-insensitive', () => {
+    assert.deepEqual(mentionCandidatesFor('', CANDS).map(c => c.value), ['@agent', '@reviewer']);
+    assert.deepEqual(mentionCandidatesFor('ag', CANDS).map(c => c.value), ['@agent']);
+    assert.deepEqual(mentionCandidatesFor('AG', CANDS).map(c => c.value), ['@agent']);
+    assert.deepEqual(mentionCandidatesFor('唤醒', CANDS).map(c => c.value), [], '仅前缀匹配，不含子串');
+    assert.deepEqual(mentionCandidatesFor('zz', CANDS), []);
+  });
+
+  it('nextHi cycles in both directions and survives empty lists', () => {
+    assert.equal(nextHi(0, 2, 1), 1);
+    assert.equal(nextHi(1, 2, 1), 0);
+    assert.equal(nextHi(0, 2, -1), 1);
+    assert.equal(nextHi(0, 0, 1), 0);
+  });
+
+  it('applyMention replaces the trailing @fragment and appends a space', () => {
+    assert.equal(applyMention('看看 @ag', '@agent'), '看看 @agent ');
+    assert.equal(applyMention('@', '@agent'), '@agent ');
+    assert.equal(applyMention('正文 @agent', '@agent'), '正文 @agent ');
   });
 });

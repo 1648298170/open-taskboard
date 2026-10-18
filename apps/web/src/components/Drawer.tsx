@@ -4,6 +4,7 @@ import { activeClaim, api_, Commit, GitRefs, Issue, IssueDetail, PRIORITIES, Sta
 import { Markdown } from '../markdown';
 import { confirmDialog, promptDialog } from './dialogs';
 import { fmtHMLocal, fmtWhenLocal } from '../logic/time';
+import { applyMention, mentionCandidatesFor, MentionCandidate, nextHi } from '../logic/mention';
 
 const fmtWhen = fmtWhenLocal;
 import { Select } from './Select';
@@ -17,7 +18,7 @@ const humanSize = (bytes: number): string =>
       : `${bytes} B`;
 
 // 评论提及候选：与 watch 侧车默认唤醒前缀保持一致（taskboard watch --on 可改）。
-const MENTION_CANDIDATES = ['@agent'];
+const MENTION_CANDIDATES: MentionCandidate[] = [{ value: '@agent', label: '唤醒侧车干活（Enter 选择）' }];
 
 export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToast, onOpenIssue, issues }: {
   issueId: string;
@@ -53,6 +54,19 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
       }
     });
   }, [comment]);
+  const [mentionHi, setMentionHi] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
+  useEffect(() => { setMentionDismissed(false); setMentionHi(0); }, [comment]);
+  const mentionFrag = /^@([\w-]*)$/.exec(comment.trim());
+  const mentionHits = mentionFrag
+    ? mentionCandidatesFor(mentionFrag[1], MENTION_CANDIDATES).filter(c => c.value !== comment.trim())
+    : [];
+  const mentionOpen = !!mentionFrag && mentionHits.length > 0 && !mentionDismissed;
+  const mentionHiSafe = Math.min(mentionHi, Math.max(mentionHits.length - 1, 0));
+  const pickMention = (c: MentionCandidate): void => {
+    setComment(applyMention(comment, c.value));
+    commentInputRef.current?.focus();
+  };
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refs, setRefs] = useState<GitRefs | null>(null);
   // T6-36: 最近提交预览。null = 加载中/不可用。
@@ -435,27 +449,34 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
             el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
           }}
           onKeyDown={e => {
+            if (mentionOpen) {
+              e.stopPropagation();
+              if (e.key === 'ArrowDown') { e.preventDefault(); setMentionHi(h => nextHi(h, mentionHits.length, 1)); return; }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setMentionHi(h => nextHi(h, mentionHits.length, -1)); return; }
+              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionHits[mentionHiSafe]); return; }
+              if (e.key === 'Escape') { e.preventDefault(); setMentionDismissed(true); return; }
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
+              e.stopPropagation();
               e.currentTarget.form?.requestSubmit();
             }
           }}
           placeholder="添加评论…（@ 唤醒 agent，Enter 发送，Shift+Enter 换行）" />
-        {/* 输入 @ 时弹出提及候选（chat 式）；点击填入。发送逻辑不变。 */}
-        {(() => {
-          const frag = /^@([\w-]*)$/.exec(comment.trim());
-          if (!frag) return null;
-          const hits = MENTION_CANDIDATES.filter(m => m.startsWith(`@${frag[1]}`) && m !== comment.trim());
-          if (hits.length === 0) return null;
-          return (
-            <span ref={mentionRef} className="mention-hint">
-              {hits.map(m => (
-                <button key={m} type="button" className="btn tiny" title="点击填入；watch 侧车运行时将唤醒 agent"
-                  onClick={() => setComment(m + ' ')}>{m} 唤醒侧车</button>
-              ))}
-            </span>
-          );
-        })()}
+        {/* 输入 @ 时弹出提及候选（chat 式补全面板）：↑↓ 高亮、Enter/Tab 选中、Esc 关闭；点击填入并保持输入框焦点。 */}
+        {mentionOpen && (
+          <span ref={mentionRef} className="mention-hint" role="listbox" aria-label="唤醒 agent 候选">
+            {mentionHits.map((c, i) => (
+              <button key={c.value} type="button" role="option" aria-selected={i === mentionHiSafe}
+                className={`mention-opt${i === mentionHiSafe ? ' hi' : ''}`}
+                onMouseDown={e => e.preventDefault()}
+                onMouseEnter={() => setMentionHi(i)}
+                onClick={() => pickMention(c)}>
+                <strong>{c.value}</strong><span>{c.label}</span>
+              </button>
+            ))}
+          </span>
+        )}
         <button className="btn tiny" type="submit">发送</button>
       </form>
 

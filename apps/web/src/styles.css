@@ -567,9 +567,21 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 .card.dragging { opacity: .45; }
 .card.overlay { box-shadow: 0 16px 40px #000b; cursor: grabbing; }
 .mention-hint {
-  position: fixed; z-index: 40;
-  display: inline-flex; gap: 6px;
+  position: fixed; z-index: 60;
+  display: grid; gap: 2px;
+  min-width: 220px;
+  background: var(--bg-raised); border: 1px solid var(--accent); border-radius: 3px;
+  box-shadow: 0 12px 32px #000a; padding: 4px;
 }
+.mention-opt {
+  display: flex; align-items: baseline; gap: 8px;
+  background: none; border: 0; border-radius: 3px;
+  color: var(--ink); padding: 6px 8px; font: inherit; text-align: left; cursor: pointer;
+}
+.mention-opt strong { color: var(--accent); }
+.mention-opt span { color: var(--ink-dim); font-size: 11px; }
+.mention-opt.hi { background: var(--accent); color: var(--accent-ink); }
+.mention-opt.hi strong, .mention-opt.hi span { color: var(--accent-ink); }
 
 /* ---- v0.4: 自定义下拉（listbox，floating-ui 定位） ---- */
 .tb-select {
