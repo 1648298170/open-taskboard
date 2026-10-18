@@ -3,6 +3,7 @@ import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, u
 import { useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { buildLanes, buildBlockedByMap, flattenCardOrder, todayStr } from '../logic/board';
+import { fmtHMLocal } from '../logic/time';
 import type { BlockedByMap } from '../logic/board';
 
 // 纯逻辑已抽取到 ../logic/board（框架无关，node:test 可测）；此处 re-export
@@ -169,7 +170,7 @@ function ClaimBadge({ issue }: { issue: Issue }) {
   if (holder === null || issue.leaseExpiresAt === null) return null;
   const minutes = Math.max(0, Math.ceil((Date.parse(issue.leaseExpiresAt) - Date.now()) / 60_000));
   return (
-    <span className="claim-badge" title={`认领人 ${holder}，租约至 ${issue.leaseExpiresAt}`}>
+    <span className="claim-badge" title={`认领人 ${holder}，租约至 ${fmtHMLocal(issue.leaseExpiresAt ?? '')}`}>
       👤 {holder} · {minutes}m
     </span>
   );

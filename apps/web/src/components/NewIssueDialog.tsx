@@ -31,7 +31,7 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
       // 请求送达 agent 的 TUI 输入框。评论失败不阻塞创建（best-effort）。
       if (wake) {
         try {
-          await api_.addComment(created.id, 'web', '@agent 请认领此任务并编排（拆解子任务、排依赖）');
+          await api_.addComment(created.id, 'web', '@agent 如果主进程有任务正在处理，则请先把处理中的任务完成后，再认领此任务并编排（拆解子任务、排依赖）');
         } catch (err) {
           onError(`任务已创建，但唤醒失败：${(err as Error).message}`);
         }

@@ -3,11 +3,12 @@ import { computePosition, flip, shift } from '@floating-ui/dom';
 import { activeClaim, api_, Commit, GitRefs, Issue, IssueDetail, PRIORITIES, Status } from '../api';
 import { Markdown } from '../markdown';
 import { confirmDialog, promptDialog } from './dialogs';
+import { fmtHMLocal, fmtWhenLocal } from '../logic/time';
+
+const fmtWhen = fmtWhenLocal;
 import { Select } from './Select';
 
-/** ISO → "MM-DD HH:mm"（活动时间线用）。 */
-const fmtWhen = (iso: string): string =>
-  iso.length >= 16 ? `${iso.slice(5, 10)} ${iso.slice(11, 16)}` : iso;
+
 
 /** T7-39: 字节数人性化（B / KB / MB）。 */
 const humanSize = (bytes: number): string =>
@@ -88,13 +89,16 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
 
   if (loadError) {
     return (
-      <aside className="drawer">
-        <div className="drawer-head">
-          <span className="issue-id">#{issueId}</span>
-          <button className="icon-btn" onClick={onClose}>✕</button>
-        </div>
-        <p style={{ color: 'var(--danger)' }}>加载失败：{loadError}</p>
-      </aside>
+      <>
+        <div className="drawer-backdrop" onClick={onClose} />
+        <aside className="drawer">
+          <div className="drawer-head">
+            <span className="issue-id">#{issueId}</span>
+            <button className="icon-btn" onClick={onClose}>✕</button>
+          </div>
+          <p style={{ color: 'var(--danger)' }}>加载失败：{loadError}</p>
+        </aside>
+      </>
     );
   }
   if (!detail) return <aside className="drawer">加载中…</aside>;
@@ -116,7 +120,9 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
   };
 
   return (
-    <aside className="drawer">
+    <>
+      <div className="drawer-backdrop" onClick={onClose} />
+      <aside className="drawer">
       <div className="drawer-head">
         <span className="issue-id">#{detail.id} · v{detail.version}</span>
         <button className="icon-btn" onClick={onClose}>✕</button>
@@ -201,7 +207,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
           <button className="btn tiny" style={{ color: 'var(--accent)' }} title="唤醒 agent 编排此任务（评论 @agent，经 watch 送达 TUI）"
             onClick={async () => {
               try {
-                await api_.addComment(detail.id, 'web', '@agent 请认领此任务并编排（拆解子任务、排依赖）');
+                await api_.addComment(detail.id, 'web', '@agent 如果主进程有任务正在处理，则请先把处理中的任务完成后，再认领此任务并编排（拆解子任务、排依赖）');
                 onToast('已唤醒 agent——watch 会把请求送达 TUI 输入框，回车即开工');
                 onChanged();
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
@@ -220,7 +226,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
           : <button className="btn tiny" style={{ color: 'var(--accent)' }} onClick={async () => {
               try {
                 const claimed = await api_.claimIssue(detail.id);
-                onToast(`#${detail.id} 已认领，租约至 ${claimed.leaseExpiresAt?.slice(11, 16) ?? ''}`);
+                onToast(`#${detail.id} 已认领，租约至 ${claimed.leaseExpiresAt ? fmtHMLocal(claimed.leaseExpiresAt) : ''}`);
                 onChanged(); await load();
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
             }}>认领</button>}
@@ -233,12 +239,12 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
         const minutes = Math.max(0, Math.ceil((Date.parse(detail.leaseExpiresAt) - Date.now()) / 60_000));
         return (
           <div className="claim-info">
-            <span className="claim-badge">👤 {holder} · 剩余 {minutes}m（至 {detail.leaseExpiresAt.slice(11, 16)}）</span>
+            <span className="claim-badge">👤 {holder} · 剩余 {minutes}m（至 {fmtHMLocal(detail.leaseExpiresAt)}）</span>
             {holder === 'web' && (
               <button className="btn tiny" onClick={async () => {
                 try {
                   const beat = await api_.heartbeatIssue(detail.id);
-                  onToast(`#${detail.id} 续租成功，至 ${beat.leaseExpiresAt?.slice(11, 16) ?? ''}`);
+                  onToast(`#${detail.id} 续租成功，至 ${beat.leaseExpiresAt ? fmtHMLocal(beat.leaseExpiresAt) : ''}`);
                   onChanged(); await load();
                 } catch (err) { onToast(`✗ ${(err as Error).message}`); }
               }}>续租</button>
@@ -482,5 +488,6 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
           : <li style={{ color: 'var(--ink-dim)' }}>暂无附件</li>}
       </ul>
     </aside>
+    </>
   );
 }

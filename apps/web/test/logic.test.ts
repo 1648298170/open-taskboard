@@ -166,3 +166,29 @@ describe('buildLanes / flattenCardOrder / todayStr', () => {
     assert.match(todayStr(), /^\d{4}-\d{2}-\d{2}$/);
   });
 });
+
+describe('fmtWhenLocal / fmtHMLocal（时间本地化）', () => {
+  it('converts UTC ISO to local MM-DD HH:mm', async () => {
+    const { fmtWhenLocal } = await import('../src/logic/time.js');
+    // 2026-10-18T01:53:00Z → 本地时区渲染（这里用本地偏移反推期望值）
+    const iso = '2026-10-18T01:53:00.000Z';
+    const d = new Date(iso);
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    const expected = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    assert.equal(fmtWhenLocal(iso), expected);
+  });
+
+  it('fmtHMLocal renders local HH:mm', async () => {
+    const { fmtHMLocal } = await import('../src/logic/time.js');
+    const iso = '2026-10-18T01:53:00.000Z';
+    const d = new Date(iso);
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    assert.equal(fmtHMLocal(iso), `${pad(d.getHours())}:${pad(d.getMinutes())}`);
+  });
+
+  it('returns the input unchanged for invalid iso', async () => {
+    const { fmtWhenLocal, fmtHMLocal } = await import('../src/logic/time.js');
+    assert.equal(fmtWhenLocal('垃圾'), '垃圾');
+    assert.equal(fmtHMLocal(''), '');
+  });
+});
