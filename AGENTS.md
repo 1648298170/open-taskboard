@@ -2,6 +2,8 @@
 
 面向 agent 工具的仓库须知（open-taskboard）。
 
+> 要把**外部 AI 接入本看板**（而非开发本仓库）？直接读 **[docs/AI-INTEGRATION.md](docs/AI-INTEGRATION.md)**——自包含的接入与工作流手册。
+
 ## 这是什么仓库
 
 本地优先（local-first）的任务看板，为 opencode 及任何 agent 工具服务——看任务、拆解任务、跟踪任务。

@@ -5,6 +5,8 @@ description: 管理 opencode Taskboard 的任务：查看、拆解、领取、�
 
 # Taskboard 管理
 
+> 完整接入与工作流手册（连接方式 / 唤醒协议 / 错误处理）：[docs/AI-INTEGRATION.md](../../docs/AI-INTEGRATION.md)。
+
 本地任务板有两种等价的操作方式，按优先级选择：
 
 1. **MCP 工具**（若已配置 `taskboard` MCP server）：`list_issues` / `show_issue` / `create_issue` / `update_issue` / `add_comment` / `progress`。工作流规则相同：`update_issue` 必须携带 `show_issue` 返回的 `version`（乐观锁）。
