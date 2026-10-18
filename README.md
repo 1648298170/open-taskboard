@@ -134,15 +134,26 @@ todo → in_progress → in_review → done
 
 ## 评论唤醒 agent（watch 侧车）
 
-不打开 TUI 也能派活：`taskboard watch` 常驻订阅看板事件（macOS / Windows / Linux 均可，常驻方案见下表），`@agent` 开头的评论按通道优先级唤醒 AI：
+面板**不绑定任何 agent 工具**：Claude Code / Codex / Cursor / opencode / 任何「命令行接 prompt」的 CLI agent 都能被醒。`taskboard watch` 常驻订阅看板事件（macOS / Windows / Linux 均可，常驻方案见下表），`@agent` 开头的评论按通道优先级唤醒 AI：
 
 ```bash
-taskboard watch --tui-url http://127.0.0.1:4096   # 兜底通道：项目未绑端口时的 @agent 送这里（可选参数）
-taskboard watch --opencode http://127.0.0.1:4096  # ② 注入任务绑定的会话（需 opencode 新版支持）
-taskboard watch                                    # ③ headless 兜底（--exec/--model 可配，全新会话）
+taskboard watch --tui-url http://127.0.0.1:4096   # ① 可选：指令进 opencode TUI 输入框（opencode 专属增强）
+taskboard watch --opencode http://127.0.0.1:4096  # ② 可选：注入任务绑定的 opencode 会话（opencode 专属增强）
+taskboard watch                                   # ③ 默认兜底：headless 全新会话，适配所有 agent CLI
 ```
 
-**绑定即路由（推荐）**：面板「新建项目」时填「唤醒端口」，`@agent` 评论就自动送达该端口的 opencode 输入框——绑定存在项目数据里，改绑定即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。
+**各 agent 工具怎么接（换代码就换通道）：** 通道①②依赖 opencode 的 TUI/会话协议，是 opencode 的进阶体验；通道③是通用兜底——`--exec` 指定任意 agent CLI，`watch` 把唤醒 prompt 尾参递给它执行全新会话（agent 拿到 prompt 后经 MCP 工具自行读板干活，见「接入 agent 工具」）：
+
+```bash
+taskboard watch --exec "claude -p"                     # Claude Code（print 模式）
+taskboard watch --exec "codex exec"                    # Codex CLI
+taskboard watch --exec "cursor-agent -p"               # Cursor CLI
+taskboard watch                                        # opencode run（默认）
+```
+
+> 模型注意：`--model` 走 opencode 的 `-m` 约定；Claude/Codex 用自家 `--model` 参数时直接写进 `--exec`（如 `--exec "claude --model sonnet -p"`），不要混用 `--model`。
+
+**绑定即路由（推荐）**：面板「新建项目」时填「唤醒端口」，`@agent` 评论就自动送达该端口的 opencode 输入框——绑定存在项目数据里，改绑定即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时留空即可。
 
 ### 先把 opencode 终端跑起来（watch 的目的地）
 
@@ -255,6 +266,6 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 - 评论、活动流、标签、负责人、分支/worktree 绑定、起止日期（校验真实日历）、归档（归档父任务连带其未归档子任务）
 - 全文搜索（FTS5 trigram，标题/描述/评论，短查询退化 LIKE）、导出/导入 JSON（taskboard export/import）、统计面板（周吞吐/平均周期/贡献榜）、时间线视图、Mermaid 图渲染
 - 附件（元数据入库、正文落盘 `attachments/`，单文件 ≤10MB，每任务限额 20 个/总量 50MB 超限 400）、桌面通知、暗/亮主题、泳道分组、批量操作、j/k 键盘导航
-- 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE，`@agent` 开头的评论按通道优先级唤醒——项目 `wake_channel` 数据绑定（面板/CLI 建项目时填唤醒端口，改绑即时生效）→ `--tui-url` 兜底 → 绑定会话 v2 prompt 注入（`--opencode`）→ headless spawn（`--exec`/`--model` 兜底，全新会话）；`--on` 可改唤醒前缀；`--project` 可选作用域过滤（默认全项目）；断线重连自动补拉窗口内漏掉的 `@agent` 评论且与实时流对称去重
+- 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE（不绑定 agent 工具，`--exec` 适配任意 agent CLI：claude / codex / cursor-agent / opencode run…），`@agent` 开头的评论按通道优先级唤醒——项目 `wake_channel` 数据绑定（面板/CLI 建项目时填唤醒端口，改绑即时生效）→ `--tui-url` 兜底 → 绑定会话 v2 prompt 注入（`--opencode`，opencode 专属）→ headless spawn（`--exec`/`--model` 兜底，全新会话）；`--on` 可改唤醒前缀；`--project` 可选作用域过滤（默认全项目）；断线重连自动补拉窗口内漏掉的 `@agent` 评论且与实时流对称去重
 - SSE 实时刷新（Web 多端 + 跨 agent 工具共享同一块板；25s 心跳保活，断线指数退避重连 + 全量兜底拉取）
 - LAN 共享（`TASKBOARD_HOST=0.0.0.0`）、Bearer 令牌认证、只读模式、人工 done 门禁、webhook 事件转发

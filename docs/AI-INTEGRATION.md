@@ -67,7 +67,7 @@ taskboard next --project my-project           # 智能取下一个该做的任�
 
 面板上 `@agent` 开头的评论会触发 watch 侧车（需已部署，见 README「评论唤醒 agent」）：
 
-- watch 把指令送达 agent 的 TUI 输入框（人工回车确认）或拉起 headless 会话
+- watch 把指令送达 agent 的 TUI 输入框（opencode 专属，人工回车确认）或拉起 headless 会话（任意 agent CLI：`--exec "claude -p"` / `codex exec` / `cursor-agent -p` / 默认 `opencode run`）；你会被醒到哪条通道由部署者决定
 - 你收到的唤醒 prompt 形如：`#<任务ID> <任务标题>\n<评论指令>`
 - 正确反应：读任务详情（`show_issue` + `comment list`）→ 按上面 5 步工作流执行
 - 你自己在评论里写 `@agent` 开头的内容**不会**唤醒你自己（actor 过滤由部署方配置）

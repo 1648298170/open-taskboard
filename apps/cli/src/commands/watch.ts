@@ -313,7 +313,7 @@ export const watchCommand: Command = {
         if (outcome === 'missing') { console.error(`watch: exec ${execParts[0]} not found in PATH`); return; }
         console.error(`watch: headless run failed (attempt ${i + 1}/${attempts.length})`);
       }
-      console.error('watch: headless run failed after all retries — 结果不可用，请检查 opencode 状态');
+      console.error('watch: headless run failed after all retries — 结果不可用，请检查 exec 命令与目标 agent CLI 状态');
     };
 
     const connect = (): void => {
