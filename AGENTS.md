@@ -50,6 +50,7 @@ pnpm start      # 启动服务 http://127.0.0.1:47824（0.0.0.0 时额外打印 
 - **多 agent 并发**：开工前先 `claim`（租约默认 30 分钟，todo 任务认领即自动流转 in_progress），长任务定期 `heartbeat` 续租，完成即 `release`；`next`/`ready` 会自动跳过他人租约中的任务。
 - **开工必绑（硬性规则）**：claim / PATCH 流转 `in_progress` 必须携带 `sessionId` 与 `branch`（认领即绑定，只绑空位不抢绑）——缺失会被 403 拒绝并附教学文案，重试补齐即可；人工 web 来源与 `confirm: true` 豁免；纯自动化看板可用 `TASKBOARD_REQUIRE_SESSION=0` 退出。**评论编辑权**：只有网页用户可编辑自己发的评论，agent 创建的评论永远不可编辑（状态推进不受限）。
 - **会话绑定**：agent 创建任务带自己的 sessionId（`create_issue sessionId`）；认领未绑定任务时传 `claim --session-id` / `claim_issue sessionId`（认领即绑定，只绑空位）；**已绑他人会话不抢绑**——绑定即所有权，接管需显式解绑。
+- **唤醒收尾必推评论**：agent 被 `@agent` 评论唤醒并处理完后，把该评论置 `processed`（TUI 注入通道 watch 观测不到完工，headless 才有 exit-0 自动标）；漏推则面板任务完成后评论仍挂「唤醒中」。
 - 拆解需求：先建父任务（顶层），再用 parentId 建子任务（仅两层），一个可独立交付的子需求一个任务。子任务开工（认领或手动流转）会自动把 `todo` 父任务拉到 `in_progress`（单向）；父任务的 `in_review`/`done` 始终人工——全子 done 也不自动关闭父任务。
 - 进展与重要结论写入评论（`add_comment`），不要只留在对话里；有依赖关系用 dep-add 标注，不要靠对话约定。
 - 顶层父任务在所有子任务 done 后才算完成，不要提前关闭父任务。
