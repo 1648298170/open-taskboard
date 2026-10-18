@@ -409,56 +409,66 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
 
   return (
     <>
-      <header className="topbar">
-        <div className="brand">
-          <span className="glyph">▚</span>
-          <h1>taskboard</h1>
-        </div>
-        <div className="controls">
-          <label className="field">
-            <span>project</span>
-            <Select ariaLabel="项目" value={projectId ?? ''} onChange={v => { setProjectId(v); closeDrawer(); }}
-              options={projects.map(p => ({ value: p.id, label: `${p.name} (${p.id})` }))} />
-          </label>
-          {/* v0.4: 项目管理 —— 新建对话框；删除需输入项目 id 确认（防误删）。 */}
-          <button className="icon-btn" aria-label="新建项目" title="新建项目"
-            onClick={() => { setProjName(''); setProjId(''); setProjCreateOpen(true); }}>＋</button>
-          <button className="icon-btn" aria-label="删除项目" title="删除当前项目（输入 id 确认）"
-            onClick={async () => {
-              const pid = projectId ?? '';
-              const typed = await promptDialog({ title: `输入项目 id 以确认删除「${pid}」`, placeholder: '项目 id', value: '' });
-              if (typed === null) return;
-              if (typed.trim() !== pid) { showToast('✗ 项目 id 不匹配，未删除'); return; }
-              try {
-                await api_.deleteProject(pid);
-                showToast(`已删除项目 ${pid}`);
-                loadProjects();
-              } catch (err) { showToast(`✗ ${(err as Error).message}`); }
-            }}>🗑</button>
-          <div className="progress" title="weighted: 父任务等权统计">
-            <div className="progress-fill" style={{ width: `${pct}%` }} />
-            <span className="progress-label">
-              {progress ? `${progress.weightedDone}/${progress.weightedTotal} · ${pct}%` : '–'}
-            </span>
+      <div className="shell">
+        <aside className="sidebar">
+          <div className="brand">
+            <span className="glyph">▚</span>
+            <h1>taskboard</h1>
           </div>
-          <button className="btn primary" onClick={() => setDialogOpen(true)}>＋ 新任务</button>
-          {/* T5-28 主题切换：图标显示将切换到的目标主题。 */}
-          <button className="icon-btn" aria-label="切换主题" title="切换主题"
-            onClick={toggleTheme}>{theme === 'dark' ? '☀' : '🌙'}</button>
-          {/* T6-35 桌面通知开关：仅看板隐藏时的后台变更提醒。 */}
-          <button className={`icon-btn${notify ? ' on' : ''}`} aria-label="桌面通知" title="桌面通知"
-            onClick={() => void toggleNotify()}>🔔</button>
-          {/* T6-31 统计面板开关。 */}
-          <button className={`icon-btn${statsOpen ? ' on' : ''}`} aria-label="统计" title="统计面板"
-            onClick={() => setStatsOpen(o => !o)}>📊</button>
-          {/* T7-37 时间线视图开关（激活时替代看板主体）。 */}
-          <button className={`icon-btn${timelineOpen ? ' on' : ''}`} aria-label="时间线" title="时间线视图（甘特 lite）"
-            onClick={() => setTimelineOpen(o => !o)}>📅</button>
-          {/* v0.4: 快捷键帮助（? 键同效）。 */}
-          <button className={`icon-btn${helpOpen ? ' on' : ''}`} aria-label="快捷键帮助" title="快捷键帮助（?）"
-            onClick={() => setHelpOpen(o => !o)}>?</button>
-        </div>
-      </header>
+          <nav className="side-projects" aria-label="项目">
+            {projects.map(p => (
+              <button key={p.id} className={`side-item${p.id === projectId ? ' active' : ''}`}
+                title={`${p.name} (${p.id})`}
+                onClick={() => { setProjectId(p.id); closeDrawer(); }}>
+                <span className="side-name">{p.name}</span>
+                <span className="side-id">{p.id}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="side-actions">
+            {/* v0.4: 项目管理 —— 新建对话框；删除需输入项目 id 确认（防误删）。 */}
+            <button className="side-btn" onClick={() => { setProjName(''); setProjId(''); setProjCreateOpen(true); }}>＋ 新建项目</button>
+            <button className="side-btn danger" title="删除当前项目（输入 id 确认）"
+              onClick={async () => {
+                const pid = projectId ?? '';
+                const typed = await promptDialog({ title: `输入项目 id 以确认删除「${pid}」`, placeholder: '项目 id', value: '' });
+                if (typed === null) return;
+                if (typed.trim() !== pid) { showToast('✗ 项目 id 不匹配，未删除'); return; }
+                try {
+                  await api_.deleteProject(pid);
+                  showToast(`已删除项目 ${pid}`);
+                  loadProjects();
+                } catch (err) { showToast(`✗ ${(err as Error).message}`); }
+              }}>🗑 删除当前项目</button>
+          </div>
+        </aside>
+        <div className="main-col">
+          <header className="topbar">
+            <div className="controls">
+              <div className="progress" title="weighted: 父任务等权统计">
+                <div className="progress-fill" style={{ width: `${pct}%` }} />
+                <span className="progress-label">
+                  {progress ? `${progress.weightedDone}/${progress.weightedTotal} · ${pct}%` : '–'}
+                </span>
+              </div>
+              <button className="btn primary" onClick={() => setDialogOpen(true)}>＋ 新任务</button>
+              {/* T5-28 主题切换：图标显示将切换到的目标主题。 */}
+              <button className="icon-btn" aria-label="切换主题" title="切换主题"
+                onClick={toggleTheme}>{theme === 'dark' ? '☀' : '🌙'}</button>
+              {/* T6-35 桌面通知开关：仅看板隐藏时的后台变更提醒。 */}
+              <button className={`icon-btn${notify ? ' on' : ''}`} aria-label="桌面通知" title="桌面通知"
+                onClick={() => void toggleNotify()}>🔔</button>
+              {/* T6-31 统计面板开关。 */}
+              <button className={`icon-btn${statsOpen ? ' on' : ''}`} aria-label="统计" title="统计面板"
+                onClick={() => setStatsOpen(o => !o)}>📊</button>
+              {/* T7-37 时间线视图开关（激活时替代看板主体）。 */}
+              <button className={`icon-btn${timelineOpen ? ' on' : ''}`} aria-label="时间线" title="时间线视图（甘特 lite）"
+                onClick={() => setTimelineOpen(o => !o)}>📅</button>
+              {/* v0.4: 快捷键帮助（? 键同效）。 */}
+              <button className={`icon-btn${helpOpen ? ' on' : ''}`} aria-label="快捷键帮助" title="快捷键帮助（?）"
+                onClick={() => setHelpOpen(o => !o)}>?</button>
+            </div>
+          </header>
 
       <div className="toolbar">
         <input ref={searchInputRef} className="toolbar-search" placeholder="搜索标题/描述…" value={filters.text}
@@ -551,6 +561,8 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           selectedIds={selected}
           onToggleSelect={toggleSelect}
           cursorId={cursorId} />}
+        </div>
+      </div>
 
       {openId && (
         <Drawer issueId={openId} projectId={projectId} onClose={closeDrawer}

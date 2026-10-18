@@ -43,6 +43,47 @@
    （kanban 标准形态：done 堆高时其他列不被连坐）。 */
 html, body { height: 100%; overflow: hidden; }
 #root { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ---- v0.4: DeepSeek 式左侧单栏（项目菜单） ---- */
+.shell { display: flex; flex: 1; min-height: 0; }
+.sidebar {
+  width: 220px; flex: none;
+  display: flex; flex-direction: column;
+  background: var(--bg-deep); border-right: 1px solid var(--line);
+}
+.sidebar .brand { padding: 18px 16px 14px; }
+.side-projects { flex: 1; overflow-y: auto; padding: 4px 8px; display: grid; gap: 2px; align-content: start; }
+.side-item {
+  display: flex; flex-direction: column; gap: 2px;
+  width: 100%; text-align: left;
+  background: none; border: 0; border-left: 2px solid transparent;
+  color: var(--ink-dim); font: inherit; font-size: 13px;
+  padding: 8px 10px; border-radius: 3px; cursor: pointer;
+  white-space: nowrap; overflow: hidden;
+}
+.side-item:hover { background: var(--bg-raised); color: var(--ink); }
+.side-item.active {
+  background: var(--bg-raised); color: var(--ink);
+  border-left-color: var(--accent);
+}
+.side-name { overflow: hidden; text-overflow: ellipsis; }
+.side-item.active .side-name { color: var(--accent); }
+.side-id { font-size: 10px; color: var(--ink-dim); opacity: .7; }
+.side-actions { padding: 10px 8px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
+.side-btn {
+  background: none; border: 1px dashed var(--line); border-radius: 3px;
+  color: var(--ink-dim); font: inherit; font-size: 12px;
+  padding: 7px 10px; cursor: pointer; text-align: left;
+}
+.side-btn:hover { color: var(--ink); border-color: var(--ink-dim); }
+.side-btn.danger:hover { color: var(--danger); border-color: var(--danger); }
+
+/* ---- main-col 承载原 topbar/toolbar/board ---- */
+.main-col {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
 body {
   margin: 0; background: var(--bg); color: var(--ink);
   font-family: var(--mono); font-size: 13.5px; line-height: 1.55;
