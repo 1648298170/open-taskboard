@@ -140,6 +140,34 @@ taskboard watch                                    # ③ headless 兜底（--exe
 taskboard watch --project my-project               # 只唤醒该项目的 @agent（多实例分项目路由）
 ```
 
+### 先把 opencode 终端跑起来（watch 的目的地）
+
+watch 的通道①要往 TUI 输入框塞指令，得先有在跑的 opencode 服务 + 附着它的终端界面。两种开法：
+
+**A 单实例（最简）**：终端里直接跑交互式 `opencode`（自动自带一个 server，端口看 TUI 底部状态栏），watch 的 `--tui-url` 写那个端口。
+
+```bash
+opencode                                   # 终端 1：交互式 TUI（自带 server，端口见状态栏）
+taskboard watch --tui-url http://127.0.0.1:<端口>   # 终端 2：常驻 watch
+```
+
+**B 多实例（多终端接管不同项目，推荐）**：每个终端一组独立 serve + attach，端口互不相同：
+
+```bash
+# 终端 1（roadmap 管家）
+opencode serve --port 4096 &                # 无界面 server（或交给 launchd/systemd 常驻）
+opencode attach http://127.0.0.1:4096       # 附着它的 TUI 界面（就在本终端里，可 Ctrl+C 退出重 attach）
+taskboard watch --tui-url http://127.0.0.1:4096 --project roadmap-v0.4
+
+# 终端 2（demo 管家）
+opencode serve --port 4097 &
+opencode attach http://127.0.0.1:4097
+taskboard watch --tui-url http://127.0.0.1:4097 --project demo
+```
+
+- 端口三处一致即可（serve `--port` = attach 的端口 = watch 的 `--tui-url`）；`serve &` 可交给进程管理器常驻，这样 TUI 偶尔退出重 attach 期间唤醒也不会丢（watch 会重试送达）
+- 唤醒时指令出现在该终端 TUI 输入框，**人工回车提交**；不想用 TUI 时去掉 watch 命令的 `--tui-url`、改加 `--exec`/`--model`（headless 通道，全新会话）
+
 - 触发两种：任务下评论 `@agent <指令>`，或新建任务时勾选「创建后唤醒 agent 编排」
 - `--on` 可自定义唤醒前缀；通道失败自动降级（①→②→③）
 - **多终端隔离**：`opencode serve` 的 TUI 注入是广播语义——多个终端 `attach` 同一端口时，一处注入每只输入框都会收到。多终端各管各项目时，给每个 `opencode serve --port N` 配一个独立 watch（不同的 `--tui-url` + `--project`），日志也各自独立
