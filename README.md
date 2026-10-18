@@ -145,6 +145,20 @@ taskboard watch --project my-project               # 只唤醒该项目的 @agen
 - **多终端隔离**：`opencode serve` 的 TUI 注入是广播语义——多个终端 `attach` 同一端口时，一处注入每只输入框都会收到。多终端各管各项目时，给每个 `opencode serve --port N` 配一个独立 watch（不同的 `--tui-url` + `--project`），日志也各自独立
 - 常驻部署：任何进程管理器均可（macOS launchd / systemd / pm2），启动命令就是上面一行；同一 watch（同 server/tui/项目通道）由 pid-lock 单实例保护（`~/.taskboard/watch-<server>-<tui>-<project>.lock`），重复实例不会双注入
 
+#### 唤醒路由怎么看：面板只有一个，端口不写死
+
+- 看板 server / 数据库 / 面板永远只有一个（默认 `http://127.0.0.1:47825`）；多实例只发生在订阅端。任务数据里**只有** `任务 → 所属 projectId`，不含任何端口/实例信息
+- 「任务带去哪个 opencode」= 每个 watch 启动参数自带的约定，收到事件后自己认领：
+
+  ```
+  面板 47825 评论 @agent → SSE 广播给所有 watch
+  watch1 --project roadmap-v0.4：任务属于 demo ≠ roadmap-v0.4 → 忽略
+  watch2 --project demo：任务属于 demo ✓ → 送达自己的 --tui-url :4097 → 终端 B 输入框
+  ```
+
+- 路由 = 项目 → watch → 端口，完全由部署配置决定：一张表记忆 `serve 端口 = attach 端口 = 该 watch 的 --tui-url 端口`，`--project` 管项目归属、与端口号无关；改路由 = 改对应 plist（或直接改命令行）后重启该 watch
+- **端口/项目/终端数量都不受限制**：`--tui-url` 接受任意 URL（含局域网另一台机器），`--project` 接受任意项目 id，锁文件名从参数自动推导；headless 通道（③）连端口都不需要。开第四只终端 = 再加一份 serve + watch 配置
+
 ## 接入 agent 工具
 
 > **🤖 给 AI 的自包含接入手册：[docs/AI-INTEGRATION.md](docs/AI-INTEGRATION.md)** —— 连接方式、5 步核心工作流、硬规则表、唤醒协议、错误处理。AI 读完该文档即可正确接入，无需其他上下文。
