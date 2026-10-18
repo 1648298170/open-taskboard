@@ -1,4 +1,4 @@
-// Project tools: list_projects / create_project / delete_project.
+// Project tools: list_projects / create_project / update_project / delete_project.
 // Schemas derive from @taskboard/core (single source of truth); the few shapes
 // core does not model are small local zod schemas, JSON-generated the same way.
 import { z, createProjectSchema } from '@taskboard/core/schemas';
@@ -15,14 +15,14 @@ export const projectTools: ToolTable = [
     createProjectSchema,
     '创建项目',
     args => ensureServerOrThrow('POST', '/api/projects', {
-      id: args.id, name: args.name, workspacePath: args.workspacePath ?? '', ...(args.wakeChannel ? { wakeChannel: args.wakeChannel } : {}),
+      id: args.id, name: args.name, workspacePath: args.workspacePath ?? '', ...(args.wakeChannel ? { wakeChannel: args.wakeChannel } : {}), ...(args.labels ? { labels: args.labels } : {}),
     }),
   )],
   ['update_project', defineTool(
-    z.object({ id: z.string(), name: z.string().min(1).optional(), wakeChannel: z.string().optional() }).strict(),
-    '更新项目名称和/或唤醒通道绑定（wakeChannel 传空串清除绑定）',
+    z.object({ id: z.string(), name: z.string().min(1).optional(), wakeChannel: z.string().optional(), labels: z.string().optional() }).strict(),
+    '更新项目名称和/或唤醒通道绑定/标签（wakeChannel 传空串清除绑定；labels 逗号分隔）',
     args => ensureServerOrThrow('PATCH', `/api/projects/${args.id}`, {
-      ...(args.name ? { name: args.name } : {}), ...(args.wakeChannel !== undefined ? { wakeChannel: args.wakeChannel } : {}),
+      ...(args.name ? { name: args.name } : {}), ...(args.wakeChannel !== undefined ? { wakeChannel: args.wakeChannel } : {}), ...(args.labels !== undefined ? { labels: args.labels } : {}),
     }),
   )],
   ['project_git_refs', defineTool(

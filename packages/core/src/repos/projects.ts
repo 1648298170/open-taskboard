@@ -3,12 +3,13 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Project } from '../types.js';
 import { ConflictError } from '../errors.js';
 
-const PROJECT_COLS = 'id, name, workspace_path AS workspacePath, wake_channel AS wakeChannel, created_at AS createdAt';
+const PROJECT_COLS = 'id, name, workspace_path AS workspacePath, wake_channel AS wakeChannel, labels, created_at AS createdAt';
 const now = (): string => new Date().toISOString();
 const shortId = (): string => randomUUID().slice(0, 8);
 
 export interface ProjectPatch {
   name?: string;
+  labels?: string;
   /** Full TUI URL; '' clears the binding. */
   wakeChannel?: string;
 }
@@ -16,11 +17,11 @@ export interface ProjectPatch {
 export class ProjectRepo {
   constructor(private db: DatabaseSync) {}
 
-  create(input: { id?: string; name: string; workspacePath?: string; wakeChannel?: string }): string {
+  create(input: { id?: string; name: string; workspacePath?: string; wakeChannel?: string; labels?: string }): string {
     const id = input.id || shortId();
     if (this.get(id)) throw new ConflictError(`project already exists: ${id}`);
-    this.db.prepare('INSERT INTO projects (id, name, workspace_path, wake_channel, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(id, input.name, input.workspacePath ?? '', input.wakeChannel ?? '', now());
+    this.db.prepare('INSERT INTO projects (id, name, workspace_path, wake_channel, labels, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, input.name, input.workspacePath ?? '', input.wakeChannel ?? '', input.labels ?? '', now());
     return id;
   }
 
@@ -28,6 +29,7 @@ export class ProjectRepo {
     const vals: (string | null)[] = [];
     if (patch.name !== undefined) { sets.push('name = ?'); vals.push(patch.name); }
     if (patch.wakeChannel !== undefined) { sets.push('wake_channel = ?'); vals.push(patch.wakeChannel); }
+    if (patch.labels !== undefined) { sets.push('labels = ?'); vals.push(patch.labels); }
     if (sets.length === 0) return;
     vals.push(id);
     this.db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...vals);

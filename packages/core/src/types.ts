@@ -10,6 +10,7 @@ export interface Project {
   workspacePath: string;
   /** TUI URL (e.g. http://127.0.0.1:4097) the watch delivers this project's wakes to; '' = unbound. */
   wakeChannel: string;
+  labels: string;
   createdAt: string;
 }
 

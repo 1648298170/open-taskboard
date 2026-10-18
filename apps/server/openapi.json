@@ -1694,6 +1694,10 @@
             "type": "string",
             "description": "Wake channel binding (TUI URL, e.g. http://127.0.0.1:4097); empty string = unbound"
           },
+          "labels": {
+            "type": "string",
+            "description": "Comma-separated free-form labels"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -1704,6 +1708,7 @@
           "name",
           "workspacePath",
           "wakeChannel",
+          "labels",
           "createdAt"
         ],
         "additionalProperties": false
@@ -2274,6 +2279,10 @@
             "type": "string",
             "maxLength": 200,
             "description": "Wake channel binding: full TUI URL (e.g. http://127.0.0.1:4097) the data-driven watch delivers this project's @agent wakes to; omit/'' = unbound (falls back to the watch default, then headless)"
+          },
+          "labels": {
+            "type": "string",
+            "description": "Comma-separated free-form labels"
           }
         },
         "required": [
@@ -2293,6 +2302,10 @@
             "type": "string",
             "maxLength": 200,
             "description": "Rewrite the wake binding; '' clears it (unbound)"
+          },
+          "labels": {
+            "type": "string",
+            "description": "Comma-separated free-form labels (rewrite; '' clears)"
           }
         },
         "additionalProperties": false

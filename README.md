@@ -139,7 +139,7 @@ taskboard watch --opencode http://127.0.0.1:4096  # ② 注入任务绑定的会
 taskboard watch                                    # ③ headless 兜底（--exec/--model 可配，全新会话）
 ```
 
-**绑定即路由（推荐）**：面板「新建项目」时填「唤醒端口」，`@agent` 评论就自动送达该端口的 opencode 输入框——绑定存在项目数据里，改绑定即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`。
+**绑定即路由（推荐）**：面板「新建项目」时填「唤醒端口」，`@agent` 评论就自动送达该端口的 opencode 输入框——绑定存在项目数据里，改绑定即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。
 
 ### 先把 opencode 终端跑起来（watch 的目的地）
 

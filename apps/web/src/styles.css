@@ -70,6 +70,7 @@ html, body { height: 100%; overflow: hidden; }
 }
 .side-name { overflow: hidden; text-overflow: ellipsis; }
 .side-item.active .side-name { color: var(--accent); }
+.side-label { font-size: 10px; color: var(--accent-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-id { font-size: 10px; color: var(--ink-dim); opacity: .7; }
 .side-actions { padding: 10px 8px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
 .side-btn {

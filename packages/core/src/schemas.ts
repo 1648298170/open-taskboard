@@ -27,6 +27,7 @@ export const createProjectSchema = z
     workspacePath: z.string().optional(),
     // v0.4 wake routing: full TUI URL (http://127.0.0.1:4097); '' = unbound.
     wakeChannel: z.string().max(200).optional(),
+    labels: z.string().optional(),
   })
   .strict();
 
@@ -34,6 +35,7 @@ export const projectPatchSchema = z
   .object({
     name: z.string().min(1).optional(),
     wakeChannel: z.string().max(200).optional(),
+    labels: z.string().optional(),
   })
   .strict();
 

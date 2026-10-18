@@ -144,6 +144,11 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
   (db: DatabaseSync) => {
     db.exec("ALTER TABLE projects ADD COLUMN wake_channel TEXT NOT NULL DEFAULT ''");
   },
+  // v10 → v11: free-form project labels (comma-separated, same convention as
+  // issue labels) for grouping/filtering in the UI and automation scripts.
+  (db: DatabaseSync) => {
+    db.exec("ALTER TABLE projects ADD COLUMN labels TEXT NOT NULL DEFAULT ''");
+  },
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after

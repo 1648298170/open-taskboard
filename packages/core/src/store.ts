@@ -103,13 +103,13 @@ export class Store {
   }
 
   // ---- projects ----
-  createProject(input: { id?: string; name: string; workspacePath?: string; wakeChannel?: string }): Project {
+  createProject(input: { id?: string; name: string; workspacePath?: string; wakeChannel?: string; labels?: string }): Project {
     const id = this.projects.create(input);
     this.emit('project.created', { id });
     return this.projects.get(id)!;
   }
 
-  updateProject(id: string, patch: { name?: string; wakeChannel?: string }): Project {
+  updateProject(id: string, patch: { name?: string; wakeChannel?: string; labels?: string }): Project {
     if (!this.projects.get(id)) throw new NotFoundError(`project not found: ${id}`);
     if (patch.name !== undefined && patch.name.trim() === '') throw new ValidationError('name: must not be blank');
     inTransaction(this.db, () => this.projects.update(id, patch));

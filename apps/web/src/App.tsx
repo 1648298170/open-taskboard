@@ -57,6 +57,7 @@ export default function App() {
   const [projCreateOpen, setProjCreateOpen] = useState(false);
   const [projName, setProjName] = useState('');
   const [projId, setProjId] = useState('');
+  const [projLabels, setProjLabels] = useState('');
   const [projWakePort, setProjWakePort] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
   // v0.4: 旧标签页检测 —— SPA 部署后旧标签页继续跑旧 bundle（多次坑用户的根源）。
@@ -284,6 +285,7 @@ export default function App() {
         // 优先级：帮助 > 对话框 > 抽屉 > 批量选择。输入框里也生效——通用逃生键。
         if (helpOpen) { setHelpOpen(false); return; }
         if (dialogOpen) { setDialogOpen(false); return; }
+        if (projCreateOpen) { setProjCreateOpen(false); return; }
         if (openId !== null) { closeDrawer(); return; }
         if (batchMode && selected.size > 0) setSelected(new Set());
         return;
@@ -314,7 +316,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [dialogOpen, openId, batchMode, selected, flatIds, cursorId, closeDrawer, openIssue, helpOpen]);
+  }, [dialogOpen, projCreateOpen, openId, batchMode, selected, flatIds, cursorId, closeDrawer, openIssue, helpOpen]);
 
   // 高亮卡片滚入可视区（j/k 移动可能超出视口）。
   useEffect(() => {
@@ -423,13 +425,14 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
                 title={`${p.name} (${p.id})`}
                 onClick={() => { setProjectId(p.id); closeDrawer(); }}>
                 <span className="side-name">{p.name}</span>
+                {p.labels && <span className="side-label" title={p.labels}>{p.labels}</span>}
                 <span className="side-id">{p.id}</span>
               </button>
             ))}
           </nav>
           <div className="side-actions">
             {/* v0.4: 项目管理 —— 新建对话框；删除需输入项目 id 确认（防误删）。 */}
-            <button className="side-btn" onClick={() => { setProjName(''); setProjId(''); setProjCreateOpen(true); }}>
+            <button className="side-btn" onClick={() => { setProjName(''); setProjId(''); setProjLabels(''); setProjWakePort(''); setProjCreateOpen(true); }}>
               <Plus size={14} /> 新建项目</button>
             <button className="side-btn danger" title="删除当前项目（输入 id 确认）"
               onClick={async () => {
@@ -585,37 +588,52 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
 
       {/* v0.4: 新建项目对话框（id 可选留空由后端定，name 必填）。 */}
       {projCreateOpen && (
-        <div className="token-overlay" onClick={() => setProjCreateOpen(false)}>
-          <form className="token-card" onClick={e => e.stopPropagation()}
-            onSubmit={async e => {
-              e.preventDefault();
-              const name = projName.trim();
-              if (!name) return;
-              const id = projId.trim();
-              const port = projWakePort.trim();
-              if (port && !/^\d{1,5}$/.test(port)) { showToast('✗ 唤醒端口须为 1-65535 的数字'); return; }
-              const wakeChannel = port ? `http://127.0.0.1:${port}` : undefined;
-              try {
-                const p = await api_.createProject({ ...(id ? { id } : {}), name, ...(wakeChannel ? { wakeChannel } : {}) });
-                setProjCreateOpen(false);
-                setProjects(prev => [...prev, p]);
-                setProjectId(p.id);
-                showToast(`已创建项目 ${p.id}${p.wakeChannel ? `（唤醒 → ${p.wakeChannel}）` : ''}`);
-              } catch (err) { showToast(`✗ ${(err as Error).message}`); }
-            }}>
+        <dialog open className="new-dialog">
+          <form onSubmit={async e => {
+            e.preventDefault();
+            const name = projName.trim();
+            if (!name) return;
+            const id = projId.trim();
+            const port = projWakePort.trim();
+            if (port && (!/^\d{2,5}$/.test(port) || Number(port) > 65535)) { showToast('✗ 唤醒端口须为 1024-65535 的数字'); return; }
+            const labels = projLabels.trim();
+            const wakeChannel = port ? `http://127.0.0.1:${port}` : undefined;
+            try {
+              const p = await api_.createProject({ ...(id ? { id } : {}), name, ...(wakeChannel ? { wakeChannel } : {}), ...(labels ? { labels } : {}) });
+              setProjCreateOpen(false);
+              setProjects(prev => [...prev, p]);
+              setProjectId(p.id);
+              showToast(`已创建项目 ${p.id}${p.wakeChannel ? `（唤醒 → ${p.wakeChannel}）` : ''}`);
+            } catch (err) { showToast(`✗ ${(err as Error).message}`); }
+          }}>
             <h2>新建项目</h2>
-            <input autoFocus value={projName} placeholder="名称（必填）"
-              onChange={e => setProjName(e.target.value)} />
-            <input style={{ marginTop: 8 }} value={projId} placeholder="id（可选，留空自动生成）"
-              onChange={e => setProjId(e.target.value)} />
-            <input style={{ marginTop: 8 }} value={projWakePort} inputMode="numeric" placeholder="唤醒端口（可选，选填后 @agent 评论直接送达该端口的 opencode 输入框）"
-              onChange={e => setProjWakePort(e.target.value)} />
-            <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
-              <button className="btn" type="button" onClick={() => setProjCreateOpen(false)}>取消</button>
-              <button className="btn primary" type="submit">创建</button>
+            <div className="row">
+              <label>名称
+                <input required autoFocus value={projName} placeholder="如 登录模块"
+                  onChange={e => setProjName(e.target.value)} />
+              </label>
+              <label>id（可选）
+                <input value={projId} placeholder="留空自动生成"
+                  onChange={e => setProjId(e.target.value)} />
+              </label>
             </div>
+            <div className="row">
+              <label>唤醒端口（可选）
+                <input inputMode="numeric" value={projWakePort} placeholder="如 4097"
+                  onChange={e => setProjWakePort(e.target.value)} />
+              </label>
+              <label>标签（可选）
+                <input value={projLabels} placeholder="标签,逗号分隔"
+                  onChange={e => setProjLabels(e.target.value)} />
+              </label>
+            </div>
+            <p style={{ margin: '0 0 4px', fontSize: 11, color: 'var(--ink-dim)' }}>填了唤醒端口，之后在任务里 @agent 评论就能直达该端口的 opencode 输入框。</p>
+            <menu>
+              <button type="button" className="btn" onClick={() => setProjCreateOpen(false)}>取消</button>
+              <button type="submit" className="btn primary">创建</button>
+            </menu>
           </form>
-        </div>
+        </dialog>
       )}
 
       {/* v0.4: 快捷键帮助浮层（? 呼出，Esc / 点击遮罩关闭）。 */}

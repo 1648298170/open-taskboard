@@ -373,11 +373,11 @@ describe('Store.revision', () => {
 // --- (j) migrations ---------------------------------------------------------------
 
 describe('migrations', () => {
-  it('sets user_version to 10 on a fresh store (base schema + all migrations)', () => {
+  it('sets user_version to 11 on a fresh store (base schema + all migrations)', () => {
     const db = new DatabaseSync(':memory:');
     new Store('.unused', db); // configureDatabase runs schema + migrations
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(row.user_version, 10);
+    assert.equal(row.user_version, 11);
   });
 
   it('is idempotent: re-configuring an already-migrated db is a no-op', () => {
@@ -388,7 +388,7 @@ describe('migrations', () => {
     // Second Store over the same db replays configureDatabase (idempotent path).
     new Store('.unused', db);
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(row.user_version, 10);
+    assert.equal(row.user_version, 11);
     assert.ok(store.getIssue(issue.id));
   });
 });
@@ -1303,5 +1303,23 @@ describe('project wake_channel', () => {
     const upd = events.find(e => e.type === 'project.updated');
     assert.ok(upd);
     assert.deepEqual(upd!.payload.fields, ['wakeChannel']);
+  });
+});
+
+describe('project labels', () => {
+  it('create persists labels; default is empty string', () => {
+    const { store } = fresh();
+    const pa = store.createProject({ id: 'pa', name: 'A', labels: 'roadmap,work' });
+    const pb2 = store.createProject({ id: 'pb2', name: 'B' });
+    assert.equal(store.getProject(pa.id)!.labels, 'roadmap,work');
+    assert.equal(store.getProject(pb2.id)!.labels, '');
+  });
+
+  it('updateProject rewrites labels', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const p = store.updateProject('p1', { labels: 'x,y' });
+    assert.equal(p.labels, 'x,y');
+    assert.equal(store.updateProject('p1', { labels: '' }).labels, '');
   });
 });
