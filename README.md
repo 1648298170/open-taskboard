@@ -151,21 +151,21 @@ opencode                                   # 终端 1：交互式 TUI（自带 s
 taskboard watch --tui-url http://127.0.0.1:<端口>   # 终端 2：常驻 watch
 ```
 
-**B 多实例（多终端接管不同项目，推荐）**：每个终端一组独立 serve + attach，端口互不相同：
+**B 多实例（多终端接管不同项目，推荐）**：每个终端一组独立 serve + attach，端口互不相同。serve 和 watch 是**一次性部署**（起在后台、由 launchd/systemd 等常驻管理即可，本机样例：`ai.taskboard.opencode-serve*` / `ai.taskboard.watch*`plist），部署完之后**日常只需最后一步 attach**：
 
 ```bash
-# 终端 1（roadmap 管家）
-opencode serve --port 4096 &                # 无界面 server（或交给 launchd/systemd 常驻）
-opencode attach http://127.0.0.1:4096       # 附着它的 TUI 界面（就在本终端里，可 Ctrl+C 退出重 attach）
+# ── 一次性部署（本机已通过 launchd 完成，无需再跑）──────────
+opencode serve --port 4096 &                    # 无界面 server，交给进程管理器常驻
 taskboard watch --tui-url http://127.0.0.1:4096 --project roadmap-v0.4
-
-# 终端 2（demo 管家）
 opencode serve --port 4097 &
-opencode attach http://127.0.0.1:4097
 taskboard watch --tui-url http://127.0.0.1:4097 --project demo
+
+# ── 用户日常（每只终端一条命令）────────────────────────
+opencode attach http://127.0.0.1:4096            # 终端 1：roadmap 管家
+opencode attach http://127.0.0.1:4097            # 终端 2：demo 管家
 ```
 
-- 端口三处一致即可（serve `--port` = attach 的端口 = watch 的 `--tui-url`）；`serve &` 可交给进程管理器常驻，这样 TUI 偶尔退出重 attach 期间唤醒也不会丢（watch 会重试送达）
+- attach 的端口必须对应一个**已经在跑**的 `opencode serve`（没跑会连接失败）；attach 的是"界面"，断线（Ctrl+C / 挂了）随时重 attach，serve 和 watch 不受影响
 - 唤醒时指令出现在该终端 TUI 输入框，**人工回车提交**；不想用 TUI 时去掉 watch 命令的 `--tui-url`、改加 `--exec`/`--model`（headless 通道，全新会话）
 
 - 触发两种：任务下评论 `@agent <指令>`，或新建任务时勾选「创建后唤醒 agent 编排」
