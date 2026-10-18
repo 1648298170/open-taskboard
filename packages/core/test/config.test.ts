@@ -17,6 +17,7 @@ describe('resolveServerConfig', () => {
       token: '',
       readonly: false,
       humanDone: true,
+      reviewComment: true,
       backupsEnabled: true,
       webhookUrls: [],
       webhookSecret: ''
@@ -56,6 +57,12 @@ describe('resolveServerConfig', () => {
 
   it('humanDone opts out only via TASKBOARD_HUMAN_DONE=0', () => {
     assert.equal(resolveServerConfig({ TASKBOARD_HUMAN_DONE: '0' }).humanDone, false);
+  });
+
+  it('reviewComment defaults on; opts out only via TASKBOARD_REVIEW_COMMENT=0', () => {
+    assert.equal(resolveServerConfig({}).reviewComment, true);
+    assert.equal(resolveServerConfig({ TASKBOARD_REVIEW_COMMENT: 'yes' }).reviewComment, true);
+    assert.equal(resolveServerConfig({ TASKBOARD_REVIEW_COMMENT: '0' }).reviewComment, false);
   });
 
   it('splits, trims and drops empty webhook urls', () => {

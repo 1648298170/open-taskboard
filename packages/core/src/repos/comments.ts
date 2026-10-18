@@ -25,6 +25,10 @@ export class CommentRepo {
     return (this.db.prepare(`SELECT ${COMMENT_COLS} FROM comments WHERE id = ?`).get(id) ?? null) as unknown as Comment | null;
   }
 
+  countByAuthor(issueId: string, author: string): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM comments WHERE issue_id = ? AND author = ?').get(issueId, author) as { n: number }).n;
+  }
+
   list(issueId: string): Comment[] {
     return this.db.prepare(`SELECT ${COMMENT_COLS} FROM comments WHERE issue_id = ? ORDER BY created_at, rowid`).all(issueId) as unknown as Comment[];
   }

@@ -52,6 +52,12 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
         String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true) {
       return reply.code(403).send({ error: 'done requires human confirmation' });
     }
+    // v0.4: in_review 评论门禁的 create 侧——创建即 in_review 时评论尚不可
+    // 能存在，改用 confirm 逃生舱（与 done 同构）。
+    if (config.reviewComment && parsed.data.status === 'in_review' &&
+        String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true) {
+      return reply.code(403).send({ error: 'in_review requires a comment by this actor (先落评再交验)' });
+    }
     // confirm 是门禁逃生舱字段——从 create body 剥离，不透传 Store
     const { confirm: _confirm, ...body } = parsed.data;
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
@@ -81,6 +87,14 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
   app.patch('/api/issues/:id', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
     const parsed = restUpdateIssueSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    // v0.4: 先落评再交验——非 web 来源置 in_review 时，执行者必须在任务上
+    // 留过评论（工作与验证的书面痕迹）；默认开启，TASKBOARD_REVIEW_COMMENT=0 退出。
+    if (config.reviewComment && parsed.data.status === 'in_review' &&
+        String(req.headers['x-taskboard-actor'] ?? '') !== 'web' &&
+        store.commentCountBy(req.params.id, String(req.headers['x-taskboard-actor'] ?? '')) === 0) {
+      req.log.warn({ dbgId: req.params.id, dbgActor: String(req.headers['x-taskboard-actor'] ?? ''), dbgCount: store.commentCountBy(req.params.id, String(req.headers['x-taskboard-actor'] ?? '')) }, 'DBG in_review gate');
+      return reply.code(403).send({ error: 'in_review requires a comment by this actor (先落评再交验)' });
+    }
     // T7-36: optional human final-review gate. With TASKBOARD_HUMAN_DONE=1, only
     // the web UI (x-taskboard-actor: 'web') may set status to done — CLI/MCP
     // agents must bring the task to in_review and wait for human confirmation

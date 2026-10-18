@@ -428,6 +428,11 @@ export class Store {
     return this.comments.get(id);
   }
 
+  /** 该任务上某作者（actor）的评论数——in_review 门禁的判定依据。 */
+  commentCountBy(issueId: string, author: string): number {
+    return this.comments.countByAuthor(issueId, author);
+  }
+
   listComments(issueId: string): Comment[] {
     return this.comments.list(issueId);
   }

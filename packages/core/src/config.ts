@@ -17,6 +17,7 @@ export interface TaskboardServerConfig {
   token: string;
   readonly: boolean;
   humanDone: boolean;
+  reviewComment: boolean;
   backupsEnabled: boolean;
   webhookUrls: string[];
   /** Empty string = unsigned webhooks (TASKBOARD_WEBHOOK_SECRET unset). */
@@ -49,6 +50,9 @@ export function resolveServerConfig(env: TaskboardEnv = process.env): TaskboardS
     // 默认开启：docs 承诺「done 必须等用户确认」，默认行为必须与之一致；
     // 纯自动化看板用 TASKBOARD_HUMAN_DONE=0 显式关闭（opt-out）。
     humanDone: env.TASKBOARD_HUMAN_DONE !== '0',
+    // 默认开启：docs 承诺「in_review 需附验证评论」，默认行为与之一致；
+    // 纯自动化看板用 TASKBOARD_REVIEW_COMMENT=0 显式关闭。
+    reviewComment: env.TASKBOARD_REVIEW_COMMENT !== '0',
     backupsEnabled: env.TASKBOARD_BACKUPS !== '0',
     webhookSecret: env.TASKBOARD_WEBHOOK_SECRET || '',
     webhookUrls: (env.TASKBOARD_WEBHOOK_URL ?? '').split(',').map(url => url.trim()).filter(url => url.length > 0)

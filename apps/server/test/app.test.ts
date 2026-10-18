@@ -326,3 +326,111 @@ describe('ready/next views', () => {
     cleanup();
   });
 });
+
+describe('in_review 评论门禁（TASKBOARD_REVIEW_COMMENT 默认开）', () => {
+  it('DEBUG2 store 层计数', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { Store } = await import('@taskboard/core');
+    const { buildApp } = await import('../src/app.js');
+    const dir = mkdtempSync(join(tmpdir(), 'dbg2-'));
+    const store = new Store(join(dir, 'b.sqlite'), new DatabaseSync(':memory:'));
+    const { app } = await buildApp({ store, env: {} });
+    await app.inject({ method: 'POST', url: '/api/projects', payload: { id: 'p1', name: 'P' } });
+    const issue = (await app.inject({ method: 'POST', url: '/api/projects/p1/issues', payload: { title: 't' } })).json<any>();
+    await app.inject({ method: 'POST', url: `/api/issues/${issue.id}/comments`, payload: { author: 'cli', body: '自验' } });
+    console.log('DBG2 store.countByAuthor:', store.commentCountBy(issue.id, 'cli'));
+    const patch = await app.inject({ method: 'PATCH', url: `/api/issues/${issue.id}`, headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: issue.version } });
+    console.log('DBG2 patch:', patch.statusCode, JSON.stringify(patch.json<any>()));
+    console.log('DBG2 repo list:', JSON.stringify(store.listComments(issue.id).map(c => c.author)));
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('DEBUG 评论区布局与计数', async () => {
+    const { app, cleanup } = await makeApp();
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    const c = await app.inject({ method: 'POST', url: `/api/issues/${issueId}/comments`, headers: json, payload: { author: 'cli', body: '自验' } });
+    const detail = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<any>();
+    console.log('DBG comment-status:', c.statusCode, '| authors:', JSON.stringify(detail.comments.map((x: any) => x.author)));
+    const res = await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: 2 }
+    });
+    console.log('DBG patch:', res.statusCode, JSON.stringify(res.json<any>()));
+    const dbg = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<any>();
+    console.log('DBG detail.comments:', JSON.stringify(dbg.comments.map((x: any) => ({ a: x.author }))));
+    console.log('DBG store gate count (经 API 无法直查，改查路由行为):', '见上');
+    cleanup();
+  });
+
+  it('403s an agent with zero own comments; passes after the agent comments', async () => {
+    const { app, cleanup } = await makeApp();
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    const noComment = await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: 1 }
+    });
+    assert.equal(noComment.statusCode, 403);
+    assert.match(noComment.json<{ error: string }>().error, /先落评再交验/);
+    // 评论后同 actor 交验通过
+    await app.inject({ method: 'POST', url: `/api/issues/${issueId}/comments`, headers: json, payload: { author: 'cli', body: '自验通过：单测覆盖' } });
+    const v2 = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<{ version: number }>().version;
+    const ok = await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: v2 }
+    });
+    assert.equal(ok.statusCode, 200);
+    cleanup();
+  });
+
+  it("another actor's comment does not count — the reviewer must have written one", async () => {
+    const { app, cleanup } = await makeApp();
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    await app.inject({ method: 'POST', url: `/api/issues/${issueId}/comments`, headers: json, payload: { author: 'web', body: '人类上下文' } });
+    const res = await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: 2 }
+    });
+    assert.equal(res.statusCode, 403);
+    cleanup();
+  });
+
+  it('web actor is exempt; create-at-in_review gated with confirm escape', async () => {
+    const { app, cleanup } = await makeApp();
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    const webPatch = await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { status: 'in_review', version: 1 }
+    });
+    assert.equal(webPatch.statusCode, 200);
+    const create = await app.inject({
+      method: 'POST', url: '/api/projects/p1/issues', headers: json, payload: { title: '直接交验', status: 'in_review' }
+    });
+    assert.equal(create.statusCode, 403);
+    const escaped = await app.inject({
+      method: 'POST', url: '/api/projects/p1/issues', headers: json, payload: { title: '直接交验', status: 'in_review', confirm: true }
+    });
+    assert.equal(escaped.statusCode, 201);
+    cleanup();
+  });
+
+  it('TASKBOARD_REVIEW_COMMENT=0 disables the gate', async () => {
+    const { app, cleanup } = await makeApp({ TASKBOARD_REVIEW_COMMENT: '0' });
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    const v = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<{ version: number }>().version;
+    const res = await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: v }
+    });
+    assert.equal(res.statusCode, 200);
+    cleanup();
+  });
+});
