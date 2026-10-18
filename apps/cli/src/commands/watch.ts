@@ -5,7 +5,12 @@
 // → headless spawn（--exec/--model，全新会话兜底）。注意：TUI 未附着时
 // append-prompt 可能静默成功且不降级——这是有意的：人不在场就不该无人审核地
 // 自动跑 agent。串行执行唤醒（排队，不并发轰炸）；流断开 2s 后重连。
+// 单实例 flock 锁（.data/watch.lock，进程死残锁自动回收）；断线重连补拉
+// 上次断开窗口内漏掉的 @agent 评论（missedWakeComments + 已处理键去重）。
 import { spawn } from 'node:child_process';
+import { mkdirSync, openSync, closeSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 // Type-only import: a value import here would close a runtime cycle with
 // registry.js (registry imports this file for the command table) and crash
 // with a TDZ error when a test/entry imports watch.js first.
@@ -50,6 +55,69 @@ export function buildWakePrompt(issueId: string, issueTitle: string, instruction
     + `指令：${instruction}`;
 }
 
+/** SSE 实时流与断线补拉共用同一键防重复注入。 */
+export function wakeKey(issueId: string, body: string): string {
+  return `${issueId}:${body}`;
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * O_EXCL 锁文件互斥：客户端没有现成 flock，等价做法是独占创建 .data/watch.lock
+ * 并写入 PID。持锁进程死亡残锁由下一次启动检测 stale PID 自动回收。
+ */
+export function acquireWatchLock(lockPath: string): { ok: true; release: () => void } | { ok: false; holder: number } {
+  mkdirSync(path.dirname(lockPath), { recursive: true });
+  const claim = (): { ok: true; release: () => void } => {
+    const fd = openSync(lockPath, 'wx');
+    try { writeSync(fd, String(process.pid)); } finally { closeSync(fd); }
+    return { ok: true, release: () => { try { unlinkSync(lockPath); } catch { /* 已被回收 */ } } };
+  };
+  try {
+    return claim();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    const raw = readFileSync(lockPath, 'utf8').trim();
+    const pid = Number(raw);
+    if (Number.isInteger(pid) && pid > 0 && pidAlive(pid)) return { ok: false, holder: pid };
+    unlinkSync(lockPath);
+    return claim();
+  }
+}
+
+interface CommentLike { id: string; body: string; createdAt: string }
+interface IssueDetailLike { id: string; title: string; comments: CommentLike[] }
+
+/**
+ * 断线补拉筛选：窗口内以 prefix 开头的评论且未在 processed 集合出现过的才补唤醒。
+ * 纯函数导出供测试。
+ */
+export function missedWakes(
+  issues: ReadonlyArray<IssueDetailLike>,
+  sinceMs: number,
+  prefix: string,
+  seen: ReadonlySet<string>,
+): Array<{ issueId: string; issueTitle: string; instruction: string; key: string }> {
+  const out: { issueId: string; issueTitle: string; instruction: string; key: string }[] = [];
+  for (const it of issues) {
+    for (const c of it.comments) {
+      if (Date.parse(c.createdAt) <= sinceMs) continue;
+      if (!c.body.startsWith(prefix)) continue;
+      const key = wakeKey(it.id, c.body);
+      if (seen.has(key)) continue;
+      out.push({ issueId: it.id, issueTitle: it.title, instruction: c.body.slice(prefix.length).trim(), key });
+    }
+  }
+  return out;
+}
+
 /**
  * A task bound to an opencode session (and a reachable opencode server)
  * wakes via session prompt injection — same conversation, TUI-visible.
@@ -84,6 +152,49 @@ export const watchCommand: Command = {
       `spawn(${execParts.join(' ')})`
     ].filter(Boolean).join(' → ');
     console.log(`watch: ${base()}/api/events — wake on "${prefix}…" → ${channels}`);
+
+    // 单实例互斥（D5）与断线补拉窗口（D2）。锁按目标 server 的端口归一
+    // （~/.taskboard/watch-<port>.lock）而不是 cwd——同机不同目录起第二实例才拦得住。
+    const serverPort = new URL(base()).port || '80';
+    const lock = acquireWatchLock(path.join(os.homedir(), '.taskboard', `watch-${serverPort}.lock`));
+    if (!lock.ok) {
+      console.log(`watch: 另一实例运行中 (pid ${lock.holder}) — 本实例退出，避免双注入`);
+      return;
+    }
+    process.on('exit', () => lock.release());
+    const processed = new Set<string>();
+    let missedSince = Date.now();
+    const backfill = async (): Promise<void> => {
+      const since = missedSince;
+      missedSince = Date.now();
+      try {
+        const headers: Record<string, string> = token() ? { Authorization: `Bearer ${token()}` } : {};
+        const pr = await fetch(`${base()}/api/projects`, { headers });
+        if (!pr.ok) return;
+        const projects = (await pr.json()) as Array<{ id: string }>;
+        let found = 0;
+        for (const p of projects) {
+          const lr = await fetch(`${base()}/api/projects/${encodeURIComponent(p.id)}/issues?includeDone=1`, { headers });
+          if (!lr.ok) continue;
+          const issues = (await lr.json()) as Array<{ id: string }>;
+          for (const it of issues) {
+            const dr = await fetch(`${base()}/api/issues/${encodeURIComponent(it.id)}`, { headers });
+            if (!dr.ok) continue;
+            const detail = (await dr.json()) as IssueDetailLike;
+            for (const w of missedWakes([detail], since, prefix, processed)) {
+              processed.add(w.key);
+              found++;
+              console.log(`watch: 补拉唤醒 #${w.issueId}: ${w.instruction}`);
+              queue = queue.then(() => executeWake(w.issueId, buildWakePrompt(w.issueId, w.issueTitle, w.instruction)))
+                .catch(err => console.error(`watch: 补拉唤醒失败: ${(err as Error).message}`));
+            }
+          }
+        }
+        if (found) console.log(`watch: 补拉完成 — ${found} 条漏网唤醒入队`);
+      } catch (err) {
+        console.error(`watch: 补拉失败: ${(err as Error).message}`);
+      }
+    };
 
     let queue: Promise<void> = Promise.resolve();
     const executeWake = async (issueId: string, prompt: string): Promise<void> => {
@@ -164,6 +275,7 @@ export const watchCommand: Command = {
             return;
           }
           console.log('watch: connected');
+          void backfill();
           const parser = makeSseParser((name, data) => {
             if (name !== 'change') return;
             let evt: WakePayload & { payload?: Record<string, unknown> };
@@ -173,6 +285,10 @@ export const watchCommand: Command = {
             const issueId = String(p.issueId ?? '');
             const issueTitle = String(p.issueTitle ?? '');
             const stripped = String(p.body ?? '').slice(prefix.length).trim();
+            const key = wakeKey(issueId, String(p.body ?? ''));
+            // 补拉路径可能已先行入队同一条评论——两路径对称查重，杜绝双注入。
+            if (processed.has(key)) return;
+            processed.add(key);
             const by = typeof p.author === 'string' && p.author ? ` (${p.author})` : '';
             console.log(`watch: wake${by}: ${stripped}`);
             queue = queue.then(() => executeWake(issueId, buildWakePrompt(issueId, issueTitle, stripped)))
@@ -187,6 +303,7 @@ export const watchCommand: Command = {
         })
         .finally(() => {
           controller.abort();
+          missedSince = Date.now();
           setTimeout(connect, 2000);
         });
     };
