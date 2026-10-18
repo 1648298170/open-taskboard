@@ -71,6 +71,7 @@ taskboard next --project my-project           # 智能取下一个该做的任�
 - 你收到的唤醒 prompt 形如：`#<任务ID> <任务标题>\n<评论指令>`
 - 正确反应：读任务详情（`show_issue` + `comment list`）→ 按上面 5 步工作流执行
 - 你自己在评论里写 `@agent` 开头的内容**不会**唤醒你自己（actor 过滤由部署方配置）
+- 多终端部署（README「评论唤醒 agent」）：watch 按 `--tui-url` + `--project` 分实例路由——你只会收到自己管道里项目的 `@agent` 评论；若同一评论意外出现多次（多窗广播），只入库一次信息即可，不要重复认领
 
 ## 5. 状态机
 

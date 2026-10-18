@@ -137,11 +137,13 @@ todo → in_progress → in_review → done
 taskboard watch --tui-url http://127.0.0.1:4096   # ① 指令进你 TUI 输入框（推荐：同会话全上下文，人工回车提交）
 taskboard watch --opencode http://127.0.0.1:4096  # ② 注入任务绑定的会话（需 opencode 新版支持）
 taskboard watch                                    # ③ headless 兜底（--exec/--model 可配，全新会话）
+taskboard watch --project my-project               # 只唤醒该项目的 @agent（多实例分项目路由）
 ```
 
 - 触发两种：任务下评论 `@agent <指令>`，或新建任务时勾选「创建后唤醒 agent 编排」
 - `--on` 可自定义唤醒前缀；通道失败自动降级（①→②→③）
-- 常驻部署：任何进程管理器均可（macOS launchd / systemd / pm2），启动命令就是上面一行
+- **多终端隔离**：`opencode serve` 的 TUI 注入是广播语义——多个终端 `attach` 同一端口时，一处注入每只输入框都会收到。多终端各管各项目时，给每个 `opencode serve --port N` 配一个独立 watch（不同的 `--tui-url` + `--project`），日志也各自独立
+- 常驻部署：任何进程管理器均可（macOS launchd / systemd / pm2），启动命令就是上面一行；同一 watch（同 server/tui/项目通道）由 pid-lock 单实例保护（`~/.taskboard/watch-<server>-<tui>-<project>.lock`），重复实例不会双注入
 
 ## 接入 agent 工具
 
@@ -212,6 +214,6 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 - 评论、活动流、标签、负责人、分支/worktree 绑定、起止日期（校验真实日历）、归档（归档父任务连带其未归档子任务）
 - 全文搜索（FTS5 trigram，标题/描述/评论，短查询退化 LIKE）、导出/导入 JSON（taskboard export/import）、统计面板（周吞吐/平均周期/贡献榜）、时间线视图、Mermaid 图渲染
 - 附件（元数据入库、正文落盘 `attachments/`，单文件 ≤10MB，每任务限额 20 个/总量 50MB 超限 400）、桌面通知、暗/亮主题、泳道分组、批量操作、j/k 键盘导航
-- 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE，`@agent` 开头的评论按通道优先级唤醒——TUI 注入（`--tui-url` 指向 opencode serve，指令文本进入附着的 TUI 输入框，人工回车提交，同会话全上下文）→ 绑定会话 v2 prompt 注入（`--opencode`）→ headless spawn（`--exec`/`--model` 兜底，全新会话）；`--on` 可改唤醒前缀
+- 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE，`@agent` 开头的评论按通道优先级唤醒——TUI 注入（`--tui-url` 指向 opencode serve，指令文本进入附着的 TUI 输入框，人工回车提交，同会话全上下文）→ 绑定会话 v2 prompt 注入（`--opencode`）→ headless spawn（`--exec`/`--model` 兜底，全新会话）；`--on` 可改唤醒前缀；`--project` 按项目路由（多 watch 实例分项目隔离，断线重连自动补拉窗口内漏掉的 `@agent` 评论且与实时流对称去重）
 - SSE 实时刷新（Web 多端 + 跨 agent 工具共享同一块板；25s 心跳保活，断线指数退避重连 + 全量兜底拉取）
 - LAN 共享（`TASKBOARD_HOST=0.0.0.0`）、Bearer 令牌认证、只读模式、人工 done 门禁、webhook 事件转发
