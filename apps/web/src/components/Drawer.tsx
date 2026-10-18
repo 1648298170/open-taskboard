@@ -228,7 +228,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
           <button className="btn tiny" style={{ color: 'var(--accent)' }} title="唤醒 agent 编排此任务（评论 @agent，经 watch 送达 TUI；主进程忙碌时会在当前任务收尾后接手）"
             onClick={async () => {
               try {
-                await api_.addComment(detail.id, 'web', '@agent 如果主进程有任务正在处理，则请先把处理中的任务完成后，再认领此任务并编排（拆解子任务、排依赖）');
+                await api_.addComment(detail.id, 'web', '@agent 认领此任务并编排（拆解子任务、排依赖）');
                 onToast('已唤醒 agent——watch 送达 TUI；若主进程正在干活，收尾后接手本条');
                 onChanged();
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
