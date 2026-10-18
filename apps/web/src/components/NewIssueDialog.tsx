@@ -51,16 +51,16 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
     <dialog open className="new-dialog">
       <form onSubmit={submit}>
         <h2>新任务</h2>
-        <label>标题<input name="title" required autoFocus /></label>
-        <label>父任务 ID（可选，留空为顶层任务）<input name="parent" /></label>
+        <label>标题<input name="title" required autoFocus placeholder="一句话讲清楚要做什么" /></label>
+        <label>父任务 ID（可选，留空为顶层任务）<input name="parent" placeholder="填父任务 id，如 a1b2c3d4" /></label>
         <div className="row">
           <label>优先级
             <Select value={priority} onChange={v => setPriority(v as Priority)}
               options={PRIORITIES.map(p => ({ value: p, label: p }))} />
           </label>
-          <label>分支（可选）<input name="branch" /></label>
+          <label>分支（可选）<input name="branch" placeholder="如 feat/login" /></label>
         </div>
-        <label>描述<textarea name="description" rows={5} /></label>
+        <label>描述<textarea name="description" rows={5} placeholder="背景 / 验收标准 / 注意事项（Markdown）" /></label>
         {/* v0.4: 创建后唤醒 agent（默认勾选）——替代手打 @agent 评论。 */}
         <label className="wake-check"><input type="checkbox" name="wake" defaultChecked /> 创建后唤醒 agent 编排</label>
         {error && <p style={{ color: 'var(--danger)', fontSize: 12 }}>{error}</p>}

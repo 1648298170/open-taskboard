@@ -298,7 +298,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
         {!editingDesc && <button className="btn tiny" onClick={() => setEditingDesc(true)}><Pencil size={12} /> 编辑</button>}
       </h3>
       {editingDesc
-        ? <textarea rows={8} autoFocus value={desc || detail.description} onChange={e => setDesc(e.target.value)}
+        ? <textarea rows={8} autoFocus placeholder="任务描述（Markdown）" value={desc || detail.description} onChange={e => setDesc(e.target.value)}
             onBlur={() => {
               if (desc && desc !== detail.description) void patch({ description: desc });
               setEditingDesc(false);
