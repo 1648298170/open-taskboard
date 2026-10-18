@@ -5,6 +5,7 @@ import { Markdown } from '../markdown';
 import { confirmDialog, promptDialog } from './dialogs';
 import { fmtHMLocal, fmtWhenLocal } from '../logic/time';
 import { applyMention, mentionCandidatesFor, MentionCandidate, nextHi } from '../logic/mention';
+import { Pencil, Plus, Sparkles, UserRound, X } from 'lucide-react';
 
 const fmtWhen = fmtWhenLocal;
 import { Select } from './Select';
@@ -106,7 +107,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
   const head = (
     <div className="drawer-head">
       <span className="issue-id">#{issueId}{detail ? ` · v${detail.version}` : ' · 加载中'}</span>
-      <button className="icon-btn" onClick={onClose}>✕</button>
+      <button className="icon-btn" onClick={onClose}><X size={16} /></button>
     </div>
   );
   if (loadError || !detail) {
@@ -145,7 +146,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
       <aside className="drawer">
       <div className="drawer-head">
         <span className="issue-id">#{detail.id} · v{detail.version}</span>
-        <button className="icon-btn" onClick={onClose}>✕</button>
+        <button className="icon-btn" onClick={onClose}><X size={16} /></button>
       </div>
       <h2 contentEditable suppressContentEditableWarning
         onBlur={e => { const v = e.currentTarget.textContent?.trim(); if (v && v !== detail.title) void patch({ title: v }); }}>
@@ -231,7 +232,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
                 onToast('已唤醒 agent——watch 会把请求送达 TUI 输入框，回车即开工');
                 onChanged();
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-            }}>🤖 唤醒</button>
+            }}><Sparkles size={14} /> 唤醒</button>
         )}
         {/* T7-34: 认领/释放（以 agent 'web' 操作，紧挨归档）。有效租约显示
             认领徽章 + 释放；无租约显示认领。他人持有的租约释放会 409 → toast。 */}
@@ -259,7 +260,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
         const minutes = Math.max(0, Math.ceil((Date.parse(detail.leaseExpiresAt) - Date.now()) / 60_000));
         return (
           <div className="claim-info">
-            <span className="claim-badge">👤 {holder} · 剩余 {minutes}m（至 {fmtHMLocal(detail.leaseExpiresAt)}）</span>
+            <span className="claim-badge"><UserRound size={12} /> {holder} · 剩余 {minutes}m（至 {fmtHMLocal(detail.leaseExpiresAt)}）</span>
             {holder === 'web' && (
               <button className="btn tiny" onClick={async () => {
                 try {
@@ -294,7 +295,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
       )}
 
       <h3>描述
-        {!editingDesc && <button className="btn tiny" onClick={() => setEditingDesc(true)}>✎ 编辑</button>}
+        {!editingDesc && <button className="btn tiny" onClick={() => setEditingDesc(true)}><Pencil size={12} /> 编辑</button>}
       </h3>
       {editingDesc
         ? <textarea rows={8} autoFocus value={desc || detail.description} onChange={e => setDesc(e.target.value)}
@@ -314,7 +315,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
             await api_.createIssue(detail.projectId, { parentId: detail.id, title });
             onChanged(); await load();
           } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-        }}>＋ 拆解子任务</button>
+        }}><Plus size={12} /> 拆解子任务</button>
       </h3>
       <ul className="children">
         {detail.children.length
@@ -371,7 +372,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
                       e.stopPropagation();
                       setConfirmingDep(id);
                       setTimeout(() => setConfirmingDep(cur => cur === id ? null : cur), 3000);
-                    }}>✕</button>
+                    }}><X size={12} /></button>
                 ))}
               </li>
             );
@@ -425,7 +426,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
                       e.stopPropagation();
                       setConfirmingComment(c.id);
                       setTimeout(() => setConfirmingComment(cur => cur === c.id ? null : cur), 3000);
-                    }}>✕</button>
+                    }}><X size={12} /></button>
                 )}
               </div>
               <Markdown src={c.body} />

@@ -3,6 +3,7 @@ import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, u
 import { useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { buildLanes, buildBlockedByMap, flattenCardOrder, todayStr } from '../logic/board';
+import { UserRound } from 'lucide-react';
 import { fmtHMLocal } from '../logic/time';
 import type { BlockedByMap } from '../logic/board';
 
@@ -171,7 +172,7 @@ function ClaimBadge({ issue }: { issue: Issue }) {
   const minutes = Math.max(0, Math.ceil((Date.parse(issue.leaseExpiresAt) - Date.now()) / 60_000));
   return (
     <span className="claim-badge" title={`认领人 ${holder}，租约至 ${fmtHMLocal(issue.leaseExpiresAt ?? '')}`}>
-      👤 {holder} · {minutes}m
+      <UserRound size={12} /> {holder} · {minutes}m
     </span>
   );
 }

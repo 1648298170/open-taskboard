@@ -134,6 +134,9 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 .icon-btn:hover { color: var(--danger); }
 /* T6-35: 通知开关激活态。 */
 .icon-btn.on { color: var(--accent); }
+/* v0.4: lucide 图标（currentColor 描边）对齐与尺寸收口。 */
+.icon-btn svg, .side-btn svg, .btn svg, .claim-badge svg { flex: none; vertical-align: -2px; }
+.side-btn { display: flex; align-items: center; gap: 7px; }
 
 .progress {
   position: relative; width: 150px; height: 18px; border: 1px solid var(--line);

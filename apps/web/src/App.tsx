@@ -5,6 +5,7 @@ import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
 import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
+import { Bell, ChartColumn, GanttChart, Keyboard, Moon, Plus, Sun, Trash2, X } from 'lucide-react';
 import { Drawer } from './components/Drawer';
 import { NewIssueDialog } from './components/NewIssueDialog';
 import { StatsPanel } from './components/StatsPanel';
@@ -427,7 +428,8 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           </nav>
           <div className="side-actions">
             {/* v0.4: 项目管理 —— 新建对话框；删除需输入项目 id 确认（防误删）。 */}
-            <button className="side-btn" onClick={() => { setProjName(''); setProjId(''); setProjCreateOpen(true); }}>＋ 新建项目</button>
+            <button className="side-btn" onClick={() => { setProjName(''); setProjId(''); setProjCreateOpen(true); }}>
+              <Plus size={14} /> 新建项目</button>
             <button className="side-btn danger" title="删除当前项目（输入 id 确认）"
               onClick={async () => {
                 const pid = projectId ?? '';
@@ -439,7 +441,8 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
                   showToast(`已删除项目 ${pid}`);
                   loadProjects();
                 } catch (err) { showToast(`✗ ${(err as Error).message}`); }
-              }}>🗑 删除当前项目</button>
+              }}>
+              <Trash2 size={14} /> 删除当前项目</button>
           </div>
         </aside>
         <div className="main-col">
@@ -451,22 +454,23 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
                   {progress ? `${progress.weightedDone}/${progress.weightedTotal} · ${pct}%` : '–'}
                 </span>
               </div>
-              <button className="btn primary" onClick={() => setDialogOpen(true)}>＋ 新任务</button>
+              <button className="btn primary" onClick={() => setDialogOpen(true)}>
+                <Plus size={14} /> 新任务</button>
               {/* T5-28 主题切换：图标显示将切换到的目标主题。 */}
               <button className="icon-btn" aria-label="切换主题" title="切换主题"
-                onClick={toggleTheme}>{theme === 'dark' ? '☀' : '🌙'}</button>
+                onClick={toggleTheme}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button>
               {/* T6-35 桌面通知开关：仅看板隐藏时的后台变更提醒。 */}
               <button className={`icon-btn${notify ? ' on' : ''}`} aria-label="桌面通知" title="桌面通知"
-                onClick={() => void toggleNotify()}>🔔</button>
+                onClick={() => void toggleNotify()}><Bell size={16} /></button>
               {/* T6-31 统计面板开关。 */}
               <button className={`icon-btn${statsOpen ? ' on' : ''}`} aria-label="统计" title="统计面板"
-                onClick={() => setStatsOpen(o => !o)}>📊</button>
+                onClick={() => setStatsOpen(o => !o)}><ChartColumn size={16} /></button>
               {/* T7-37 时间线视图开关（激活时替代看板主体）。 */}
               <button className={`icon-btn${timelineOpen ? ' on' : ''}`} aria-label="时间线" title="时间线视图（甘特 lite）"
-                onClick={() => setTimelineOpen(o => !o)}>📅</button>
+                onClick={() => setTimelineOpen(o => !o)}><GanttChart size={16} /></button>
               {/* v0.4: 快捷键帮助（? 键同效）。 */}
               <button className={`icon-btn${helpOpen ? ' on' : ''}`} aria-label="快捷键帮助" title="快捷键帮助（?）"
-                onClick={() => setHelpOpen(o => !o)}>?</button>
+                onClick={() => setHelpOpen(o => !o)}><Keyboard size={16} /></button>
             </div>
           </header>
 
@@ -631,7 +635,7 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
         <div className="update-banner">
           <span>🚀 面板有新版本（当前页面可能缺少新功能/修复）</span>
           <button className="btn tiny primary" onClick={() => location.reload()}>立即刷新</button>
-          <button className="icon-btn" aria-label="关闭提示" onClick={() => setBundleHintDismissed(true)}>✕</button>
+          <button className="icon-btn" aria-label="关闭提示" onClick={() => setBundleHintDismissed(true)}><X size={14} /></button>
         </div>
       )}
 
