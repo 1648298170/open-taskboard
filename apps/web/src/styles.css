@@ -540,6 +540,19 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 .meta-row > input, .meta-row > select { flex: 1 1 130px; min-width: 0; width: auto; }
 .meta-row > input[type='date'] { flex: 0 1 auto; }
 
+/* v0.4: 评论区布局 —— 头行（作者+删除）与正文分层；输入 textarea 自动增高 */
+.comments .comment-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 4px;
+}
+.comments li .markdown { margin-top: 2px; overflow-wrap: anywhere; }
+.comment-form { display: flex; flex-direction: column; gap: 6px; }
+.comment-form textarea {
+  width: 100%; resize: vertical; min-height: 44px; max-height: 180px;
+  font: inherit; line-height: 1.5;
+}
+.comment-form > .btn.tiny { align-self: flex-end; }
+
 /* v0.4: dnd-kit 拖拽 + mention 浮层（floating-ui fixed 定位） */
 .card { touch-action: none; }
 .card.dragging { opacity: .55; }

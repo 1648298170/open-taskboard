@@ -35,7 +35,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
   const [editingDesc, setEditingDesc] = useState(false);
   const [comment, setComment] = useState('');
   // v0.4: mention 候选浮层 —— floating-ui 定位（top-start，翻转+防溢出）。
-  const commentInputRef = useRef<HTMLInputElement>(null);
+  const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const mentionRef = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
     if (!comment.trim().startsWith('@') || !commentInputRef.current || !mentionRef.current) return;
@@ -367,21 +367,25 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
         {detail.comments.length
           ? detail.comments.map(c => (
             <li key={c.id}>
-              <span className="who">{c.author || 'anon'}</span>
+              {/* v0.4: 头行（作者+删除）与正文分层——正文独立整行，长文不再绕排 */}
+              <div className="comment-head">
+                <span className="who">{c.author || 'anon'}</span>
+                <button className="icon-btn dep-remove" title="删除评论"
+                  onClick={async e => {
+                    e.stopPropagation();
+                    if (!await confirmDialog({ title: '删除这条评论？', danger: true, confirmText: '删除' })) return;
+                    try {
+                      await api_.deleteComment(c.id);
+                      onChanged(); await load();
+                    } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+                  }}>✕</button>
+              </div>
               <Markdown src={c.body} />
-              <button className="icon-btn dep-remove" title="删除评论"
-                onClick={async e => {
-                  e.stopPropagation();
-                  if (!await confirmDialog({ title: '删除这条评论？', danger: true, confirmText: '删除' })) return;
-                  try {
-                    await api_.deleteComment(c.id);
-                    onChanged(); await load();
-                  } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-                }}>✕</button>
             </li>))
           : <li style={{ color: 'var(--ink-dim)' }}>暂无评论</li>}
       </ul>
-      <form onSubmit={async e => {
+      {/* v0.4: 评论输入改自动增高 textarea——长文本自动换行，Enter 发送/Shift+Enter 换行 */}
+      <form className="comment-form" onSubmit={async e => {
         e.preventDefault();
         if (!comment.trim()) return;
         try {
@@ -389,7 +393,20 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
           setComment(''); onChanged(); await load();
         } catch (err) { onToast(`✗ ${(err as Error).message}`); }
       }}>
-        <input ref={commentInputRef} value={comment} onChange={e => setComment(e.target.value)} placeholder="添加评论…（@ 唤醒 agent）" />
+        <textarea ref={commentInputRef} rows={2} value={comment}
+          onChange={e => setComment(e.target.value)}
+          onInput={e => {
+            const el = e.currentTarget;
+            el.style.height = 'auto';
+            el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+          }}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              e.currentTarget.form?.requestSubmit();
+            }
+          }}
+          placeholder="添加评论…（@ 唤醒 agent，Enter 发送，Shift+Enter 换行）" />
         {/* 输入 @ 时弹出提及候选（chat 式）；点击填入。发送逻辑不变。 */}
         {(() => {
           const frag = /^@([\w-]*)$/.exec(comment.trim());
