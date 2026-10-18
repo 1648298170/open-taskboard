@@ -1,6 +1,7 @@
 /* open-taskboard — industrial terminal aesthetic (React) */
 :root {
   --bg: #101312;
+  --bg-deep: #0c0f0e;
   --bg-raised: #161b19;
   --bg-panel: #1b211f;
   --line: #2a332f;
@@ -22,6 +23,7 @@
 /* T5-28: 浅色主题 —— 保持琥珀 accent 家族，整体压深以保证对比度。 */
 [data-theme='light'] {
   --bg: #f3f1ea;
+  --bg-deep: #e9e5da;
   --bg-raised: #faf8f2;
   --bg-panel: #ffffff;
   --line: #d9d3c5;
@@ -431,7 +433,7 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 .new-dialog input, .new-dialog textarea, .new-dialog select { width: 100%; margin-top: 4px; font-size: 13px; }
 .new-dialog .row { display: flex; gap: 10px; } .new-dialog .row label { flex: 1; min-width: 0; }
 /* 自绘下拉与 input 同满宽 + caret 贴右 —— 消除「优先级/分支」不对称。 */
-.new-dialog .row .tb-select { width: 100%; justify-content: space-between; }
+.new-dialog .row .tb-select { width: 100%; justify-content: space-between; padding: 5px 8px; font-size: 13px; }
 .new-dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 8px 0 0; }
 
 .empty-state { text-align: center; color: var(--ink-dim); padding: 80px 20px; }
