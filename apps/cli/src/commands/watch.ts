@@ -49,6 +49,14 @@ export function shouldWake(evt: WakePayload, prefix: string): boolean {
   return typeof body === 'string' && body.startsWith(prefix);
 }
 
+/**
+ * 项目路由：多实例唤醒隔离的判定。SSE comment.created 载荷只带 issueId，
+ * projectId 由调用方按需解析（GET /api/issues/:id，带缓存）后传入。
+ */
+export function wantsProject(filter: string | undefined, projectId: string | null): boolean {
+  return !filter || projectId === filter;
+}
+
 export function buildWakePrompt(issueId: string, issueTitle: string, instruction: string): string {
   return `#${issueId} ${issueTitle}\n`
     + '[看板唤醒] 主进程忙时先收尾手头任务，再处理本条；勿中断进行中的工作。\n'
@@ -129,7 +137,7 @@ export function decideWake(sessionId: string | null | undefined, opencodeBase: s
 
 export const watchCommand: Command = {
   summary: 'Wake an agent when a comment starts with @agent',
-  usage: 'watch [--on PREFIX] [--tui-url URL] [--opencode URL] [--exec CMD] [--model M]',
+  usage:               'watch [--on PREFIX] [--tui-url URL] [--opencode URL] [--exec CMD] [--model M] [--project ID]',
   bare: true,
   async run(ctx) {
     const { base, token, flags } = ctx;
@@ -146,23 +154,40 @@ export const watchCommand: Command = {
     // into the attached TUI's input box (POST /tui/append-prompt). The human
     // reviews and presses enter: same session, full context, TUI-visible.
     const tuiBase = String(flags['tui-url'] ?? process.env.OPENCODE_TUI_URL ?? '').replace(/\/+$/, '') || undefined;
+    const projectFilter = String(flags.project ?? '') || undefined;
     const channels = [
       tuiBase ? `tui(${tuiBase})` : null,
       opencodeBase ? `session(${opencodeBase})` : null,
       `spawn(${execParts.join(' ')})`
     ].filter(Boolean).join(' → ');
-    console.log(`watch: ${base()}/api/events — wake on "${prefix}…" → ${channels}`);
+    console.log(`watch: ${base()}/api/events — wake on "${prefix}…" → ${channels}${projectFilter ? ` [project ${projectFilter}]` : ''}`);
 
-    // 单实例互斥（D5）与断线补拉窗口（D2）。锁按目标 server 的端口归一
-    // （~/.taskboard/watch-<port>.lock）而不是 cwd——同机不同目录起第二实例才拦得住。
+    // 单实例互斥（D5）与断线补拉窗口（D2）。锁名按 server 端口 + 通道端口 + 项目
+    // 归一（不落 cwd）：同一 server 上多实例分管道（A 方案各有 --project/--tui-url）
+    // 是合法并存，只有完全同通道的第二实例才该被拦。
     const serverPort = new URL(base()).port || '80';
-    const lock = acquireWatchLock(path.join(os.homedir(), '.taskboard', `watch-${serverPort}.lock`));
+    const tuiPort = tuiBase ? new URL(tuiBase).port || '80' : 'n';
+    const lockId = [serverPort, tuiPort, projectFilter ?? 'all'].join('-').replace(/[^A-Za-z0-9.-]/g, '_');
+    const lock = acquireWatchLock(path.join(os.homedir(), '.taskboard', `watch-${lockId}.lock`));
     if (!lock.ok) {
-      console.log(`watch: 另一实例运行中 (pid ${lock.holder}) — 本实例退出，避免双注入`);
+      console.log(`watch: 另一实例运行中 (pid ${lock.holder}) — 同通道重复实例退出，避免双注入`);
       return;
     }
     process.on('exit', () => lock.release());
     const processed = new Set<string>();
+    // SSE 载荷不带 projectId——按需 GET 详情解析，按 issue 缓存 promise 防并发重复请求。
+    const projectCache = new Map<string, Promise<string | null>>();
+    const resolveProject = (issueId: string): Promise<string | null> => {
+      let cached = projectCache.get(issueId);
+      if (!cached) {
+        const headers: Record<string, string> = token() ? { Authorization: `Bearer ${token()}` } : {};
+        cached = fetch(`${base()}/api/issues/${encodeURIComponent(issueId)}`, { headers })
+          .then(r => r.ok ? (r.json() as Promise<{ projectId?: string }>).then(d => d.projectId ?? null) : null)
+          .catch(() => null);
+        projectCache.set(issueId, cached);
+      }
+      return cached;
+    };
     let missedSince = Date.now();
     const backfill = async (): Promise<void> => {
       const since = missedSince;
@@ -171,7 +196,8 @@ export const watchCommand: Command = {
         const headers: Record<string, string> = token() ? { Authorization: `Bearer ${token()}` } : {};
         const pr = await fetch(`${base()}/api/projects`, { headers });
         if (!pr.ok) return;
-        const projects = (await pr.json()) as Array<{ id: string }>;
+        const allProjects = (await pr.json()) as Array<{ id: string }>;
+        const projects = projectFilter ? allProjects.filter(p => p.id === projectFilter) : allProjects;
         let found = 0;
         for (const p of projects) {
           const lr = await fetch(`${base()}/api/projects/${encodeURIComponent(p.id)}/issues?includeDone=1`, { headers });
@@ -276,13 +302,14 @@ export const watchCommand: Command = {
           }
           console.log('watch: connected');
           void backfill();
-          const parser = makeSseParser((name, data) => {
+          const parser = makeSseParser(async (name, data) => {
             if (name !== 'change') return;
             let evt: WakePayload & { payload?: Record<string, unknown> };
             try { evt = JSON.parse(data); } catch { return; }
             if (!shouldWake(evt, prefix)) return;
             const p = evt.payload ?? {};
             const issueId = String(p.issueId ?? '');
+            if (projectFilter && !wantsProject(projectFilter, await resolveProject(issueId))) return;
             const issueTitle = String(p.issueTitle ?? '');
             const stripped = String(p.body ?? '').slice(prefix.length).trim();
             const key = wakeKey(issueId, String(p.body ?? ''));

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, type IssueDetailLike } from '../src/commands/watch.js';
+import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, type IssueDetailLike } from '../src/commands/watch.js';
 
 describe('makeSseParser', () => {
   it('reassembles events from split chunks', () => {
@@ -128,5 +128,18 @@ describe('missedWakes', () => {
     const issues: IssueDetailLike[] = [{ id: 'i1', title: 'T', comments: [comment('@agent 一条', 1_000, 'cx')] }];
     const seen = new Set([wakeKey('i1', '@agent 一条')]);
     assert.equal(missedWakes(issues, 0, '@agent', seen).length, 0);
+  });
+});
+
+describe('wantsProject（A 方案多实例项目路由）', () => {
+  it('未设 filter 时所有项目都归本实例', () => {
+    assert.equal(wantsProject(undefined, null), true);
+    assert.equal(wantsProject(undefined, 'demo'), true);
+  });
+
+  it('设置 filter 时仅命中该项目；解析失败（null）不唤醒', () => {
+    assert.equal(wantsProject('demo', 'demo'), true);
+    assert.equal(wantsProject('demo', 'roadmap-v0.4'), false);
+    assert.equal(wantsProject('demo', null), false);
   });
 });
