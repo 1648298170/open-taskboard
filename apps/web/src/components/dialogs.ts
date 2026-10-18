@@ -54,6 +54,7 @@ export function confirmDialog(o: ConfirmOpts): Promise<boolean> {
   const ok = field(menu, 'button', `btn primary${o.danger ? ' danger' : ''}`, o.confirmText ?? '确定') as HTMLButtonElement;
   ok.type = 'submit';
   ok.value = 'ok';
+  d.append(form);  // ← 缺了这行：表单构建完必须挂进 dialog，否则弹窗空白
   return new Promise(resolve => {
     d.onclose = () => resolve(d.returnValue === 'ok');
     d.showModal();
