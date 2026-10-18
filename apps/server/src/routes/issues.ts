@@ -90,6 +90,16 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     // v0.4: 先落评再交验——非 web 来源置 in_review 时，执行者必须在任务上
     // 留过评论（工作与验证的书面痕迹）；默认开启，TASKBOARD_REVIEW_COMMENT=0 退出。
     // 仅拦状态流转（当前已 in_review 的非流转补丁不拦——已有人交验过，无信息损失）。
+    // require-session：agent 流转 to in_progress 必须携带 sessionId（或任务已
+    // 绑定 / web 来源 / confirm: true）——错误文案直接教学，agent 重试即补齐。
+    if (config.requireSession && parsed.data.status === 'in_progress'
+      && store.getIssue(req.params.id)?.status !== 'in_progress'
+      && String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true
+      && !parsed.data.sessionId && !store.getIssue(req.params.id)?.sessionId) {
+      return reply.code(403).send({
+        error: 'starting a task requires binding: claim/PATCH with sessionId and branch, or confirm: true (TASKBOARD_REQUIRE_SESSION)'
+      });
+    }
     if (config.reviewComment && parsed.data.status === 'in_review' &&
         store.getIssue(req.params.id)?.status !== 'in_review' &&
         String(req.headers['x-taskboard-actor'] ?? '') !== 'web' &&
@@ -139,11 +149,17 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
   // (heartbeat renews with an optional fresh ttl; release only needs the
   // agent — a ttl there is ignored). Each responds with the updated Issue;
   // claim conflicts flow through ConflictError → 409 via the global handler.
-  app.post('/api/issues/:id/claim', async (req: FastifyRequest<{ Params: IssueParams }>) => {
+  app.post('/api/issues/:id/claim', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
     const parsed = claimSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
-    return store.claimIssue(req.params.id, parsed.data.agent, parsed.data.ttlMinutes ?? 30, actor || parsed.data.agent, parsed.data.sessionId);
+    if (config.requireSession && !parsed.data.sessionId && !store.getIssue(req.params.id)?.sessionId
+      && String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true) {
+      return reply.code(403).send({
+        error: 'starting a task requires binding: claim/PATCH with sessionId and branch, or confirm: true (TASKBOARD_REQUIRE_SESSION)'
+      });
+    }
+    return store.claimIssue(req.params.id, parsed.data.agent, parsed.data.ttlMinutes ?? 30, actor || parsed.data.agent, parsed.data.sessionId, parsed.data.branch);
   });
 
   app.post('/api/issues/:id/heartbeat', async (req: FastifyRequest<{ Params: IssueParams }>) => {

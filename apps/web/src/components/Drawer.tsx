@@ -429,8 +429,8 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
                     }}>确认删除</button>
                 ) : (
                   <>
-                    {c.status === 'pending' && (
-                      <button className="icon-btn dep-remove" title="编辑评论（编辑保存后重新唤醒 agent）"
+                    {c.status === 'pending' && (c.author === 'web' || c.author === '') && (
+                      <button className="icon-btn dep-remove" title="编辑评论（仅自己发的评论可编辑；编辑保存后重新唤醒 agent）"
                         onClick={e => {
                           e.stopPropagation();
                           setEditingComment(c.id);

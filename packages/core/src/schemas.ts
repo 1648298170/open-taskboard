@@ -124,6 +124,10 @@ export const claimSchema = z
     ttlMinutes: z.number().int().positive().max(1440).optional(),
     // 认领即绑定：绑空位不抢绑（已有绑定被忽略），语义见 store.claimIssue。
     sessionId: z.string().min(1).optional(),
+    branch: z.string().min(1).optional(),
+    // require-session 逃生舱（与 human-done/in_review 同构）：人工确认后 agent
+    // 可带 confirm: true 跳过开工绑定（自动化看板设 TASKBOARD_REQUIRE_SESSION=0）。
+    confirm: z.boolean().optional(),
   })
   .strict();
 

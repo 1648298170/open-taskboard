@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Store, NotFoundError, ConflictError, ValidationError } from '../src/index.js';
+import { Store, NotFoundError, ConflictError, ValidationError, PermissionError } from '../src/index.js';
 import { restUpdateIssueSchema } from '../src/schemas.js';
 import type { StoreEvent, Status, Priority } from '../src/index.js';
 
@@ -345,13 +345,13 @@ describe('Store.updateComment', () => {
     const f = fresh();
     f.store.createProject({ id: 'p1', name: 'P' });
     const issueId = f.store.createIssue({ projectId: 'p1', title: 'task' }).id;
-    const comment = f.store.addComment(issueId, { body: 'do the thing' });
+    const comment = f.store.addComment(issueId, { author: 'web', body: 'do the thing' });
     return { ...f, issueId, commentId: comment.id };
   };
 
   it('edits the body while pending; FTS sees the new text; emits comment.updated', () => {
     const t = withComment();
-    t.store.updateComment(t.commentId, { body: 'actually do it right' }, 'alice');
+    t.store.updateComment(t.commentId, { body: 'actually do it right' }, 'web');
     assert.equal(t.store.listComments(t.issueId)[0].body, 'actually do it right');
     assert.deepEqual(idsFor(t.events, 'comment.updated'), [t.commentId]);
     assert.deepEqual(t.store.search('actually do it right').map(h => h.id), [t.issueId]);
@@ -380,6 +380,34 @@ describe('Store.updateComment', () => {
     const t = withComment();
     throwsWith(() => t.store.updateComment('nope', { body: 'x' }), NotFoundError, 'comment not found: nope');
     throwsWith(() => t.store.updateComment(t.commentId, { body: '   ' }), ValidationError, /blank/);
+  });
+
+  it('edit permission: only the human (web) may edit their own comments — agents locked out entirely', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const issueId = store.createIssue({ projectId: 'p1', title: 't' }).id;
+
+    // 用户（web 面板）创建的评论：web 可改；agent 不可改。
+    const userC = store.addComment(issueId, { author: 'web', body: 'user note' }).id;
+    throwsWith(() => store.updateComment(userC, { body: 'agent sneak' }, 'sisyphus'), PermissionError, /only the.*who created/);
+    store.updateComment(userC, { body: 'user edit ok' }, 'web');
+    assert.equal(store.listComments(issueId)[0].body, 'user edit ok');
+
+    // agent 创建的评论：连人工 web 也不能改（agent 的发言保持原样）。
+    const agentC = store.addComment(issueId, { author: 'sisyphus', body: 'agent report' }).id;
+    throwsWith(() => store.updateComment(agentC, { body: 'web rewrite' }, 'web'), PermissionError, /agents|created by/);
+    throwsWith(() => store.updateComment(agentC, { body: 'agent self-edit' }, 'sisyphus'), PermissionError, /agents|created by/);
+
+    // 匿名评论（历史数据、无签名）：归为用户可编辑。
+    const anonC = store.addComment(issueId, { body: 'anon by default' }).id;
+    store.updateComment(anonC, { body: 'rewrite by web' }, 'web');
+    assert.equal(store.listComments(issueId).find(c => c.id === anonC)!.body, 'rewrite by web');
+
+    // 状态推进不受权限限制：watch/agent 可以 processing/processed/回置 pending。
+    store.updateComment(userC, { status: 'processing' }, 'watch');
+    store.updateComment(userC, { status: 'processed' }, 'watch');
+    store.updateComment(userC, { status: 'pending' }, 'sisyphus');
+    assert.equal(store.listComments(issueId).find(c => c.id === userC)!.status, 'pending');
   });
 });
 
@@ -799,6 +827,26 @@ describe('Store claims (T7-34)', () => {
     // 不传 sessionId：绑定不变
     const renewed = store.claimIssue(free, 'alpha', 60);
     assert.equal(renewed.sessionId, 'ses_mine', 'renew without sessionId keeps binding');
+  });
+
+  it('claim with branch binds unbound branch and sessionId in one transaction — same bind-empty-slot rule', () => {
+    const { store } = freshDb();
+    store.createProject({ id: 'p1', name: 'P' });
+    const free = store.createIssue({ projectId: 'p1', title: 'unbound' }).id;
+    const takenBranch = store.createIssue({ projectId: 'p1', title: 'branch prebound' }).id;
+    store.updateIssue(takenBranch, { branch: 'feat/prebound' }, 1);
+
+    const bound = store.claimIssue(free, 'alpha', 30, 'alpha', 'ses_mine', 'feat/agent-run');
+    assert.equal(bound.branch, 'feat/agent-run');
+    assert.equal(bound.sessionId, 'ses_mine');
+    assert.equal(bound.status, 'in_progress');
+    assert.ok(store.listActivities(free).some(a => a.action === 'branch-bound' && a.detail === 'feat/agent-run'));
+
+    const stolen = store.claimIssue(takenBranch, 'beta', 30, 'beta', 'ses_beta', 'feat/other');
+    assert.equal(stolen.branch, 'feat/prebound', 'existing branch never overwritten');
+
+    const renewed = store.claimIssue(free, 'alpha', 60, 'alpha', 'ses_mine', 'feat/agent-run');
+    assert.equal(renewed.branch, 'feat/agent-run', 'renew without branch keeps binding');
   });
 
   it('a child starting (claim or manual move) pulls a todo parent to in_progress — one-way, human statuses untouched', () => {

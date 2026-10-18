@@ -5,7 +5,7 @@ import { WAKE_PREFIX, STATUSES, activeClaim } from './types.js';
 import type {
   Activity, Attachment, Comment, DependencyEdge, Issue, IssuePatch, Priority, Progress, Project, Status, Stats, StoreEvent
 } from './types.js';
-import { ConflictError, NotFoundError, ValidationError } from './errors.js';
+import { ConflictError, NotFoundError, PermissionError, ValidationError } from './errors.js';
 import { configureDatabase, createDatabase } from './db.js';
 import { EventBus } from './events.js';
 import { inTransaction } from './transactions.js';
@@ -310,7 +310,7 @@ export class Store {
    * claimer's session in the same transaction (认领即绑定); an existing
    * binding is never overwritten (只绑空位，不抢绑).
    */
-  claimIssue(id: string, agent: string, ttlMinutes = 30, actor = agent, sessionId?: string): Issue {
+  claimIssue(id: string, agent: string, ttlMinutes = 30, actor = agent, sessionId?: string, branch?: string): Issue {
     if (!agent) throw new ValidationError('agent must be non-empty');
     const issue = this.issues.get(id);
     if (!issue) throw new NotFoundError(`issue not found: ${id}`);
@@ -337,6 +337,11 @@ export class Store {
       if (sessionId && !issue.sessionId) {
         this.issues.update(id, { sessionId });
         this.logActivity(id, actor, 'session-bound', sessionId);
+      }
+      // 同一规则的分支版：开工即绑当前分支，只绑空位（branch-bound 留痕）。
+      if (branch && !issue.branch) {
+        this.issues.update(id, { branch });
+        this.logActivity(id, actor, 'branch-bound', branch);
       }
       // 子任务开工 → 父任务拉起（同一聚合真相：这组工作已经启动）。
       this.flowParentOnChildStart(issue, actor);
@@ -436,6 +441,20 @@ export class Store {
     }
     if (patch.body !== undefined && !patch.body.trim()) {
       throw new ValidationError('comment body cannot be blank');
+    }
+    // 编辑权限（人类评论保护）：只有经 web 面板创建署名（author='web' 或历史
+    // 匿名空签名）的评论，才可被 web 来源编辑；agent 的一切 body 编辑被拒，
+    // agent 创建的评论谁都不可编辑（保持 agent 发言原样，避免事后篡改）。
+    // 状态推进永远放行（watch/agent 需要推进 pending → processing → processed）。
+    if (patch.body !== undefined) {
+      const mine = cur.author === 'web' || cur.author === '';
+      if (actor !== 'web' || !mine) {
+        throw new PermissionError(
+          !mine
+            ? `comment ${id} was created by agent '${cur.author}' and can never be edited`
+            : `only the web user who created comment ${id} may edit it`
+        );
+      }
     }
     const issueId = cur.issueId;
     const issueTitle = this.issues.get(issueId)?.title ?? '';

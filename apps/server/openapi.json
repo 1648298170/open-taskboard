@@ -1268,7 +1268,7 @@
       },
       "patch": {
         "operationId": "updateComment",
-        "summary": "Update a comment (edit body / move wake status; editing is pending-only)",
+        "summary": "Update a comment (web user may edit own pending comments; agent comments immutable; status moves free, reset to pending re-queues the wake)",
         "tags": [
           "comments"
         ],

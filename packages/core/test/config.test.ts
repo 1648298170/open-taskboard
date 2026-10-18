@@ -18,6 +18,7 @@ describe('resolveServerConfig', () => {
       readonly: false,
       humanDone: true,
       reviewComment: true,
+      requireSession: true,
       backupsEnabled: true,
       webhookUrls: [],
       webhookSecret: ''

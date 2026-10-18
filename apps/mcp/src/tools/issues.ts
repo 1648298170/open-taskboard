@@ -142,7 +142,7 @@ export const issueTools: ToolTable = [
   )],
   ['update_comment', defineTool(
     commentPatchSchema.extend({ id: z.string() }).strict(),
-    '编辑评论或推进其唤醒状态（body 编辑仅限 pending；status 回置 pending 即重新唤醒 agent，其余 status 取值 pending/processing/processed）',
+    '编辑评论或推进其唤醒状态（body 编辑仅限网页用户自建评论且 agent 一律不可编辑评论正文；status 任意来源可推进：pending→processing→processed，回置 pending 即重新唤醒 agent）',
     args => ensureServerOrThrow('PATCH', `/api/comments/${seg(args.id)}`, {
       ...(args.body !== undefined ? { body: args.body } : {}),
       ...(args.status !== undefined ? { status: args.status } : {}),

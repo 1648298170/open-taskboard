@@ -91,6 +91,73 @@ describe('TASKBOARD_TOKEN auth', () => {
   });
 });
 
+// --- require-session gate（开工必绑 sessionId+branch）---------------------------
+
+describe('TASKBOARD_REQUIRE_SESSION gate', () => {
+  async function gated() {
+    const app = await makeApp({ TASKBOARD_REQUIRE_SESSION: '1' });
+    await seedProject(app.app);
+    const issueId = await seedIssue(app.app);
+    return { ...app, issueId };
+  }
+
+  it('claim without sessionId/branch → 403 with a teaching message; with both → bound', async () => {
+    const t = await gated();
+    const bare = await t.app.inject({ method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json, payload: { agent: 'bot' } });
+    assert.equal(bare.statusCode, 403);
+    assert.match(bare.json<{ error: string }>().error, /sessionId/);
+
+    const bound = await t.app.inject({
+      method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json,
+      payload: { agent: 'bot', sessionId: 'ses_x1', branch: 'feat/x' }
+    });
+    assert.equal(bound.statusCode, 200);
+    assert.equal(bound.json<{ sessionId: string; branch: string }>().sessionId, 'ses_x1');
+    assert.equal(bound.json<{ branch: string }>().branch, 'feat/x');
+    t.cleanup();
+  });
+
+  it('PATCH flow to in_progress without binding → 403; with sessionId+branch in the same patch → applied', async () => {
+    const t = await gated();
+    // 先 claim 一个已绑定任务（claim 绑定后 PATCH 流转不再拦）
+    const bound = await t.app.inject({
+      method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json,
+      payload: { agent: 'bot', sessionId: 'ses_x2', branch: 'feat/y' }
+    });
+    const version = bound.json<{ version: number }>().version;
+    const unbound = await t.app.inject({ method: 'POST', url: '/api/projects/p1/issues', headers: json, payload: { title: 'fresh' } });
+    const freshId = unbound.json<{ id: string }>().id;
+
+    const bare = await t.app.inject({
+      method: 'PATCH', url: `/api/issues/${freshId}`, headers: json,
+      payload: { status: 'in_progress', version: 1 }
+    });
+    assert.equal(bare.statusCode, 403);
+
+    const withBind = await t.app.inject({
+      method: 'PATCH', url: `/api/issues/${freshId}`, headers: json,
+      payload: { status: 'in_progress', sessionId: 'ses_x3', branch: 'feat/z', version: 1 }
+    });
+    assert.equal(withBind.statusCode, 200);
+    assert.equal(withBind.json<{ sessionId: string }>().sessionId, 'ses_x3');
+    t.cleanup();
+  });
+
+  it('web actor and confirm:true are exempt; disabled env restores old behavior', async () => {
+    const t = await gated();
+    const web = await t.app.inject({ method: 'PATCH', url: `/api/issues/${t.issueId}`, headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { status: 'in_progress', version: 1 } });
+    assert.equal(web.statusCode, 200, 'web is exempt');
+
+    t.app.close();
+    const app2 = await makeApp({ TASKBOARD_REQUIRE_SESSION: '0' });
+    await seedProject(app2.app);
+    const id2 = await seedIssue(app2.app);
+    const claim2 = await app2.app.inject({ method: 'POST', url: `/api/issues/${id2}/claim`, headers: json, payload: { agent: 'bot' } });
+    assert.equal(claim2.statusCode, 200, 'opt-out restores open flow');
+    app2.cleanup();
+  });
+});
+
 // --- readonly (T6-33) ----------------------------------------------------------
 
 describe('TASKBOARD_READONLY', () => {
@@ -108,7 +175,7 @@ describe('TASKBOARD_READONLY', () => {
 
 describe('TASKBOARD_HUMAN_DONE gate', () => {
   async function gated() {
-    const app = await makeApp({ TASKBOARD_HUMAN_DONE: '1' });
+    const app = await makeApp({ TASKBOARD_HUMAN_DONE: '1', TASKBOARD_REQUIRE_SESSION: '0' });
     await seedProject(app.app);
     const issueId = await seedIssue(app.app);
     return { ...app, issueId };
@@ -281,16 +348,34 @@ describe('comment deletion over HTTP', () => {
     cleanup();
   });
 
+  it('comment edit permission: agent comments locked forever; web edits only its own', async () => {
+    const { app, cleanup } = await makeApp({});
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    const userC = (await app.inject({ method: 'POST', url: `/api/issues/${issueId}/comments`, headers: json, payload: { author: 'web', body: 'mine' } })).json<{ id: string }>().id;
+    const agentC = (await app.inject({ method: 'POST', url: `/api/issues/${issueId}/comments`, headers: { ...json, 'x-taskboard-actor': 'sisyphus' }, payload: { author: 'sisyphus', body: 'agent report' } })).json<{ id: string }>().id;
+
+    const byAgent = await app.inject({ method: 'PATCH', url: `/api/comments/${userC}`, headers: { ...json, 'x-taskboard-actor': 'sisyphus' }, payload: { body: 'sneaky' } });
+    assert.equal(byAgent.statusCode, 403);
+    const agentLocked = await app.inject({ method: 'PATCH', url: `/api/comments/${agentC}`, headers: json, payload: { body: 'rewrite' } });
+    assert.equal(agentLocked.statusCode, 403);
+    const byWeb = await app.inject({ method: 'PATCH', url: `/api/comments/${userC}`, headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { body: 'ok' } });
+    assert.equal(byWeb.statusCode, 200);
+    const statusMove = await app.inject({ method: 'PATCH', url: `/api/comments/${userC}`, headers: { ...json, 'x-taskboard-actor': 'watch' }, payload: { status: 'processing' } });
+    assert.equal(statusMove.statusCode, 200, 'status advance needs no author match');
+    cleanup();
+  });
+
   it('PATCH edits a pending comment and moves its wake status; editing locked states 400s', async () => {
     const { app, cleanup } = await makeApp({});
     await seedProject(app);
     const issueId = await seedIssue(app);
     const created = await app.inject({
-      method: 'POST', url: `/api/issues/${issueId}/comments`, headers: json, payload: { author: 'a', body: 'first' }
+      method: 'POST', url: `/api/issues/${issueId}/comments`, headers: json, payload: { author: 'web', body: 'first' }
     });
     const commentId = created.json<{ id: string }>().id;
 
-    const edited = await app.inject({ method: 'PATCH', url: `/api/comments/${commentId}`, headers: json, payload: { body: 'edited' } });
+    const edited = await app.inject({ method: 'PATCH', url: `/api/comments/${commentId}`, headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { body: 'edited' } });
     assert.equal(edited.statusCode, 200);
     assert.equal(edited.json<{ body: string }>().body, 'edited');
     assert.equal(edited.json<{ status: string }>().status, 'pending');

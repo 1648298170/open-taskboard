@@ -12,7 +12,7 @@ export const commentCommands: Record<string, Command> = {
     }
   },
   'comment edit': {
-    summary: 'Edit a comment body (pending only) or move its wake status',
+    summary: 'Edit a comment body (web-authored pending only; agent comments locked) or move its wake status',
     usage: 'comment edit COMMENT_ID --body TEXT [--status pending|processing|processed] | --status S',
     async run(ctx) {
       const { api, flags, rest } = ctx;
