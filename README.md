@@ -172,7 +172,3 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 - 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE，`@agent` 开头的评论按通道优先级唤醒——TUI 注入（`--tui-url` 指向 opencode serve，指令文本进入附着的 TUI 输入框，人工回车提交，同会话全上下文）→ 绑定会话 v2 prompt 注入（`--opencode`）→ headless spawn（`--exec`/`--model` 兜底，全新会话）；`--on` 可改唤醒前缀
 - SSE 实时刷新（Web 多端 + 跨 agent 工具共享同一块板；25s 心跳保活，断线指数退避重连 + 全量兜底拉取）
 - LAN 共享（`TASKBOARD_HOST=0.0.0.0`）、Bearer 令牌认证、只读模式、人工 done 门禁、webhook 事件转发
-
-## Legacy（已清除）
-
-历史单包版本（根部 `src/`、`web/`、根部 `vite.config.ts`/`tsconfig.json`、`packages/{server,cli,mcp}/`）已物理删除，不再存在于仓库中。当前结构仅保留 `apps/` + `packages/core` + `skills/`。
