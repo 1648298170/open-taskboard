@@ -34,6 +34,8 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
   const [desc, setDesc] = useState('');
   const [editingDesc, setEditingDesc] = useState(false);
   const [comment, setComment] = useState('');
+  // v0.4: 评论删除两步内联确认——✕ 点击后变「确认删除」，3s 不点自动还原（无弹窗）。
+  const [confirmingComment, setConfirmingComment] = useState<string | null>(null);
   // v0.4: mention 候选浮层 —— floating-ui 定位（top-start，翻转+防溢出）。
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const mentionRef = useRef<HTMLSpanElement>(null);
@@ -370,15 +372,24 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
               {/* v0.4: 头行（作者+删除）与正文分层——正文独立整行，长文不再绕排 */}
               <div className="comment-head">
                 <span className="who">{c.author || 'anon'}</span>
-                <button className="icon-btn dep-remove" title="删除评论"
-                  onClick={async e => {
-                    e.stopPropagation();
-                    if (!await confirmDialog({ title: '删除这条评论？', danger: true, confirmText: '删除' })) return;
-                    try {
-                      await api_.deleteComment(c.id);
-                      onChanged(); await load();
-                    } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-                  }}>✕</button>
+                {confirmingComment === c.id ? (
+                  <button className="btn tiny danger" title="再次点击确认删除"
+                    onClick={async e => {
+                      e.stopPropagation();
+                      setConfirmingComment(null);
+                      try {
+                        await api_.deleteComment(c.id);
+                        onChanged(); await load();
+                      } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+                    }}>确认删除</button>
+                ) : (
+                  <button className="icon-btn dep-remove" title="删除评论"
+                    onClick={e => {
+                      e.stopPropagation();
+                      setConfirmingComment(c.id);
+                      setTimeout(() => setConfirmingComment(cur => cur === c.id ? null : cur), 3000);
+                    }}>✕</button>
+                )}
               </div>
               <Markdown src={c.body} />
             </li>))
