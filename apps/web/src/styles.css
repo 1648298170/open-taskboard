@@ -431,6 +431,8 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 .new-dialog h2 { margin: 0 0 14px; font-size: 14px; letter-spacing: .1em; }
 .new-dialog label { display: block; font-size: 11px; color: var(--ink-dim); margin-bottom: 10px; }
 .new-dialog input, .new-dialog textarea, .new-dialog select { width: 100%; margin-top: 4px; font-size: 13px; }
+/* 自绘下拉是 button 元素，匹配不到上面的原生 select 规则——margin-top 需单独补齐。 */
+.new-dialog .tb-select { margin-top: 4px; }
 .new-dialog .row { display: flex; gap: 10px; } .new-dialog .row label { flex: 1; min-width: 0; }
 /* 自绘下拉与 input 同满宽 + caret 贴右 —— 消除「优先级/分支」不对称。 */
 .new-dialog .row .tb-select { width: 100%; justify-content: space-between; padding: 5px 8px; font-size: 13px; }
