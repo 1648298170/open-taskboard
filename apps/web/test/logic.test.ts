@@ -219,5 +219,8 @@ describe('mention 补全纯逻辑', () => {
     assert.equal(applyMention('看看 @ag', '@agent'), '看看 @agent ');
     assert.equal(applyMention('@', '@agent'), '@agent ');
     assert.equal(applyMention('正文 @agent', '@agent'), '正文 @agent ');
+    assert.equal(applyMention('@ ', '@agent'), '@agent ', '尾随空格不阻断替换');
+    assert.equal(applyMention('@ag  ', '@agent'), '@agent ');
+    assert.equal(applyMention('  @', '@agent'), '@agent ');
   });
 });

@@ -20,7 +20,7 @@ export function nextHi(hi: number, len: number, dir: 1 | -1): number {
   return ((hi + dir) % len + len) % len;
 }
 
-/** 候选应用到输入框后的新值：替换行内 @fragment，尾部补空格。 */
+/** 候选应用到输入框后的新值：触发条件保证了整个输入就是 @mention（允许首尾空白），替换后补空格。 */
 export function applyMention(comment: string, candidateValue: string): string {
-  return comment.replace(/@([\w-]*)$/, `${candidateValue} `);
+  return `${comment.trim().replace(/@[\w-]*$/, candidateValue)} `;
 }

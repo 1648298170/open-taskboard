@@ -443,12 +443,14 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
       }}>
         <textarea ref={commentInputRef} rows={2} value={comment}
           onChange={e => setComment(e.target.value)}
+          onBlur={() => { if (mentionOpen) setMentionDismissed(true); }}
           onInput={e => {
             const el = e.currentTarget;
             el.style.height = 'auto';
             el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
           }}
           onKeyDown={e => {
+            if (e.nativeEvent.isComposing) return; // IME 组合中不抢键（Enter 是组词提交）
             if (mentionOpen) {
               e.stopPropagation();
               if (e.key === 'ArrowDown') { e.preventDefault(); setMentionHi(h => nextHi(h, mentionHits.length, 1)); return; }
