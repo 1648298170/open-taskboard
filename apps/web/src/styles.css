@@ -39,7 +39,10 @@
   color-scheme: light;
 }
 * { box-sizing: border-box; }
-html, body, #root { min-height: 100vh; }
+/* v0.4: 应用壳布局 —— 整页不滚动，顶栏/工具栏常驻，看板区与各列独立滚动
+   （kanban 标准形态：done 堆高时其他列不被连坐）。 */
+html, body { height: 100%; overflow: hidden; }
+#root { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
   font-family: var(--mono); font-size: 13.5px; line-height: 1.55;
@@ -101,7 +104,7 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 /* ---- toolbar (filter / sort) ---- */
 .toolbar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 12px 22px 0;
+  padding: 12px 22px 0; flex: none;
 }
 .toolbar-search { width: 220px; }
 .toolbar select { padding: 4px 6px; font-size: 12px; }
@@ -181,10 +184,11 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 /* ---- board ---- */
 .board {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
-  padding: 18px 22px 40px; align-items: start;
+  padding: 18px 22px 14px; align-items: stretch;
+  flex: 1 1 0; min-height: 0; overflow: hidden;
 }
-/* T5-27: 泳道布局 —— board 退化为纵向容器，每条泳道自带四列网格。 */
-.board.grouped { display: block; }
+/* 泳道布局 —— board 区独立纵向滚动（泳道纵向分区，列不单独滚） */
+.board.grouped { display: block; flex: 1 1 0; min-height: 0; overflow-y: auto; }
 .lane { margin-bottom: 26px; }
 .lane-title {
   margin: 0 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line);
@@ -198,6 +202,7 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 .column {
   background: var(--bg-raised); border: 1px solid var(--line); border-radius: 4px;
   min-height: 200px; padding: 10px;
+  display: flex; flex-direction: column; min-height: 0; height: 100%;
 }
 .column.drag-over { border-color: var(--accent-dim); background: var(--drop-bg); }
 .column h2 {
@@ -209,7 +214,7 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 .dot.in_review { background: var(--in-review); } .dot.done { background: var(--done); }
 .count { margin-left: auto; color: var(--ink-dim); }
 
-.cards { display: flex; flex-direction: column; gap: 8px; }
+.cards { display: flex; flex-direction: column; gap: 8px; flex: 1 1 0; min-height: 0; overflow-y: auto; padding-right: 2px; }
 .column-empty {
   color: var(--ink-dim); font-size: 11.5px; text-align: center;
   padding: 18px 0; border: 1px dashed var(--line); border-radius: 3px; opacity: .8;
@@ -429,10 +434,11 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 
 /* ---- T7-37: 轻量时间线（甘特 lite） ---- */
 .timeline {
-  margin: 16px 22px 40px; padding: 12px 14px;
+  margin: 16px 22px 14px; padding: 12px 14px;
   border: 1px solid var(--line); border-radius: 4px;
   background: var(--bg-raised);
   animation: card-in .2s ease;
+  flex: 1 1 0; min-height: 0; overflow: auto;
 }
 .timeline-empty {
   margin: 20px 22px 40px; padding: 26px; text-align: center;
