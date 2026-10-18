@@ -548,6 +548,29 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
   display: inline-flex; gap: 6px;
 }
 
+/* ---- v0.4: 自定义下拉（listbox，floating-ui 定位） ---- */
+.tb-select {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%;
+  background: var(--bg-deep); border: 1px solid var(--line); border-radius: 3px;
+  color: var(--ink); padding: 4px 8px; font: inherit; font-size: 12px;
+  cursor: pointer; text-align: left;
+}
+.tb-select-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-select-caret { color: var(--ink-dim); font-size: 10px; flex: none; }
+.tb-select-panel {
+  position: fixed; z-index: 60;
+  min-width: 140px; max-height: 300px; overflow: auto;
+  background: var(--bg-raised); border: 1px solid var(--line); border-radius: 3px;
+  box-shadow: 0 12px 32px #000a; padding: 4px; display: grid; gap: 2px;
+}
+.tb-select-option { padding: 5px 8px; border-radius: 3px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tb-select-option.hi { background: var(--accent); color: var(--accent-ink); }
+.tb-select-option.selected { font-weight: 600; }
+.tb-select-option.selected.hi { color: var(--accent-ink); }
+.meta-row > .tb-select { flex: 1 1 130px; min-width: 0; }
+.dep-picker .tb-select { width: 100%; justify-content: space-between; }
+
 /* ---- v0.4: 进行中视觉强调（借鉴 dashi 琥珀脉冲）+ 子任务 ◐ 三态点阵 ---- */
 .dot.in_progress { animation: pulse-in-progress 1.6s ease-in-out infinite; }
 @keyframes pulse-in-progress {

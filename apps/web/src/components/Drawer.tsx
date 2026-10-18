@@ -3,6 +3,7 @@ import { computePosition, flip, shift } from '@floating-ui/dom';
 import { activeClaim, api_, Commit, GitRefs, Issue, IssueDetail, PRIORITIES, Status } from '../api';
 import { Markdown } from '../markdown';
 import { confirmDialog, promptDialog } from './dialogs';
+import { Select } from './Select';
 
 /** ISO → "MM-DD HH:mm"（活动时间线用）。 */
 const fmtWhen = (iso: string): string =>
@@ -121,12 +122,10 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
         {detail.title}
       </h2>
       <div className="meta-row">
-        <select value={detail.status} onChange={e => void patch({ status: e.target.value as Status })}>
-          {statuses.map(s => <option key={s}>{s}</option>)}
-        </select>
-        <select value={detail.priority} onChange={e => void patch({ priority: e.target.value as IssueDetail['priority'] })}>
-            {PRIORITIES.map(p => <option key={p}>{p}</option>)}
-        </select>
+        <Select value={detail.status} onChange={v => void patch({ status: v as Status })}
+          options={statuses.map(st => ({ value: st, label: st }))} />
+        <Select value={detail.priority} onChange={v => void patch({ priority: v as IssueDetail['priority'] })}
+            options={PRIORITIES.map(pr => ({ value: pr, label: pr }))} />
         {/* 负责人 / 标签：与分支回退输入同款模式（defaultValue + 失焦提交），
             此前这两个字段只能经 CLI/MCP 修改，面板上看得到改不了。 */}
         <input title="负责人" placeholder="负责人" defaultValue={detail.assignee}
@@ -140,26 +139,22 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
         {/* T2-8: 有 git-refs 数据时分支用下拉（保留当前值即使不在列表中），
             拉不到数据回退为原文本输入；改动走与原输入相同的乐观锁 patch。 */}
         {refs && refs.branches.length > 0 ? (
-          <select title="分支" value={detail.branch}
-            onChange={e => { if (e.target.value !== detail.branch) void patch({ branch: e.target.value }); }}>
-            <option value="">分支 —</option>
-            {detail.branch && !refs.branches.includes(detail.branch) &&
-              <option value={detail.branch}>{detail.branch}</option>}
-            {refs.branches.map(b => <option key={b} value={b}>{b}</option>)}
-          </select>
+          <Select title="分支" value={detail.branch}
+            onChange={v => { if (v !== detail.branch) void patch({ branch: v }); }}
+            options={[{ value: '', label: '分支 —' },
+              ...(detail.branch && !refs.branches.includes(detail.branch) ? [{ value: detail.branch, label: detail.branch }] : []),
+              ...refs.branches.map(b => ({ value: b, label: b }))]} />
         ) : (
           <input placeholder="分支" defaultValue={detail.branch}
             onBlur={e => { if (e.target.value !== detail.branch) void patch({ branch: e.target.value }); }} />
         )}
         {/* T2-8: 工作树字段，同样的下拉/回退模式（值为 worktree 名称）。 */}
         {refs && refs.worktrees.length > 0 ? (
-          <select title="工作树" value={detail.worktree}
-            onChange={e => { if (e.target.value !== detail.worktree) void patch({ worktree: e.target.value }); }}>
-            <option value="">工作树 —</option>
-            {detail.worktree && !refs.worktrees.some(w => w.name === detail.worktree) &&
-              <option value={detail.worktree}>{detail.worktree}</option>}
-            {refs.worktrees.map(w => <option key={w.path} value={w.name} title={w.path}>{w.name}</option>)}
-          </select>
+          <Select title="工作树" value={detail.worktree}
+            onChange={v => { if (v !== detail.worktree) void patch({ worktree: v }); }}
+            options={[{ value: '', label: '工作树 —' },
+              ...(detail.worktree && !refs.worktrees.some(w => w.name === detail.worktree) ? [{ value: detail.worktree, label: detail.worktree }] : []),
+              ...refs.worktrees.map(w => ({ value: w.name, label: w.name }))]} />
         ) : (
           <input placeholder="工作树" defaultValue={detail.worktree}
             onBlur={e => { if (e.target.value !== detail.worktree) void patch({ worktree: e.target.value }); }} />
@@ -304,28 +299,27 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
       {/* v0.4: 依赖选择器 —— 下拉选择后立即建边；「手动输入 ID…」保留原 prompt 回退。
           候选：本项目未完成任务，排除自身与已存在的边（双向）。 */}
       <div className="dep-picker">
-        <select value="" onChange={e => {
-          const v = e.target.value;
-          if (!v) return;
-          if (v === '__manual__') {
-            void (async () => {
-              const depId = await promptDialog({ title: '被哪个任务阻塞？', placeholder: '输入任务 ID，如 ab12cd34' });
-              if (!depId) return;
-              await addDep(depId);
-            })();
-            return;
-          }
-          void addDep(v);
-        }}>
-          <option value="">＋ 添加依赖（选择任务…）</option>
-          {issues
-            .filter(i => i.id !== detail.id
-              && i.status !== 'done'
-              && !(detail.blockedBy ?? []).includes(i.id)
-              && !(detail.blocks ?? []).includes(i.id))
-            .map(c => <option key={c.id} value={c.id}>#{c.id} {c.title} [{c.status}]</option>)}
-          <option value="__manual__">手动输入 ID…</option>
-        </select>
+        <Select value="" placeholder="＋ 添加依赖（选择任务…）"
+          onChange={v => {
+            if (v === '__manual__') {
+              void (async () => {
+                const depId = await promptDialog({ title: '被哪个任务阻塞？', placeholder: '输入任务 ID，如 ab12cd34' });
+                if (!depId) return;
+                await addDep(depId);
+              })();
+              return;
+            }
+            void addDep(v);
+          }}
+          options={[
+            ...issues
+              .filter(i => i.id !== detail.id
+                && i.status !== 'done'
+                && !(detail.blockedBy ?? []).includes(i.id)
+                && !(detail.blocks ?? []).includes(i.id))
+              .map(c => ({ value: c.id, label: `#${c.id} ${c.title} [${c.status}]` })),
+            { value: '__manual__', label: '手动输入 ID…' }
+          ]} />
       </div>
       <ul className="deps">
         {(() => {

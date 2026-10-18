@@ -4,6 +4,7 @@ import { Board, buildBlockedByMap, flattenCardOrder, GroupBy, todayStr } from '.
 import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
 import { confirmDialog, promptDialog } from './components/dialogs';
+import { Select } from './components/Select';
 import { Drawer } from './components/Drawer';
 import { NewIssueDialog } from './components/NewIssueDialog';
 import { StatsPanel } from './components/StatsPanel';
@@ -394,9 +395,8 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
         <div className="controls">
           <label className="field">
             <span>project</span>
-            <select value={projectId ?? ''} onChange={e => { setProjectId(e.target.value); closeDrawer(); }}>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
-            </select>
+            <Select ariaLabel="项目" value={projectId ?? ''} onChange={v => { setProjectId(v); closeDrawer(); }}
+              options={projects.map(p => ({ value: p.id, label: `${p.name} (${p.id})` }))} />
           </label>
           {/* v0.4: 项目管理 —— 新建对话框；删除需输入项目 id 确认（防误删）。 */}
           <button className="icon-btn" aria-label="新建项目" title="新建项目"
@@ -441,14 +441,10 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
       <div className="toolbar">
         <input ref={searchInputRef} className="toolbar-search" placeholder="搜索标题/描述…" value={filters.text}
           onChange={e => setFilters(f => ({ ...f, text: e.target.value }))} />
-        <select value={filters.assignee} onChange={e => setFilters(f => ({ ...f, assignee: e.target.value }))}>
-          <option value="">全部</option>
-          {assigneeOptions.map(a => <option key={a} value={a}>{a}</option>)}
-        </select>
-        <select value={filters.label} onChange={e => setFilters(f => ({ ...f, label: e.target.value }))}>
-          <option value="">全部</option>
-          {labelOptions.map(l => <option key={l} value={l}>{l}</option>)}
-        </select>
+        <Select title="按负责人过滤" value={filters.assignee} onChange={v => setFilters(f => ({ ...f, assignee: v }))}
+          options={[{ value: '', label: '全部' }, ...assigneeOptions.map(a => ({ value: a, label: a }))]} />
+        <Select title="按标签过滤" value={filters.label} onChange={v => setFilters(f => ({ ...f, label: v }))}
+          options={[{ value: '', label: '全部' }, ...labelOptions.map(l => ({ value: l, label: l }))]} />
         {/* v0.4: 逾期 / 今日截止 chip —— 与文本/负责人/标签过滤天然可叠加。 */}
         <button type="button" title="截止日期已过且未完成"
           className={`btn tiny${filters.due === 'overdue' ? ' active' : ''}`}
@@ -457,11 +453,8 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           className={`btn tiny${filters.due === 'today' ? ' active' : ''}`}
           onClick={() => setFilters(f => ({ ...f, due: f.due === 'today' ? '' : 'today' }))}>今日截止</button>
         {/* T5-27: 泳道分组维度。 */}
-        <select title="分组" value={groupBy} onChange={e => setGroupBy(e.target.value as GroupBy)}>
-          <option value="none">无</option>
-          <option value="assignee">按负责人</option>
-          <option value="label">按标签</option>
-        </select>
+        <Select title="分组" value={groupBy} onChange={v => setGroupBy(v as GroupBy)}
+          options={[{ value: 'none', label: '无' }, { value: 'assignee', label: '按负责人' }, { value: 'label', label: '按标签' }]} />
         {/* T5-26: 批量模式开关。 */}
         <button type="button" className={`btn tiny${batchMode ? ' active' : ''}`}
           onClick={() => { setBatchMode(b => !b); setSelected(new Set()); }}>批量模式</button>

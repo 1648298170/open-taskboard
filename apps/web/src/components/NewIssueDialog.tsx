@@ -1,4 +1,5 @@
 import { FormEvent, useState } from 'react';
+import { Select } from './Select';
 import { api_, PRIORITIES, Priority } from '../api';
 
 export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }: {
@@ -9,6 +10,7 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
   onError: (msg: string) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [priority, setPriority] = useState<Priority>('medium');
   if (!open) return null;
 
   const submit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
@@ -21,7 +23,7 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
       const created = await api_.createIssue(projectId, {
         title: String(f.get('title')).trim(),
         parentId: parent || null,
-        priority: f.get('priority') as Priority,
+        priority,
         branch: String(f.get('branch') ?? '').trim(),
         description: String(f.get('description') ?? '')
       });
@@ -35,6 +37,7 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
         }
       }
       form.reset();
+      setPriority('medium');
       setError(null);
       onClose();
       onCreated(parent || undefined);
@@ -52,9 +55,8 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
         <label>父任务 ID（可选，留空为顶层任务）<input name="parent" /></label>
         <div className="row">
           <label>优先级
-            <select name="priority" defaultValue="medium">
-              {PRIORITIES.map(p => <option key={p}>{p}</option>)}
-            </select>
+            <Select value={priority} onChange={v => setPriority(v as Priority)}
+              options={PRIORITIES.map(p => ({ value: p, label: p }))} />
           </label>
           <label>分支（可选）<input name="branch" /></label>
         </div>
