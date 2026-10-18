@@ -87,21 +87,27 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
     return () => { stale = true; };
   }, [projectId, commitRef]);
 
-  if (loadError) {
+  // v0.4: 三个状态（加载中/错误/详情）共用同一 aside 骨架——结构稳定，
+  // React 复用元素不重挂，杜绝 drawer-in 动画重播造成的闪烁。
+  const head = (
+    <div className="drawer-head">
+      <span className="issue-id">#{issueId}{detail ? ` · v${detail.version}` : ' · 加载中'}</span>
+      <button className="icon-btn" onClick={onClose}>✕</button>
+    </div>
+  );
+  if (loadError || !detail) {
     return (
       <>
         <div className="drawer-backdrop" onClick={onClose} />
         <aside className="drawer">
-          <div className="drawer-head">
-            <span className="issue-id">#{issueId}</span>
-            <button className="icon-btn" onClick={onClose}>✕</button>
-          </div>
-          <p style={{ color: 'var(--danger)' }}>加载失败：{loadError}</p>
+          {head}
+          {loadError
+            ? <p style={{ color: 'var(--danger)', padding: '12px 4px' }}>加载失败：{loadError}</p>
+            : <p style={{ color: 'var(--ink-dim)', padding: '12px 4px' }}>加载中…</p>}
         </aside>
       </>
     );
   }
-  if (!detail) return <aside className="drawer">加载中…</aside>;
 
   const patch = async (body: Partial<IssueDetail>): Promise<void> => {
     try {
