@@ -57,6 +57,7 @@ export default function App() {
   const [projCreateOpen, setProjCreateOpen] = useState(false);
   const [projName, setProjName] = useState('');
   const [projId, setProjId] = useState('');
+  const [projWakePort, setProjWakePort] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
   // v0.4: 旧标签页检测 —— SPA 部署后旧标签页继续跑旧 bundle（多次坑用户的根源）。
   // 周期比对服务器最新 bundle 与当前运行版本，不一致则提示刷新。
@@ -591,12 +592,15 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
               const name = projName.trim();
               if (!name) return;
               const id = projId.trim();
+              const port = projWakePort.trim();
+              if (port && !/^\d{1,5}$/.test(port)) { showToast('✗ 唤醒端口须为 1-65535 的数字'); return; }
+              const wakeChannel = port ? `http://127.0.0.1:${port}` : undefined;
               try {
-                const p = await api_.createProject(id ? { id, name } : { name });
+                const p = await api_.createProject({ ...(id ? { id } : {}), name, ...(wakeChannel ? { wakeChannel } : {}) });
                 setProjCreateOpen(false);
                 setProjects(prev => [...prev, p]);
                 setProjectId(p.id);
-                showToast(`已创建项目 ${p.id}`);
+                showToast(`已创建项目 ${p.id}${p.wakeChannel ? `（唤醒 → ${p.wakeChannel}）` : ''}`);
               } catch (err) { showToast(`✗ ${(err as Error).message}`); }
             }}>
             <h2>新建项目</h2>
@@ -604,6 +608,8 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
               onChange={e => setProjName(e.target.value)} />
             <input style={{ marginTop: 8 }} value={projId} placeholder="id（可选，留空自动生成）"
               onChange={e => setProjId(e.target.value)} />
+            <input style={{ marginTop: 8 }} value={projWakePort} inputMode="numeric" placeholder="唤醒端口（可选，选填后 @agent 评论直接送达该端口的 opencode 输入框）"
+              onChange={e => setProjWakePort(e.target.value)} />
             <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
               <button className="btn" type="button" onClick={() => setProjCreateOpen(false)}>取消</button>
               <button className="btn primary" type="submit">创建</button>

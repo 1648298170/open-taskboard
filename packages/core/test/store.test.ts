@@ -373,11 +373,11 @@ describe('Store.revision', () => {
 // --- (j) migrations ---------------------------------------------------------------
 
 describe('migrations', () => {
-  it('sets user_version to 9 on a fresh store (base schema + all migrations)', () => {
+  it('sets user_version to 10 on a fresh store (base schema + all migrations)', () => {
     const db = new DatabaseSync(':memory:');
     new Store('.unused', db); // configureDatabase runs schema + migrations
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(row.user_version, 9);
+    assert.equal(row.user_version, 10);
   });
 
   it('is idempotent: re-configuring an already-migrated db is a no-op', () => {
@@ -388,7 +388,7 @@ describe('migrations', () => {
     // Second Store over the same db replays configureDatabase (idempotent path).
     new Store('.unused', db);
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(row.user_version, 9);
+    assert.equal(row.user_version, 10);
     assert.ok(store.getIssue(issue.id));
   });
 });
@@ -1272,5 +1272,36 @@ describe('review regression: confirm escape-hatch schema (T7-36)', () => {
   it('restUpdateIssueSchema accepts confirm alongside status/version', () => {
     const parsed = restUpdateIssueSchema.safeParse({ status: 'done', version: 1, confirm: true });
     assert.equal(parsed.success, true);
+  });
+});
+
+// --- (l) project wake channel (data-driven watch routing) -------------------------
+
+describe('project wake_channel', () => {
+  it('create persists wakeChannel; unbound default is empty string', () => {
+    const { store } = fresh();
+    const pb = store.createProject({ id: 'pb', name: 'P-Bound', wakeChannel: 'http://127.0.0.1:4097' });
+    const pl = store.createProject({ id: 'pl', name: 'P-Loose' });
+    assert.equal(store.getProject(pb.id)!.wakeChannel, 'http://127.0.0.1:4097');
+    assert.equal(store.getProject(pl.id)!.wakeChannel, '');
+  });
+
+  it('updateProject rewrites the channel; blank name rejected', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P', wakeChannel: 'http://127.0.0.1:4096' });
+    const p = store.updateProject('p1', { wakeChannel: 'http://127.0.0.1:4099' });
+    assert.equal(p.wakeChannel, 'http://127.0.0.1:4099');
+    assert.equal(p.name, 'P');
+    assert.throws(() => store.updateProject('p1', { name: '  ' }), /blank/);
+    assert.throws(() => store.updateProject('nope', { wakeChannel: 'x' }), /not found/);
+  });
+
+  it('emits project.updated whose payload has no issueId (activity stream is issue-scoped)', () => {
+    const { store, events } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    store.updateProject('p1', { wakeChannel: 'http://h:1' });
+    const upd = events.find(e => e.type === 'project.updated');
+    assert.ok(upd);
+    assert.deepEqual(upd!.payload.fields, ['wakeChannel']);
   });
 });

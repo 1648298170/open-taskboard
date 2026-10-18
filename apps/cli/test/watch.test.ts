@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, type IssueDetailLike } from '../src/commands/watch.js';
+import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor, type IssueDetailLike } from '../src/commands/watch.js';
 
 describe('makeSseParser', () => {
   it('reassembles events from split chunks', () => {
@@ -141,5 +141,17 @@ describe('wantsProject（A 方案多实例项目路由）', () => {
     assert.equal(wantsProject('demo', 'demo'), true);
     assert.equal(wantsProject('demo', 'roadmap-v0.4'), false);
     assert.equal(wantsProject('demo', null), false);
+  });
+});
+
+describe('channelFor（数据驱动 wake_channel 路由）', () => {
+  it('项目绑定优先于 --tui-url 兜底', () => {
+    assert.equal(channelFor('http://127.0.0.1:4097', 'http://127.0.0.1:4096'), 'http://127.0.0.1:4097');
+  });
+
+  it('未绑定或空绑定 → 兜底；全无 → undefined（headless）', () => {
+    assert.equal(channelFor('', 'http://f:1'), 'http://f:1');
+    assert.equal(channelFor(null, 'http://f:1'), 'http://f:1');
+    assert.equal(channelFor('', undefined), undefined);
   });
 });

@@ -3,19 +3,42 @@ import { need, seg, type Command } from './registry.js';
 export const projectCommands: Record<string, Command> = {
   'project create': {
     summary: 'Create a project',
-    usage: 'project create --name NAME [--id ID]',
+    usage: 'project create --name NAME [--id ID] [--wake-port PORT]',
     async run(ctx) {
       const { api, flags } = ctx;
-      need(!!flags.name, 'project create --name NAME [--id ID]');
-      const p = await api('POST', '/api/projects', { id: flags.id, name: flags.name, workspacePath: flags['workspace-path'] ?? '' });
-      console.log(`created project ${p.id} (${p.name})`);
+      need(!!flags.name, 'project create --name NAME [--id ID] [--wake-port PORT]');
+      const port = String(flags['wake-port'] ?? '').trim();
+      const p = await api('POST', '/api/projects', {
+        id: flags.id, name: flags.name, workspacePath: flags['workspace-path'] ?? '', ...(port ? { wakeChannel: `http://127.0.0.1:${port}` } : {}),
+      });
+      console.log(`created project ${p.id} (${p.name})${p.wakeChannel ? ` — wake → ${p.wakeChannel}` : ''}`);
+      if (!p.wakeChannel) return;
+      console.log(`opencode serve --port ${port} &                # 常驻一次`);
+      console.log(`opencode attach ${p.wakeChannel}   # 日常唯一命令`);
+    }
+  },
+  'project set': {
+    summary: 'Update project name / wake channel binding',
+    usage: 'project set --id ID [--name NAME] [--wake-port PORT] [--wake-port 0 TO CLEAR]',
+    async run(ctx) {
+      const { api, flags } = ctx;
+      need(!!flags.id, 'project set --id ID [--name NAME] [--wake-port PORT]');
+      const body: { name?: string; wakeChannel?: string } = {};
+      if (flags.name) body.name = String(flags.name);
+      if (flags['wake-port'] !== undefined) {
+        const raw = String(flags['wake-port']).trim();
+        body.wakeChannel = raw === '0' || raw === '-' ? '' : `http://127.0.0.1:${raw}`;
+      }
+      if (Object.keys(body).length === 0) throw new Error('nothing to update: pass --name and/or --wake-port');
+      const p = await api('PATCH', `/api/projects/${flags.id}`, body);
+      console.log(`updated ${p.id}: ${p.name} — wake → ${p.wakeChannel || '(unbound)'}`);
     }
   },
   'project list': {
     summary: 'List projects',
     usage: 'project list',
     async run(ctx) {
-      for (const p of await ctx.api('GET', '/api/projects')) console.log(`${p.id}  ${p.name}  ${p.workspacePath}`);
+      for (const p of await ctx.api('GET', '/api/projects')) console.log(`${p.id}  ${p.name}  ${p.workspacePath}${p.wakeChannel ? `  wake→${p.wakeChannel}` : ''}`);
     }
   },
   'project refs': {

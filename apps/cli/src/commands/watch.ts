@@ -50,8 +50,17 @@ export function shouldWake(evt: WakePayload, prefix: string): boolean {
 }
 
 /**
- * 项目路由：多实例唤醒隔离的判定。SSE comment.created 载荷只带 issueId，
- * projectId 由调用方按需解析（GET /api/issues/:id，带缓存）后传入。
+ * 项目级通道决议：项目绑定的 wake_channel 优先，其次 watch 的 --tui-url 兜底，
+ * 两者皆无 → undefined（headless 通道）。
+ */
+export function channelFor(projectChannel: string | null, fallback: string | undefined): string | undefined {
+  const bound = projectChannel && projectChannel.trim() !== '' ? projectChannel.trim() : undefined;
+  return bound ?? fallback;
+}
+
+/**
+ * 项目路由：可选的作用域过滤（--project）。项目未解析出（null）不唤醒——
+ * 宁可漏也不能误投到别的项目管道。projectId 由调用方按需解析后传入。
  */
 export function wantsProject(filter: string | undefined, projectId: string | null): boolean {
   return !filter || projectId === filter;
@@ -160,14 +169,13 @@ export const watchCommand: Command = {
       opencodeBase ? `session(${opencodeBase})` : null,
       `spawn(${execParts.join(' ')})`
     ].filter(Boolean).join(' → ');
-    console.log(`watch: ${base()}/api/events — wake on "${prefix}…" → ${channels}${projectFilter ? ` [project ${projectFilter}]` : ''}`);
+    console.log(`watch: ${base()}/api/events — wake on "${prefix}…" → ${channels}${projectFilter ? ` [project ${projectFilter}]` : ''} — 项目按其 wake_channel 数据绑定投递${tuiBase ? `（--tui-url ${tuiBase} 兜底未绑定项目）` : ''}`);
 
-    // 单实例互斥（D5）与断线补拉窗口（D2）。锁名按 server 端口 + 通道端口 + 项目
-    // 归一（不落 cwd）：同一 server 上多实例分管道（A 方案各有 --project/--tui-url）
-    // 是合法并存，只有完全同通道的第二实例才该被拦。
+    // 单实例互斥（D5）与断线补拉窗口（D2）。锁名按 server 端口 + 作用域归一：
+    // 数据驱动路由后 tui 端口是输出而非身份，通道全由数据决定——同一 server
+    // 同一项目作用域的第二实例才该被拦。
     const serverPort = new URL(base()).port || '80';
-    const tuiPort = tuiBase ? new URL(tuiBase).port || '80' : 'n';
-    const lockId = [serverPort, tuiPort, projectFilter ?? 'all'].join('-').replace(/[^A-Za-z0-9.-]/g, '_');
+    const lockId = [serverPort, projectFilter ?? 'all'].join('-').replace(/[^A-Za-z0-9.-]/g, '_');
     const lock = acquireWatchLock(path.join(os.homedir(), '.taskboard', `watch-${lockId}.lock`));
     if (!lock.ok) {
       console.log(`watch: 另一实例运行中 (pid ${lock.holder}) — 同通道重复实例退出，避免双注入`);
@@ -177,6 +185,21 @@ export const watchCommand: Command = {
     const processed = new Set<string>();
     // SSE 载荷不带 projectId——按需 GET 详情解析，按 issue 缓存 promise 防并发重复请求。
     const projectCache = new Map<string, Promise<string | null>>();
+    // 通道缓存：projectId → 项目 wake_channel。project.created/updated 事件即清空，
+    // 下一条唤醒重新拉取（改绑定无需重启 watch）。
+    const channelCache = new Map<string, Promise<string | null>>();
+    const resolveChannel = (projectId: string | null): Promise<string | null> => {
+      if (!projectId) return Promise.resolve(null);
+      let cached = channelCache.get(projectId);
+      if (!cached) {
+        const headers: Record<string, string> = token() ? { Authorization: `Bearer ${token()}` } : {};
+        cached = fetch(`${base()}/api/projects/${encodeURIComponent(projectId)}`, { headers })
+          .then(r => r.ok ? (r.json() as Promise<{ wakeChannel?: string }>).then(d => d.wakeChannel ?? null) : null)
+          .catch(() => null);
+        channelCache.set(projectId, cached);
+      }
+      return cached;
+    };
     const resolveProject = (issueId: string): Promise<string | null> => {
       let cached = projectCache.get(issueId);
       if (!cached) {
@@ -196,13 +219,14 @@ export const watchCommand: Command = {
         const headers: Record<string, string> = token() ? { Authorization: `Bearer ${token()}` } : {};
         const pr = await fetch(`${base()}/api/projects`, { headers });
         if (!pr.ok) return;
-        const allProjects = (await pr.json()) as Array<{ id: string }>;
+        const allProjects = (await pr.json()) as Array<{ id: string; wakeChannel?: string }>;
         const projects = projectFilter ? allProjects.filter(p => p.id === projectFilter) : allProjects;
         let found = 0;
         for (const p of projects) {
           const lr = await fetch(`${base()}/api/projects/${encodeURIComponent(p.id)}/issues?includeDone=1`, { headers });
           if (!lr.ok) continue;
           const issues = (await lr.json()) as Array<{ id: string }>;
+          const backfillChannel = ('wakeChannel' in p ? String(p.wakeChannel) : '') || '';
           for (const it of issues) {
             const dr = await fetch(`${base()}/api/issues/${encodeURIComponent(it.id)}`, { headers });
             if (!dr.ok) continue;
@@ -211,7 +235,8 @@ export const watchCommand: Command = {
               processed.add(w.key);
               found++;
               console.log(`watch: 补拉唤醒 #${w.issueId}: ${w.instruction}`);
-              queue = queue.then(() => executeWake(w.issueId, buildWakePrompt(w.issueId, w.issueTitle, w.instruction)))
+              const backfillTui = channelFor(backfillChannel, tuiBase);
+              queue = queue.then(() => executeWake(w.issueId, buildWakePrompt(w.issueId, w.issueTitle, w.instruction), backfillTui))
                 .catch(err => console.error(`watch: 补拉唤醒失败: ${(err as Error).message}`));
             }
           }
@@ -223,18 +248,19 @@ export const watchCommand: Command = {
     };
 
     let queue: Promise<void> = Promise.resolve();
-    const executeWake = async (issueId: string, prompt: string): Promise<void> => {
+    const executeWake = async (issueId: string, prompt: string, tuiUrl?: string): Promise<void> => {
       // 通道 1：TUI 注入（附着的 TUI 输入框出现唤醒文本，人工回车提交）。
       // 同会话、全上下文、实时可见，且模型/agent 由 TUI 自身决定。
-      if (tuiBase) {
+      // tuiUrl = 项目 wake_channel（数据驱动）?? --tui-url 兜底；undefined → 跳过。
+      if (tuiUrl) {
         try {
-          const res = await fetch(`${tuiBase}/tui/append-prompt`, {
+          const res = await fetch(`${tuiUrl}/tui/append-prompt`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ text: prompt })
           });
           if (res.ok) {
-            console.log(`watch: appended wake to TUI (${tuiBase}) — 等待人工回车提交`);
+            console.log(`watch: appended wake to TUI (${tuiUrl}) — 等待人工回车提交`);
             return;
           }
           console.error(`watch: TUI append failed (HTTP ${res.status}) — 尝试下一通道`);
@@ -306,10 +332,14 @@ export const watchCommand: Command = {
             if (name !== 'change') return;
             let evt: WakePayload & { payload?: Record<string, unknown> };
             try { evt = JSON.parse(data); } catch { return; }
+            // 项目创建/改绑定/删除 → 通道缓存作废，下一条唤醒按最新绑定路由。
+            if (typeof evt.type === 'string' && evt.type.startsWith('project.')) { channelCache.clear(); return; }
             if (!shouldWake(evt, prefix)) return;
             const p = evt.payload ?? {};
             const issueId = String(p.issueId ?? '');
-            if (projectFilter && !wantsProject(projectFilter, await resolveProject(issueId))) return;
+            const projectId = await resolveProject(issueId);
+            if (projectFilter && !wantsProject(projectFilter, projectId)) return;
+            const tuiUrl = channelFor(await resolveChannel(projectId), tuiBase);
             const issueTitle = String(p.issueTitle ?? '');
             const stripped = String(p.body ?? '').slice(prefix.length).trim();
             const key = wakeKey(issueId, String(p.body ?? ''));
@@ -318,7 +348,7 @@ export const watchCommand: Command = {
             processed.add(key);
             const by = typeof p.author === 'string' && p.author ? ` (${p.author})` : '';
             console.log(`watch: wake${by}: ${stripped}`);
-            queue = queue.then(() => executeWake(issueId, buildWakePrompt(issueId, issueTitle, stripped)))
+            queue = queue.then(() => executeWake(issueId, buildWakePrompt(issueId, issueTitle, stripped), tuiUrl))
               .catch(err => console.error(`watch: wake failed: ${(err as Error).message}`));
           });
           const decoder = new TextDecoder();

@@ -1,7 +1,7 @@
 // /api/projects routes. Store arrives via plugin options.
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { Store, ValidationError } from '@taskboard/core';
-import { createProjectSchema, z } from '@taskboard/core/schemas';
+import { createProjectSchema, projectPatchSchema, z } from '@taskboard/core/schemas';
 import { listCommits, scanGitRefs } from '../git-refs.js';
 
 interface ProjectParams { projectId: string }
@@ -24,6 +24,14 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
   app.get('/api/projects/:projectId', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
     const p = store.getProject(req.params.projectId);
     return p ?? reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
+  });
+
+  // Partial project update — name and/or the wake-channel binding. No version
+  // guard (projects have no optimistic lock); last write wins like the web UI.
+  app.patch('/api/projects/:projectId', async (req: FastifyRequest<{ Params: ProjectParams }>) => {
+    const parsed = projectPatchSchema.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    return store.updateProject(req.params.projectId, parsed.data);
   });
 
   // T2-8: branches + worktrees of the project's workspacePath. Git failures

@@ -138,6 +138,12 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
   (db: DatabaseSync) => {
     db.exec('ALTER TABLE issues ADD COLUMN session_id TEXT');
   },
+  // v9 → v10: per-project wake channel for the data-driven watch routing —
+  // TUI URL (e.g. http://127.0.0.1:4097) bound to the project; '' = unbound,
+  // falls back to the watch's own --tui-url flag, then headless.
+  (db: DatabaseSync) => {
+    db.exec("ALTER TABLE projects ADD COLUMN wake_channel TEXT NOT NULL DEFAULT ''");
+  },
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after

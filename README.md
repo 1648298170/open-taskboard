@@ -134,58 +134,46 @@ todo → in_progress → in_review → done
 不打开 TUI 也能派活：`taskboard watch` 常驻订阅看板事件，`@agent` 开头的评论按通道优先级唤醒 AI：
 
 ```bash
-taskboard watch --tui-url http://127.0.0.1:4096   # ① 指令进你 TUI 输入框（推荐：同会话全上下文，人工回车提交）
+taskboard watch --tui-url http://127.0.0.1:4096   # 兜底通道：项目未绑端口时的 @agent 送这里（可选参数）
 taskboard watch --opencode http://127.0.0.1:4096  # ② 注入任务绑定的会话（需 opencode 新版支持）
 taskboard watch                                    # ③ headless 兜底（--exec/--model 可配，全新会话）
-taskboard watch --project my-project               # 只唤醒该项目的 @agent（多实例分项目路由）
 ```
+
+**绑定即路由（推荐）**：面板「新建项目」时填「唤醒端口」，`@agent` 评论就自动送达该端口的 opencode 输入框——绑定存在项目数据里，改绑定即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`。
 
 ### 先把 opencode 终端跑起来（watch 的目的地）
 
-watch 的通道①要往 TUI 输入框塞指令，得先有在跑的 opencode 服务 + 附着它的终端界面。两种开法：
+TUI 注入需要「在跑的 opencode serve + 附着它的终端」，两种开法：
 
-**A 单实例（最简）**：终端里直接跑交互式 `opencode`（自动自带一个 server，端口看 TUI 底部状态栏），watch 的 `--tui-url` 写那个端口。
+**A 单实例（最简）**：直接跑交互式 `opencode`（自带 server，端口见 TUI 状态栏），把它绑给主项目：
 
 ```bash
-opencode                                   # 终端 1：交互式 TUI（自带 server，端口见状态栏）
-taskboard watch --tui-url http://127.0.0.1:<端口>   # 终端 2：常驻 watch
+opencode                                   # 终端 1：交互式 TUI
+# 面板建项目时填该端口，或 project set --wake-port <端口>
 ```
 
-**B 多实例（多终端接管不同项目，推荐）**：每个终端一组独立 serve + attach，端口互不相同。serve 和 watch 是**一次性部署**（起在后台、由 launchd/systemd 等常驻管理即可，本机样例：`ai.taskboard.opencode-serve*` / `ai.taskboard.watch*`plist），部署完之后**日常只需最后一步 attach**：
+**B 多实例（多终端接管不同项目，推荐）**：每终端一组 serve + attach，端口互不重复。serve 是一次性部署（交给 launchd/systemd 常驻即可），日常每终端只有一条命令：
 
 ```bash
-# ── 一次性部署（本机已通过 launchd 完成，无需再跑）──────────
-opencode serve --port 4096 &                    # 无界面 server，交给进程管理器常驻
-taskboard watch --tui-url http://127.0.0.1:4096 --project roadmap-v0.4
+# ── 一次性部署 ──────────────────────────────
+opencode serve --port 4096 &                # 无界面 server，交给进程管理器常驻
 opencode serve --port 4097 &
-taskboard watch --tui-url http://127.0.0.1:4097 --project demo
+# 面板「新建项目」填对应唤醒端口（或 taskboard project set --wake-port …）
 
-# ── 用户日常（每只终端一条命令）────────────────────────
-opencode attach http://127.0.0.1:4096            # 终端 1：roadmap 管家
-opencode attach http://127.0.0.1:4097            # 终端 2：demo 管家
+# ── 用户日常（每只终端一个 attach）──────────
+opencode attach http://127.0.0.1:4096        # 终端 1：接管绑定了 4096 的项目
+opencode attach http://127.0.0.1:4097        # 终端 2：接管绑定了 4097 的项目
 ```
 
-- attach 的端口必须对应一个**已经在跑**的 `opencode serve`（没跑会连接失败）；attach 的是"界面"，断线（Ctrl+C / 挂了）随时重 attach，serve 和 watch 不受影响
-- 唤醒时指令出现在该终端 TUI 输入框，**人工回车提交**；不想用 TUI 时去掉 watch 命令的 `--tui-url`、改加 `--exec`/`--model`（headless 通道，全新会话）
+- attach 的端口必须对应一个**已经在跑**的 `opencode serve`；attach 只是"界面"，随时断/重连，serve 挂了 watch 自动降级下一通道
+- 唤醒时指令出现在该终端 TUI 输入框，**人工回车提交**；不用 TUI 时 watch 不带 `--tui-url`、走 headless
 
-- 触发两种：任务下评论 `@agent <指令>`，或新建任务时勾选「创建后唤醒 agent 编排」
-- `--on` 可自定义唤醒前缀；通道失败自动降级（①→②→③）
-- **多终端隔离**：`opencode serve` 的 TUI 注入是广播语义——多个终端 `attach` 同一端口时，一处注入每只输入框都会收到。多终端各管各项目时，给每个 `opencode serve --port N` 配一个独立 watch（不同的 `--tui-url` + `--project`），日志也各自独立
-- 常驻部署：任何进程管理器均可（macOS launchd / systemd / pm2），启动命令就是上面一行；同一 watch（同 server/tui/项目通道）由 pid-lock 单实例保护（`~/.taskboard/watch-<server>-<tui>-<project>.lock`），重复实例不会双注入
+#### 细节备忘
 
-#### 唤醒路由怎么看：面板只有一个，端口不写死
-
-- 看板 server / 数据库 / 面板永远只有一个（默认 `http://127.0.0.1:47825`）；多实例只发生在订阅端。任务数据里**只有** `任务 → 所属 projectId`，不含任何端口/实例信息
-- 「任务带去哪个 opencode」= 每个 watch 启动参数自带的约定，收到事件后自己认领：
-
-  ```
-  面板 47825 评论 @agent → SSE 广播给所有 watch
-  watch1 --project roadmap-v0.4：任务属于 demo ≠ roadmap-v0.4 → 忽略
-  watch2 --project demo：任务属于 demo ✓ → 送达自己的 --tui-url :4097 → 终端 B 输入框
-  ```
-
-- 路由 = 项目 → watch → 端口，完全由部署配置决定：一张表记忆 `serve 端口 = attach 端口 = 该 watch 的 --tui-url 端口`，`--project` 管项目归属、与端口号无关；改路由 = 改对应 plist（或直接改命令行）后重启该 watch
-- **端口/项目/终端数量都不受限制**：`--tui-url` 接受任意 URL（含局域网另一台机器），`--project` 接受任意项目 id，锁文件名从参数自动推导；headless 通道（③）连端口都不需要。开第四只终端 = 再加一份 serve + watch 配置
+- 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47825`）；端口绑定存在**项目数据**（`wakeChannel`），`任务 → 项目 → 端口` 就完了——没有中心化的路由表
+- 通道优先级：项目 `wake_channel`（数据）→ `--tui-url`（兜底）→ 绑定会话 → headless，逐级自动降级
+- 同一 serve 端口被多终端 attach 时注入是**广播**（每窗都出现）——多终端请各用各的端口，绑定时不会串
+- 端口/项目/终端数量不受限：`wakeChannel` 是完整 URL（可绑局域网另一台机器），单实例锁按 server 端口 + 作用域自动命名字，headless 通道连端口都不需要
 
 ## 接入 agent 工具
 
@@ -256,6 +244,6 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 - 评论、活动流、标签、负责人、分支/worktree 绑定、起止日期（校验真实日历）、归档（归档父任务连带其未归档子任务）
 - 全文搜索（FTS5 trigram，标题/描述/评论，短查询退化 LIKE）、导出/导入 JSON（taskboard export/import）、统计面板（周吞吐/平均周期/贡献榜）、时间线视图、Mermaid 图渲染
 - 附件（元数据入库、正文落盘 `attachments/`，单文件 ≤10MB，每任务限额 20 个/总量 50MB 超限 400）、桌面通知、暗/亮主题、泳道分组、批量操作、j/k 键盘导航
-- 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE，`@agent` 开头的评论按通道优先级唤醒——TUI 注入（`--tui-url` 指向 opencode serve，指令文本进入附着的 TUI 输入框，人工回车提交，同会话全上下文）→ 绑定会话 v2 prompt 注入（`--opencode`）→ headless spawn（`--exec`/`--model` 兜底，全新会话）；`--on` 可改唤醒前缀；`--project` 按项目路由（多 watch 实例分项目隔离，断线重连自动补拉窗口内漏掉的 `@agent` 评论且与实时流对称去重）
+- 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE，`@agent` 开头的评论按通道优先级唤醒——项目 `wake_channel` 数据绑定（面板/CLI 建项目时填唤醒端口，改绑即时生效）→ `--tui-url` 兜底 → 绑定会话 v2 prompt 注入（`--opencode`）→ headless spawn（`--exec`/`--model` 兜底，全新会话）；`--on` 可改唤醒前缀；`--project` 可选作用域过滤（默认全项目）；断线重连自动补拉窗口内漏掉的 `@agent` 评论且与实时流对称去重
 - SSE 实时刷新（Web 多端 + 跨 agent 工具共享同一块板；25s 心跳保活，断线指数退避重连 + 全量兜底拉取）
 - LAN 共享（`TASKBOARD_HOST=0.0.0.0`）、Bearer 令牌认证、只读模式、人工 done 门禁、webhook 事件转发

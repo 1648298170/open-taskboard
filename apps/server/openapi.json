@@ -229,6 +229,50 @@
           }
         }
       },
+      "patch": {
+        "operationId": "patchProject",
+        "summary": "Update project name and/or wake-channel binding",
+        "tags": [
+          "projects"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      },
       "delete": {
         "operationId": "deleteProject",
         "summary": "Delete a project and all its issues/comments",
@@ -1646,6 +1690,10 @@
             "type": "string",
             "description": "Bound git workspace; empty string = unbound"
           },
+          "wakeChannel": {
+            "type": "string",
+            "description": "Wake channel binding (TUI URL, e.g. http://127.0.0.1:4097); empty string = unbound"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -1655,6 +1703,7 @@
           "id",
           "name",
           "workspacePath",
+          "wakeChannel",
           "createdAt"
         ],
         "additionalProperties": false
@@ -2220,11 +2269,32 @@
           },
           "workspacePath": {
             "type": "string"
+          },
+          "wakeChannel": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Wake channel binding: full TUI URL (e.g. http://127.0.0.1:4097) the data-driven watch delivers this project's @agent wakes to; omit/'' = unbound (falls back to the watch default, then headless)"
           }
         },
         "required": [
           "name"
         ],
+        "additionalProperties": false
+      },
+      "PatchProjectRequest": {
+        "type": "object",
+        "description": "PATCH /api/projects/{projectId} body (strict — unknown keys → 400)",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "wakeChannel": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Rewrite the wake binding; '' clears it (unbound)"
+          }
+        },
         "additionalProperties": false
       },
       "CreateIssueRequest": {

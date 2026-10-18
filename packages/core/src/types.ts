@@ -8,6 +8,8 @@ export interface Project {
   id: string;
   name: string;
   workspacePath: string;
+  /** TUI URL (e.g. http://127.0.0.1:4097) the watch delivers this project's wakes to; '' = unbound. */
+  wakeChannel: string;
   createdAt: string;
 }
 

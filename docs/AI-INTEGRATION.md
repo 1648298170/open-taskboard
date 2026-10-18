@@ -20,7 +20,7 @@ open-taskboard 是一个本地优先的任务看板：人类在 Web 面板上拆
 
 Claude Code 用 `.mcp.json`（`command` 为字符串数组外的对象形式），Codex 用 TOML，opencode 用 JSON——形态见 README「接入 agent 工具」。
 
-接入后你会得到这些工具：`list_projects` `create_project` `delete_project` `list_issues` `show_issue` `create_issue` `update_issue` `delete_issue` `archive_issue` `unarchive_issue` `claim_issue` `heartbeat_issue` `release_issue` `add_comment` `delete_comment` `add_issue_dependency` `remove_issue_dependency` `list_attachments` `upload_attachment` `progress` `project_stats` `ready_issues` `next_issue` `search_issues` `export_board`。
+接入后你会得到这些工具：`list_projects` `create_project` `update_project` `delete_project` `list_issues` `show_issue` `create_issue` `update_issue` `delete_issue` `archive_issue` `unarchive_issue` `claim_issue` `heartbeat_issue` `release_issue` `add_comment` `delete_comment` `add_issue_dependency` `remove_issue_dependency` `list_attachments` `upload_attachment` `progress` `project_stats` `ready_issues` `next_issue` `search_issues` `export_board`。
 
 ### 方式 B：CLI
 
@@ -71,8 +71,8 @@ taskboard next --project my-project           # 智能取下一个该做的任�
 - 你收到的唤醒 prompt 形如：`#<任务ID> <任务标题>\n<评论指令>`
 - 正确反应：读任务详情（`show_issue` + `comment list`）→ 按上面 5 步工作流执行
 - 你自己在评论里写 `@agent` 开头的内容**不会**唤醒你自己（actor 过滤由部署方配置）
-- 多终端部署（README「评论唤醒 agent」）：watch 按 `--tui-url` + `--project` 分实例路由——你只会收到自己管道里项目的 `@agent` 评论；若同一评论意外出现多次（多窗广播），只入库一次信息即可，不要重复认领
-- 路由机制备忘：看板数据只有项目归属、无端口信息；端口与项目绑定写在各 watch 的启动参数里（项目 → watch → 端口），改路由 = 改对应实例的配置，与看板本体无关
+- 多终端部署（README「评论唤醒 agent」）：watch 按项目数据里的 `wake_channel` 绑定路由（面板/CLI 建项目时绑端口）——你只会收到管道通到你端口的项目 `@agent` 评论；同一 serve 端口被多终端 attach 时注入是广播，只入库一次信息即可，不要重复认领
+- 路由机制备忘：`任务 → 项目 → wake_channel` 存在看板数据里；watch 单实例即可覆盖多项目（`--tui-url` 仅作未绑定项目的兜底，`--project` 仅作可选过滤）。改路由 = `project set --wake-port` 改绑即时生效，不用重启 watch
 
 ## 5. 状态机
 

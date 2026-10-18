@@ -15,7 +15,14 @@ export const projectTools: ToolTable = [
     createProjectSchema,
     '创建项目',
     args => ensureServerOrThrow('POST', '/api/projects', {
-      id: args.id, name: args.name, workspacePath: args.workspacePath ?? '',
+      id: args.id, name: args.name, workspacePath: args.workspacePath ?? '', ...(args.wakeChannel ? { wakeChannel: args.wakeChannel } : {}),
+    }),
+  )],
+  ['update_project', defineTool(
+    z.object({ id: z.string(), name: z.string().min(1).optional(), wakeChannel: z.string().optional() }).strict(),
+    '更新项目名称和/或唤醒通道绑定（wakeChannel 传空串清除绑定）',
+    args => ensureServerOrThrow('PATCH', `/api/projects/${args.id}`, {
+      ...(args.name ? { name: args.name } : {}), ...(args.wakeChannel !== undefined ? { wakeChannel: args.wakeChannel } : {}),
     }),
   )],
   ['project_git_refs', defineTool(
