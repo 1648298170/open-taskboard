@@ -45,7 +45,9 @@ export function shouldWake(evt: WakePayload, prefix: string): boolean {
 }
 
 export function buildWakePrompt(issueId: string, issueTitle: string, instruction: string): string {
-  return `#${issueId} ${issueTitle}\n${instruction}`;
+  return `#${issueId} ${issueTitle}\n`
+    + '[看板唤醒] 排队规则：若主进程当前有处理中的任务，先完成并收尾它，再处理本条评论；不要中断进行中的工作。\n'
+    + `指令：${instruction}`;
 }
 
 /**

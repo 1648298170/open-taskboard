@@ -53,6 +53,9 @@ describe('decideWake', () => {
 
 describe('buildWakePrompt', () => {
   it('carries issue ref and instruction', () => {
-    assert.equal(buildWakePrompt('abc123', '标题', '做这个'), '#abc123 标题\n做这个');
+    assert.equal(
+      buildWakePrompt('abc123', '标题', '做这个'),
+      `#abc123 标题\n[看板唤醒] 排队规则：若主进程当前有处理中的任务，先完成并收尾它，再处理本条评论；不要中断进行中的工作。\n指令：做这个`,
+    );
   });
 });

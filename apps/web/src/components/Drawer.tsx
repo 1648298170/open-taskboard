@@ -19,7 +19,7 @@ const humanSize = (bytes: number): string =>
       : `${bytes} B`;
 
 // 评论提及候选：与 watch 侧车默认唤醒前缀保持一致（taskboard watch --on 可改）。
-const MENTION_CANDIDATES: MentionCandidate[] = [{ value: '@agent', label: '唤醒侧车干活（Enter 选择）' }];
+const MENTION_CANDIDATES: MentionCandidate[] = [{ value: '@agent', label: '唤醒 agent 干活（主进程忙时排队：收尾当前任务后接手 · Enter 选择）' }];
 
 export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToast, onOpenIssue, issues }: {
   issueId: string;
@@ -225,11 +225,11 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
         {/* v0.4: 一键唤醒 —— UI 代发 @agent 评论（web 来源，人工触发），
             watch 捕获后把编排请求送达 agent 的 TUI 输入框。done 任务无编排意义。 */}
         {detail.status !== 'done' && (
-          <button className="btn tiny" style={{ color: 'var(--accent)' }} title="唤醒 agent 编排此任务（评论 @agent，经 watch 送达 TUI）"
+          <button className="btn tiny" style={{ color: 'var(--accent)' }} title="唤醒 agent 编排此任务（评论 @agent，经 watch 送达 TUI；主进程忙碌时会在当前任务收尾后接手）"
             onClick={async () => {
               try {
                 await api_.addComment(detail.id, 'web', '@agent 如果主进程有任务正在处理，则请先把处理中的任务完成后，再认领此任务并编排（拆解子任务、排依赖）');
-                onToast('已唤醒 agent——watch 会把请求送达 TUI 输入框，回车即开工');
+                onToast('已唤醒 agent——watch 送达 TUI；若主进程正在干活，收尾后接手本条');
                 onChanged();
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
             }}><Sparkles size={14} /> 唤醒</button>
