@@ -78,6 +78,49 @@ todo → in_progress → in_review → done
 - **删除都有二次确认**：小操作（评论/依赖边）原位两步确认，大操作（任务/批量）应用内弹窗，整个项目要手输 id
 - **每个 AI 干活都留痕**：活动流记录谁在何时做了什么；乐观锁保证多 AI 并发互不覆盖
 
+## 面板一览与功能速览
+
+**看板主视图**（暗色终端风，四列流转，各列独立滚动，顶栏/工具栏常驻）：
+
+![看板主视图](docs/screenshots/board.png)
+
+**任务抽屉**（全字段编辑、子任务、依赖、评论、附件、活动流一屏全览）：
+
+![任务抽屉](docs/screenshots/drawer.png)
+
+**拖拽流转**（跨列拖拽带浮层预览，拖父任务可整组移动）：
+
+![拖拽](docs/screenshots/drag.png)
+
+<details>
+<summary><strong>更多界面截图</strong>（新建任务 / 确认弹窗 / 自定义下拉 / 时间线 / 统计 / 快捷键）</summary>
+
+新建任务——勾选「创建后唤醒 agent 编排」可直接召唤 AI 接手：
+
+![新建任务](docs/screenshots/new-issue.png)
+
+删除等危险操作走应用内确认弹窗（带焦点陷阱与 ESC）：
+
+![确认弹窗](docs/screenshots/confirm.png)
+
+全站下拉均为自绘 listbox（键盘 ↑↓/Enter/Esc 可导航）：
+
+![自定义下拉](docs/screenshots/select.png)
+
+时间线视图 📅（甘特 lite）：
+
+![时间线](docs/screenshots/timeline.png)
+
+统计面板 📊（周吞吐/平均周期/贡献榜）：
+
+![统计](docs/screenshots/stats.png)
+
+快捷键帮助（`?` 呼出）：
+
+![快捷键](docs/screenshots/shortcuts.png)
+
+</details>
+
 ## 面板功能速览
 
 - 拖拽流转、批量模式、泳道分组（按负责人/标签）、逾期与今日截止过滤
