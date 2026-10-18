@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Comment } from '../types.js';
 
-const COMMENT_COLS = 'id, issue_id AS issueId, author, body, created_at AS createdAt';
+const COMMENT_COLS = 'id, issue_id AS issueId, author, body, status, created_at AS createdAt';
 const now = (): string => new Date().toISOString();
 const shortId = (): string => randomUUID().slice(0, 8);
 
@@ -23,6 +23,19 @@ export class CommentRepo {
     // node:sqlite returns undefined for a missing row — normalize to the
     // declared null so callers can rely on the contract.
     return (this.db.prepare(`SELECT ${COMMENT_COLS} FROM comments WHERE id = ?`).get(id) ?? null) as unknown as Comment | null;
+  }
+
+  // Partial update (body/status). Bumps the parent issue's updated_at like
+  // add()/delete() do. Caller wraps in a transaction and owns FTS/activity.
+  update(id: string, patch: { body?: string; status?: string }, issueId: string): void {
+    const sets: string[] = [];
+    const vals: (string | null)[] = [];
+    if (patch.body !== undefined) { sets.push('body = ?'); vals.push(patch.body); }
+    if (patch.status !== undefined) { sets.push('status = ?'); vals.push(patch.status); }
+    if (sets.length === 0) return;
+    vals.push(id);
+    this.db.prepare(`UPDATE comments SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    this.db.prepare('UPDATE issues SET updated_at = ? WHERE id = ?').run(now(), issueId);
   }
 
   countByAuthor(issueId: string, author: string): number {

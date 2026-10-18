@@ -1,7 +1,7 @@
 // /api/issues/:id/comments routes. Store arrives via plugin options.
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { Store, ValidationError } from '@taskboard/core';
-import { addCommentSchema, z } from '@taskboard/core/schemas';
+import { addCommentSchema, commentPatchSchema, z } from '@taskboard/core/schemas';
 
 interface IssueParams { id: string }
 interface CommentParams { commentId: string }
@@ -23,6 +23,16 @@ const commentsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
     return reply.code(201).send(store.addComment(req.params.id, parsed.data, actor));
+  });
+
+  // Partial comment update — edit the body or advance/reset the wake status.
+  // Comments have no optimistic lock (last write wins); blank-body/locked
+  // state errors surface as ValidationError → 400 via the global handler.
+  app.patch('/api/comments/:commentId', async (req: FastifyRequest<{ Params: CommentParams }>) => {
+    const parsed = commentPatchSchema.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    return store.updateComment(req.params.commentId, parsed.data, actor);
   });
 
   app.delete('/api/comments/:commentId', async (req: FastifyRequest<{ Params: CommentParams }>) => {

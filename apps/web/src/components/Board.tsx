@@ -1,4 +1,4 @@
-import { activeClaim, Issue, STATUSES, Status } from '../api';
+import { activeClaim, Issue, STATUSES, STATUS_CN, Status } from '../api';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import { useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
@@ -36,7 +36,7 @@ function Column({ status, laneIssues, boardEmpty, onOpen, onDrop, blockedByMap, 
   return (
     <section ref={setNodeRef} className={`column${isOver ? ' drag-over' : ''}`} data-status={status}>
       <h2>
-        <span className={`dot ${status}`} />{status}
+        <span className={`dot ${status}`} />{STATUS_CN[status] ?? status}
         {/* v0.4: 计数 = 顶层卡片组数（子任务嵌在父卡下，不计入本列）——
             数字与所见严格一致，杜绝「有数字没卡片」。 */}
         <span className="count">{list.filter(i => !i.parentId).length}</span>

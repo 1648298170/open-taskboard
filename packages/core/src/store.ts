@@ -1,7 +1,7 @@
 ﻿import type { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { STATUSES, activeClaim } from './types.js';
+import { WAKE_PREFIX, STATUSES, activeClaim } from './types.js';
 import type {
   Activity, Attachment, Comment, DependencyEdge, Issue, IssuePatch, Priority, Progress, Project, Status, Stats, StoreEvent
 } from './types.js';
@@ -399,6 +399,14 @@ export class Store {
       const commentId = this.comments.add(issueId, input);
       this.syncFts(() => this.fts.indexComment(commentId, this.issues.get(issueId)!.projectId, input.body));
       this.logActivity(issueId, actor, 'commented', input.body.slice(0, 200));
+      // A wake comment on a settled task re-opens it (agent took over work
+      // again) — in_review/done → in_progress, one-way, with its own activity
+      // line and issue.updated event so every client notices immediately.
+      if (input.body.trimStart().startsWith(WAKE_PREFIX)
+        && (issue.status === 'in_review' || issue.status === 'done')) {
+        this.issues.update(issueId, { status: 'in_progress' });
+        this.logActivity(issueId, actor, 'updated', `status: ${issue.status}→in_progress (wake)`);
+      }
       return commentId;
     });
     // Payload carries author/body-excerpt/issueTitle so webhook & SSE
@@ -407,9 +415,52 @@ export class Store {
       id, issueId,
       author: input.author ?? '',
       body: input.body.slice(0, 200),
+      status: this.comments.get(id)!.status,
       issueTitle: issue.title
     });
+    if (issue.status !== this.issues.get(issueId)!.status) this.emit('issue.updated', { id: issueId });
     return this.comments.get(id)!;
+  }
+
+  // Editing a comment re-queues it for the watcher: the only state machine is
+  // pending → processing (a wake addressed it) → processed (the headless run
+  // finished / human confirmed). Body edits are allowed only while pending —
+  // an in-flight or finished instruction must keep its original meaning.
+  // Back to pending = "wake it again": emits comment.updated so the watch
+  // sidecar re-runs it without the human retyping the instruction.
+  updateComment(id: string, patch: { body?: string; status?: string }, actor = ''): Comment {
+    const cur = this.comments.get(id);
+    if (!cur) throw new NotFoundError(`comment not found: ${id}`);
+    if (patch.body !== undefined && cur.status !== 'pending') {
+      throw new ValidationError(`comment ${id} is ${cur.status}; only pending comments can be edited`);
+    }
+    if (patch.body !== undefined && !patch.body.trim()) {
+      throw new ValidationError('comment body cannot be blank');
+    }
+    const issueId = cur.issueId;
+    const issueTitle = this.issues.get(issueId)?.title ?? '';
+    inTransaction(this.db, () => {
+      this.comments.update(id, patch, issueId);
+      if (patch.body !== undefined) {
+        this.syncFts(() => {
+          this.fts.deleteCommentFts(id);
+          this.fts.indexComment(id, this.issues.get(issueId)!.projectId, patch.body!);
+        });
+      }
+      this.logActivity(issueId, actor,
+        patch.body !== undefined ? 'comment-edited' : 'comment-status',
+        (patch.body ?? cur.body).slice(0, 200));
+    });
+    const updated = this.comments.get(id)!;
+    if (patch.body !== undefined || patch.status !== undefined) {
+      this.emit('comment.updated', {
+        id, issueId,
+        body: updated.body.slice(0, 200),
+        status: updated.status,
+        issueTitle
+      });
+    }
+    return updated;
   }
 
   // Deleting a comment mirrors adding one: same transaction shape, FTS row

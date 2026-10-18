@@ -13,6 +13,8 @@ export interface ConfirmOpts {
 
 export interface PromptOpts {
   title: string;
+  /** 逐行正文（如「项目 id：demo / 输入上面的 id 以确认」）。textContent，防注入。 */
+  lines?: string[];
   placeholder?: string;
   /** 预填值。 */
   value?: string;
@@ -68,6 +70,10 @@ export function promptDialog(o: PromptOpts): Promise<string | null> {
   form.method = 'dialog';
   d.append(form);
   field(form, 'h3', 'tb-dialog-title', o.title);
+  if (o.lines?.length) {
+    const box = field(form, 'div', 'tb-dialog-lines');
+    for (const line of o.lines) field(box, 'div', 'tb-dialog-line', line);
+  }
   const input = field(form, 'input', 'tb-dialog-input') as HTMLInputElement;
   input.placeholder = o.placeholder ?? '';
   input.value = o.value ?? '';

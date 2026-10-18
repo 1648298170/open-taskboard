@@ -1,4 +1,4 @@
-import { STATUSES, Stats } from '../api';
+import { STATUSES, Stats, STATUS_CN } from '../api';
 
 /** `2026-10-12` → `10-12`（周标签紧凑显示）。 */
 const mmdd = (iso: string): string => iso.slice(5);
@@ -53,7 +53,7 @@ export function StatsPanel({ stats }: { stats: Stats | null }) {
         <div className="stats-chips">
           {STATUSES.map(s => (
             <span key={s} className={`stats-chip ${s}`}>
-              <span className={`dot ${s}`} />{s} {statusCount.get(s) ?? 0}
+              <span className={`dot ${s}`} />{STATUS_CN[s] ?? s} {statusCount.get(s) ?? 0}
             </span>
           ))}
         </div>

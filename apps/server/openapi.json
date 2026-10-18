@@ -1265,6 +1265,55 @@
             "$ref": "#/components/responses/InternalError"
           }
         }
+      },
+      "patch": {
+        "operationId": "updateComment",
+        "summary": "Update a comment (edit body / move wake status; editing is pending-only)",
+        "tags": [
+          "comments"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommentId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchCommentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated comment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/issues/{id}/dependencies": {

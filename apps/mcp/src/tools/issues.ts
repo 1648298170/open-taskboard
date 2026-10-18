@@ -12,7 +12,7 @@ let rememberedSessionId: string | null = null;
 // mcpUpdateIssueSchema: version REQUIRED); the rest are small local zod
 // schemas with STATUSES imported from core/types — no hardcoded enum
 // literals, no hand-written JSON Schema.
-import {
+import { commentPatchSchema, 
   z, createIssueSchema, mcpUpdateIssueSchema, addCommentSchema, addDependencySchema, claimSchema
 } from '@taskboard/core/schemas';
 import { STATUSES } from '@taskboard/core/types';
@@ -139,6 +139,14 @@ export const issueTools: ToolTable = [
     idSchema,
     '删除评论（id 为评论 id，非任务 id；级联清理全文索引并留活动痕）',
     args => ensureServerOrThrow('DELETE', `/api/comments/${seg(args.id)}`),
+  )],
+  ['update_comment', defineTool(
+    commentPatchSchema.extend({ id: z.string() }).strict(),
+    '编辑评论或推进其唤醒状态（body 编辑仅限 pending；status 回置 pending 即重新唤醒 agent，其余 status 取值 pending/processing/processed）',
+    args => ensureServerOrThrow('PATCH', `/api/comments/${seg(args.id)}`, {
+      ...(args.body !== undefined ? { body: args.body } : {}),
+      ...(args.status !== undefined ? { status: args.status } : {}),
+    }),
   )],
   // T7-39: 附件只读视图 —— 上传走 Web/CLI（multipart 不适合 MCP stdio），MCP 提供列表。
   ['list_attachments', defineTool(

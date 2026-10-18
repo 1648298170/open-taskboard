@@ -280,6 +280,39 @@ describe('comment deletion over HTTP', () => {
     assert.ok(actions.includes('comment-deleted'));
     cleanup();
   });
+
+  it('PATCH edits a pending comment and moves its wake status; editing locked states 400s', async () => {
+    const { app, cleanup } = await makeApp({});
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    const created = await app.inject({
+      method: 'POST', url: `/api/issues/${issueId}/comments`, headers: json, payload: { author: 'a', body: 'first' }
+    });
+    const commentId = created.json<{ id: string }>().id;
+
+    const edited = await app.inject({ method: 'PATCH', url: `/api/comments/${commentId}`, headers: json, payload: { body: 'edited' } });
+    assert.equal(edited.statusCode, 200);
+    assert.equal(edited.json<{ body: string }>().body, 'edited');
+    assert.equal(edited.json<{ status: string }>().status, 'pending');
+
+    const moved = await app.inject({ method: 'PATCH', url: `/api/comments/${commentId}`, headers: json, payload: { status: 'processing' } });
+    assert.equal(moved.statusCode, 200);
+    assert.equal(moved.json<{ status: string }>().status, 'processing');
+
+    const locked = await app.inject({ method: 'PATCH', url: `/api/comments/${commentId}`, headers: json, payload: { body: 'sneaky' } });
+    assert.equal(locked.statusCode, 400);
+
+    const bad = await app.inject({ method: 'PATCH', url: `/api/comments/${commentId}`, headers: json, payload: { status: 'zzz' } });
+    assert.equal(bad.statusCode, 400);
+
+    const missing = await app.inject({ method: 'PATCH', url: '/api/comments/nopex', headers: json, payload: { status: 'processed' } });
+    assert.equal(missing.statusCode, 404);
+
+    const detail = await app.inject({ method: 'GET', url: `/api/issues/${issueId}` });
+    const actions = detail.json<{ activities: { action: string }[] }>().activities.map(a => a.action);
+    assert.ok(actions.includes('comment-edited'));
+    cleanup();
+  });
 });
 
 // --- manual backup (v0.4 P0) -------------------------------------------------

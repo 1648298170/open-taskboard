@@ -1,4 +1,7 @@
 export const STATUSES = ['todo', 'in_progress', 'in_review', 'done'] as const;
+/** Wake prefix — a comment starting with this asks the watch sidecar (or any
+ *  receiver) to summon an agent; addComment re-opens settled tasks on it. */
+export const WAKE_PREFIX = '@agent';
 export const PRIORITIES = ['urgent', 'high', 'medium', 'low'] as const;
 
 export type Status = (typeof STATUSES)[number];
@@ -77,11 +80,14 @@ export interface IssuePatch {
   dueDate?: string | null;
 }
 
+export type CommentStatus = 'pending' | 'processing' | 'processed';
+
 export interface Comment {
   id: string;
   issueId: string;
   author: string;
   body: string;
+  status: CommentStatus;
   createdAt: string;
 }
 

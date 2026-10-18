@@ -149,6 +149,11 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
   (db: DatabaseSync) => {
     db.exec("ALTER TABLE projects ADD COLUMN labels TEXT NOT NULL DEFAULT ''");
   },
+  // v11 → v12: comment lifecycle — only pending comments may be edited or
+  // re-wake the agent; processing/processed are locked by the wake watcher.
+  (db: DatabaseSync) => {
+    db.exec("ALTER TABLE comments ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'");
+  },
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after

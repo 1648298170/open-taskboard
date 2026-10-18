@@ -102,6 +102,13 @@ export const addCommentSchema = z
   })
   .strict();
 
+export const commentPatchSchema = z
+  .object({
+    body: z.string().min(1).optional(),
+    status: z.enum(['pending', 'processing', 'processed']).optional(),
+  })
+  .strict();
+
 export const addDependencySchema = z
   .object({
     dependsOnId: z.string().min(1),

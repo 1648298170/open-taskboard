@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Issue } from '../api';
+import { STATUS_CN, Issue } from '../api';
 
 /** T7-37 轻量时间线（甘特 lite）。
  *
@@ -107,8 +107,8 @@ export function Timeline({ issues, onOpen }: { issues: Issue[]; onOpen: (id: str
         const width = Math.max(axis.pct(endMs + DAY_MS) - left, 0);
         const kind = barKind(i, today);
         const tip = i.dueDate !== null
-          ? `${i.startDate ?? '?'} → ${i.dueDate} · [${i.status}]`
-          : `start ${i.startDate} · [${i.status}]`;
+          ? `${i.startDate ?? '?'} → ${i.dueDate} · [${STATUS_CN[i.status] ?? i.status}]`
+          : `start ${i.startDate} · [${STATUS_CN[i.status] ?? i.status}]`;
         return (
           <div key={i.id} className="tl-row" onClick={() => onOpen(i.id)} title={tip}>
             <span className="tl-label">#{i.id} {i.title}</span>

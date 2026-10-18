@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUSES } from './api';
+import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUS_CN, STATUSES } from './api';
 import { Board, buildBlockedByMap, flattenCardOrder, GroupBy, todayStr } from './components/Board';
 import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
@@ -437,7 +437,17 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
             <button className="side-btn danger" title="删除当前项目（输入 id 确认）"
               onClick={async () => {
                 const pid = projectId ?? '';
-                const typed = await promptDialog({ title: `输入项目 id 以确认删除「${pid}」`, placeholder: '项目 id', value: '' });
+                const pname = projects.find(p => p.id === pid)?.name ?? pid;
+                const typed = await promptDialog({
+                  title: `删除项目「${pname}」`,
+                  lines: [
+                    `项目 id：${pid}`,
+                    `${pid} 连同它的全部任务、评论和附件一起删除，不可恢复。`,
+                    '输入上面的项目 id 以确认：'
+                  ],
+                  placeholder: pid,
+                  value: ''
+                });
                 if (typed === null) return;
                 if (typed.trim() !== pid) { showToast('✗ 项目 id 不匹配，未删除'); return; }
                 try {
@@ -544,7 +554,7 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           if (moveKids && status === 'done') {
             moveKids = await confirmDialog({
               title: `同时将 ${kids.length} 个子任务置为 done？`,
-              lines: kids.map(k => `#${k.id} ${k.title} [${k.status}]`),
+              lines: kids.map(k => `#${k.id} ${k.title} [${STATUS_CN[k.status] ?? k.status}]`),
               confirmText: '整组验收',
               cancelText: '仅父任务置 done'
             });

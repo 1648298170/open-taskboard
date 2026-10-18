@@ -9,6 +9,8 @@ export type {
   Activity, Attachment, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Stats, Status
 };
 export { STATUSES, PRIORITIES, activeClaim } from '@taskboard/core/types';
+/** 中文状态名映射（列头/下拉/统计 chip 显示用；数据层存英文枚举不变） */
+export const STATUS_CN: Record<string, string> = { todo: '待办', in_progress: '进行中', in_review: '待验收', done: '完成' };
 
 /** T2-8: git-refs scan result for a project workspace. */
 export interface GitRefs {
@@ -78,6 +80,8 @@ export const api_ = {
     api<Comment>('POST', `/api/issues/${id}/comments`, { author, body }),
   deleteComment: (commentId: string) =>
     api<{ ok: true }>('DELETE', `/api/comments/${commentId}`),
+  updateComment: (commentId: string, patch: { body?: string; status?: string }) =>
+    api<Comment>('PATCH', `/api/comments/${commentId}`, patch),
   // T7-39: 附件上传是 multipart，不能走 JSON 的 api() —— 独立实现（同样带
   // Bearer + actor 头）；下载用 <a href> 直链，令牌经 ?token= 传递（与 SSE 同法）。
   uploadAttachment: async (id: string, file: File): Promise<Attachment> => {

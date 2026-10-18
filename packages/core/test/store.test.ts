@@ -338,6 +338,51 @@ describe('Store.addComment', () => {
   });
 });
 
+// --- (g2) updateComment — wake lifecycle state machine ----------------------------
+
+describe('Store.updateComment', () => {
+  const withComment = () => {
+    const f = fresh();
+    f.store.createProject({ id: 'p1', name: 'P' });
+    const issueId = f.store.createIssue({ projectId: 'p1', title: 'task' }).id;
+    const comment = f.store.addComment(issueId, { body: 'do the thing' });
+    return { ...f, issueId, commentId: comment.id };
+  };
+
+  it('edits the body while pending; FTS sees the new text; emits comment.updated', () => {
+    const t = withComment();
+    t.store.updateComment(t.commentId, { body: 'actually do it right' }, 'alice');
+    assert.equal(t.store.listComments(t.issueId)[0].body, 'actually do it right');
+    assert.deepEqual(idsFor(t.events, 'comment.updated'), [t.commentId]);
+    assert.deepEqual(t.store.search('actually do it right').map(h => h.id), [t.issueId]);
+  });
+
+  it('refuses body edits once the wake watcher took the comment (processing)', () => {
+    const t = withComment();
+    t.store.updateComment(t.commentId, { status: 'processing' }, 'watch');
+    throwsWith(
+      () => t.store.updateComment(t.commentId, { body: 'sneaky edit' }, 'alice'),
+      ValidationError, /pending comments can be edited/
+    );
+  });
+
+  it('walks pending → processing → processed, resetting processed back to pending', () => {
+    const t = withComment();
+    t.store.updateComment(t.commentId, { status: 'processing' }, 'watch');
+    t.store.updateComment(t.commentId, { status: 'processed' }, 'watch');
+    assert.equal(t.store.listComments(t.issueId)[0].status, 'processed');
+    t.store.updateComment(t.commentId, { status: 'pending' }, 'alice'); // re-wake
+    assert.equal(t.store.listComments(t.issueId)[0].status, 'pending');
+    assert.deepEqual(idsFor(t.events, 'comment.updated'), [t.commentId, t.commentId, t.commentId]);
+  });
+
+  it('rejects unknown comments and blank bodies', () => {
+    const t = withComment();
+    throwsWith(() => t.store.updateComment('nope', { body: 'x' }), NotFoundError, 'comment not found: nope');
+    throwsWith(() => t.store.updateComment(t.commentId, { body: '   ' }), ValidationError, /blank/);
+  });
+});
+
 // --- (h) duplicate project --------------------------------------------------------
 
 describe('Store.createProject conflicts', () => {
@@ -373,11 +418,11 @@ describe('Store.revision', () => {
 // --- (j) migrations ---------------------------------------------------------------
 
 describe('migrations', () => {
-  it('sets user_version to 11 on a fresh store (base schema + all migrations)', () => {
+  it('sets user_version to 12 on a fresh store (base schema + all migrations)', () => {
     const db = new DatabaseSync(':memory:');
     new Store('.unused', db); // configureDatabase runs schema + migrations
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(row.user_version, 11);
+    assert.equal(row.user_version, 12);
   });
 
   it('is idempotent: re-configuring an already-migrated db is a no-op', () => {
@@ -388,7 +433,7 @@ describe('migrations', () => {
     // Second Store over the same db replays configureDatabase (idempotent path).
     new Store('.unused', db);
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(row.user_version, 11);
+    assert.equal(row.user_version, 12);
     assert.ok(store.getIssue(issue.id));
   });
 });
@@ -1321,5 +1366,41 @@ describe('project labels', () => {
     const p = store.updateProject('p1', { labels: 'x,y' });
     assert.equal(p.labels, 'x,y');
     assert.equal(store.updateProject('p1', { labels: '' }).labels, '');
+  });
+});
+
+describe('wake comment reopens settled tasks', () => {
+  it('in_review → in_progress on @agent comment; emits issue.updated + activity', () => {
+    const { store, events } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const is = store.createIssue({ projectId: 'p1', title: 'T', status: 'in_review' } as never);
+    const before = events.filter(e => e.type === 'issue.updated').length;
+    store.addComment(is.id, { author: 'user', body: '@agent 再改一下文案' });
+    const after = store.getIssue(is.id)!;
+    assert.equal(after.status, 'in_progress');
+    assert.ok(events.filter(e => e.type === 'issue.updated').length > before);
+    const log = store.listActivities(is.id).map(a => a.detail).join(' ');
+    assert.match(log, /status: in_review→in_progress/);
+  });
+
+  it('done → in_progress likewise; non-wake comments never touch status', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const is = store.createIssue({ projectId: 'p1', title: 'T', status: 'done' } as never);
+    store.addComment(is.id, { author: 'user', body: '普通评论，不是唤醒' });
+    assert.equal(store.getIssue(is.id)!.status, 'done');
+    store.addComment(is.id, { author: 'user', body: '  @agent 修一下' });
+    assert.equal(store.getIssue(is.id)!.status, 'in_progress');
+  });
+
+  it('leaves todo untouched (re-open only applies to settled states); no version bump', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const is = store.createIssue({ projectId: 'p1', title: 'T' });
+    const v1 = store.getIssue(is.id)!.version;
+    store.addComment(is.id, { author: 'user', body: '@agent still pending, wake matters only upstream' });
+    const after = store.getIssue(is.id)!;
+    assert.equal(after.status, 'todo');
+    assert.equal(after.version, v1);
   });
 });

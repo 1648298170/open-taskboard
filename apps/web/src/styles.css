@@ -71,7 +71,7 @@ html, body { height: 100%; overflow: hidden; }
 .side-name { overflow: hidden; text-overflow: ellipsis; }
 .side-item.active .side-name { color: var(--accent); }
 .side-label { font-size: 10px; color: var(--accent-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.side-id { font-size: 10px; color: var(--ink-dim); opacity: .7; }
+.side-id { font-size: 10px; color: var(--ink-dim); opacity: .9; }
 .side-actions { padding: 10px 8px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
 .side-btn {
   background: none; border: 1px dashed var(--line); border-radius: 3px;
@@ -678,3 +678,11 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
   border-radius: 4px; padding: 8px 14px; font-size: 12px; font-weight: 600;
   box-shadow: 0 10px 30px #0008;
 }
+
+/* 评论唤醒状态徽章 + 行内编辑（T-awaken-status） */
+.comment-status { font-size: 10px; padding: 1px 6px; border: 1px solid var(--line, currentColor); border-radius: 8px; color: var(--ink-dim); }
+.comment-status.processing { color: var(--gold, #b58e3e); }
+.comment-status.processed { color: var(--ok, #5c9d63); }
+.comment-edit { display: flex; flex-direction: column; gap: 6px; }
+.comment-edit textarea { width: 100%; resize: vertical; }
+.comment-edit-row { display: flex; gap: 8px; }

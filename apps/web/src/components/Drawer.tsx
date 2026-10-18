@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { computePosition, flip, shift } from '@floating-ui/dom';
-import { activeClaim, api_, Commit, GitRefs, Issue, IssueDetail, PRIORITIES, Status } from '../api';
+import { activeClaim, api_, Commit, GitRefs, Issue, IssueDetail, PRIORITIES, STATUS_CN, Status } from '../api';
 import { Markdown } from '../markdown';
 import { confirmDialog, promptDialog } from './dialogs';
 import { fmtHMLocal, fmtWhenLocal } from '../logic/time';
@@ -39,6 +39,8 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
   const [comment, setComment] = useState('');
   // v0.4: 评论删除两步内联确认——✕ 点击后变「确认删除」，3s 不点自动还原（无弹窗）。
   const [confirmingComment, setConfirmingComment] = useState<string | null>(null);
+  const [editingComment, setEditingComment] = useState<string | null>(null);
+  const [commentDraft, setCommentDraft] = useState('');
   // v0.4: 依赖边移除同款两步内联确认（全局删除必须有二次确认）。
   const [confirmingDep, setConfirmingDep] = useState<string | null>(null);
   // v0.4: mention 候选浮层 —— floating-ui 定位（top-start，翻转+防溢出）。
@@ -154,7 +156,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
       </h2>
       <div className="meta-row">
         <Select value={detail.status} onChange={v => void patch({ status: v as Status })}
-          options={statuses.map(st => ({ value: st, label: st }))} />
+          options={statuses.map(st => ({ value: st, label: STATUS_CN[st] ?? st }))} />
         <Select value={detail.priority} onChange={v => void patch({ priority: v as IssueDetail['priority'] })}
             options={PRIORITIES.map(pr => ({ value: pr, label: pr }))} />
         {/* 负责人 / 标签：与分支回退输入同款模式（defaultValue + 失焦提交），
@@ -321,7 +323,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
         {detail.children.length
           ? detail.children.map(c => (
             <li key={c.id} onClick={() => onOpenIssue(c.id)}>
-              <span className="st">[{c.status}]</span>{c.title}
+              <span className="st">[{STATUS_CN[c.status] ?? c.status}]</span>{c.title}
             </li>))
           : <li style={{ color: 'var(--ink-dim)' }}>暂无子任务</li>}
       </ul>
@@ -348,7 +350,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
                 && i.status !== 'done'
                 && !(detail.blockedBy ?? []).includes(i.id)
                 && !(detail.blocks ?? []).includes(i.id))
-              .map(c => ({ value: c.id, label: `#${c.id} ${c.title} [${c.status}]` })),
+              .map(c => ({ value: c.id, label: `#${c.id} ${c.title} [${STATUS_CN[c.status] ?? c.status}]` })),
             { value: '__manual__', label: '手动输入 ID…' }
           ]} />
       </div>
@@ -410,6 +412,11 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
               {/* v0.4: 头行（作者+删除）与正文分层——正文独立整行，长文不再绕排 */}
               <div className="comment-head">
                 <span className="who">{c.author || 'anon'}</span>
+                {c.status !== 'pending' && (
+                  <span className={`comment-status ${c.status}`}>
+                    {c.status === 'processing' ? '唤醒中' : '已处理'}
+                  </span>
+                )}
                 {confirmingComment === c.id ? (
                   <button className="btn tiny danger" title="再次点击确认删除"
                     onClick={async e => {
@@ -421,15 +428,42 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
                       } catch (err) { onToast(`✗ ${(err as Error).message}`); }
                     }}>确认删除</button>
                 ) : (
-                  <button className="icon-btn dep-remove" title="删除评论"
-                    onClick={e => {
-                      e.stopPropagation();
-                      setConfirmingComment(c.id);
-                      setTimeout(() => setConfirmingComment(cur => cur === c.id ? null : cur), 3000);
-                    }}><X size={12} /></button>
+                  <>
+                    {c.status === 'pending' && (
+                      <button className="icon-btn dep-remove" title="编辑评论（编辑保存后重新唤醒 agent）"
+                        onClick={e => {
+                          e.stopPropagation();
+                          setEditingComment(c.id);
+                          setCommentDraft(c.body);
+                        }}><Pencil size={12} /></button>
+                    )}
+                    <button className="icon-btn dep-remove" title="删除评论"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setConfirmingComment(c.id);
+                        setTimeout(() => setConfirmingComment(cur => cur === c.id ? null : cur), 3000);
+                      }}><X size={12} /></button>
+                  </>
                 )}
               </div>
+              {editingComment === c.id ? (
+                <form className="comment-edit" onSubmit={async ev => {
+                  ev.preventDefault();
+                  try {
+                    await api_.updateComment(c.id, { body: commentDraft.trim() });
+                    setEditingComment(null); onChanged(); await load();
+                  } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+                }}>
+                  <textarea rows={3} value={commentDraft} autoFocus
+                    onChange={e => setCommentDraft(e.target.value)} />
+                  <div className="comment-edit-row">
+                    <button type="submit" className="btn tiny">保存并重新唤醒</button>
+                    <button type="button" className="btn tiny ghost" onClick={() => setEditingComment(null)}>取消</button>
+                  </div>
+                </form>
+              ) : (
               <Markdown src={c.body} />
+              )}
             </li>))
           : <li style={{ color: 'var(--ink-dim)' }}>暂无评论</li>}
       </ul>

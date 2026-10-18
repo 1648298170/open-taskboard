@@ -40,12 +40,17 @@ export function makeSseParser(onEvent: (name: string, data: string) => void): { 
   };
 }
 
-interface WakePayload { type?: unknown; payload?: { body?: unknown } }
+interface WakePayload { type?: unknown; payload?: { body?: unknown; status?: unknown } }
 
-/** Only fresh comments starting with the prefix wake the agent. */
+/**
+ * Only fresh pending comments starting with the prefix wake the agent, on
+ * either comment.created (new comment) or comment.updated (saved edit re-queues
+ * an edited pending comment).
+ */
 export function shouldWake(evt: WakePayload, prefix: string): boolean {
-  if (evt.type !== 'comment.created') return false;
-  const body = evt.payload?.body;
+  if (evt.type !== 'comment.created' && evt.type !== 'comment.updated') return false;
+  const { status, body } = evt.payload ?? {};
+  if (status !== undefined && status !== 'pending') return false;
   return typeof body === 'string' && body.startsWith(prefix);
 }
 
@@ -109,7 +114,7 @@ export function acquireWatchLock(lockPath: string): { ok: true; release: () => v
   }
 }
 
-interface CommentLike { id: string; body: string; createdAt: string }
+interface CommentLike { id: string; body: string; status?: string; createdAt: string }
 interface IssueDetailLike { id: string; title: string; comments: CommentLike[] }
 
 /**
@@ -121,15 +126,16 @@ export function missedWakes(
   sinceMs: number,
   prefix: string,
   seen: ReadonlySet<string>,
-): Array<{ issueId: string; issueTitle: string; instruction: string; key: string }> {
-  const out: { issueId: string; issueTitle: string; instruction: string; key: string }[] = [];
+): Array<{ issueId: string; commentId: string; issueTitle: string; instruction: string; key: string }> {
+  const out: { issueId: string; commentId: string; issueTitle: string; instruction: string; key: string }[] = [];
   for (const it of issues) {
     for (const c of it.comments) {
       if (Date.parse(c.createdAt) <= sinceMs) continue;
+      if (c.status !== undefined && c.status !== 'pending') continue;
       if (!c.body.startsWith(prefix)) continue;
       const key = wakeKey(it.id, c.body);
       if (seen.has(key)) continue;
-      out.push({ issueId: it.id, issueTitle: it.title, instruction: c.body.slice(prefix.length).trim(), key });
+      out.push({ issueId: it.id, commentId: c.id, issueTitle: it.title, instruction: c.body.slice(prefix.length).trim(), key });
     }
   }
   return out;
@@ -236,7 +242,7 @@ export const watchCommand: Command = {
               found++;
               console.log(`watch: 补拉唤醒 #${w.issueId}: ${w.instruction}`);
               const backfillTui = channelFor(backfillChannel, tuiBase);
-              queue = queue.then(() => executeWake(w.issueId, buildWakePrompt(w.issueId, w.issueTitle, w.instruction), backfillTui))
+              queue = queue.then(() => executeWake(w.issueId, buildWakePrompt(w.issueId, w.issueTitle, w.instruction), backfillTui, w.commentId))
                 .catch(err => console.error(`watch: 补拉唤醒失败: ${(err as Error).message}`));
             }
           }
@@ -248,7 +254,20 @@ export const watchCommand: Command = {
     };
 
     let queue: Promise<void> = Promise.resolve();
-    const executeWake = async (issueId: string, prompt: string, tuiUrl?: string): Promise<void> => {
+    const markStatus = async (commentId: string, status: string): Promise<void> => {
+      if (!commentId) return;
+      try {
+        await fetch(`${base()}/api/comments/${commentId}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json', 'x-taskboard-actor': 'watch', ...(token() ? { Authorization: `Bearer ${token()}` } : {}) },
+          body: JSON.stringify({ status })
+        });
+      } catch (err) {
+        console.error(`watch: comment status failed (${(err as Error).message})`);
+      }
+    };
+
+    const executeWake = async (issueId: string, prompt: string, tuiUrl?: string, commentId = ''): Promise<void> => {
       // 通道 1：TUI 注入（附着的 TUI 输入框出现唤醒文本，人工回车提交）。
       // 同会话、全上下文、实时可见，且模型/agent 由 TUI 自身决定。
       // tuiUrl = 项目 wake_channel（数据驱动）?? --tui-url 兜底；undefined → 跳过。
@@ -261,6 +280,7 @@ export const watchCommand: Command = {
           });
           if (res.ok) {
             console.log(`watch: appended wake to TUI (${tuiUrl}) — 等待人工回车提交`);
+            await markStatus(commentId, 'processing');
             return;
           }
           console.error(`watch: TUI append failed (HTTP ${res.status}) — 尝试下一通道`);
@@ -288,6 +308,7 @@ export const watchCommand: Command = {
             });
             if (res.ok) {
               console.log(`watch: prompted bound session ${sessionId}`);
+              await markStatus(commentId, 'processing');
               return;
             }
             console.error(`watch: session prompt failed (HTTP ${res.status}) — falling back to headless`);
@@ -309,7 +330,7 @@ export const watchCommand: Command = {
           child.on('exit', code => resolve(code === 0 ? 'ok' : 'failed'));
           child.on('error', () => resolve('missing'));
         });
-        if (outcome === 'ok') return;
+        if (outcome === 'ok') { await markStatus(commentId, 'processed'); return; }
         if (outcome === 'missing') { console.error(`watch: exec ${execParts[0]} not found in PATH`); return; }
         console.error(`watch: headless run failed (attempt ${i + 1}/${attempts.length})`);
       }
@@ -341,6 +362,7 @@ export const watchCommand: Command = {
             if (projectFilter && !wantsProject(projectFilter, projectId)) return;
             const tuiUrl = channelFor(await resolveChannel(projectId), tuiBase);
             const issueTitle = String(p.issueTitle ?? '');
+            const commentId = String(p.id ?? '');
             const stripped = String(p.body ?? '').slice(prefix.length).trim();
             const key = wakeKey(issueId, String(p.body ?? ''));
             // 补拉路径可能已先行入队同一条评论——两路径对称查重，杜绝双注入。
@@ -348,7 +370,7 @@ export const watchCommand: Command = {
             processed.add(key);
             const by = typeof p.author === 'string' && p.author ? ` (${p.author})` : '';
             console.log(`watch: wake${by}: ${stripped}`);
-            queue = queue.then(() => executeWake(issueId, buildWakePrompt(issueId, issueTitle, stripped), tuiUrl))
+            queue = queue.then(() => executeWake(issueId, buildWakePrompt(issueId, issueTitle, stripped), tuiUrl, commentId))
               .catch(err => console.error(`watch: wake failed: ${(err as Error).message}`));
           });
           const decoder = new TextDecoder();
