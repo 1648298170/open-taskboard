@@ -458,6 +458,7 @@ export class Store {
     }
     const issueId = cur.issueId;
     const issueTitle = this.issues.get(issueId)?.title ?? '';
+    const before = this.issues.get(issueId)?.status;
     inTransaction(this.db, () => {
       this.comments.update(id, patch, issueId);
       if (patch.body !== undefined) {
@@ -469,6 +470,13 @@ export class Store {
       this.logActivity(issueId, actor,
         patch.body !== undefined ? 'comment-edited' : 'comment-status',
         (patch.body ?? cur.body).slice(0, 200));
+      // Same reopen contract as addComment (a settled task must not stay
+      // closed while its wake comment is re-queued).
+      if (patch.status === 'pending'
+        && (before === 'in_review' || before === 'done')) {
+        this.issues.update(issueId, { status: 'in_progress' });
+        this.logActivity(issueId, actor, 'updated', `status: ${before}→in_progress (wake)`);
+      }
     });
     const updated = this.comments.get(id)!;
     if (patch.body !== undefined || patch.status !== undefined) {
@@ -479,6 +487,7 @@ export class Store {
         issueTitle
       });
     }
+    if (before !== this.issues.get(issueId)!.status) this.emit('issue.updated', { id: issueId });
     return updated;
   }
 

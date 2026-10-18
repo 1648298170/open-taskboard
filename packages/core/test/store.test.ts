@@ -376,6 +376,18 @@ describe('Store.updateComment', () => {
     assert.deepEqual(idsFor(t.events, 'comment.updated'), [t.commentId, t.commentId, t.commentId]);
   });
 
+  it('re-queues a wake on an edited comment: a re-reviewed task settles back to in_progress too', () => {
+    const t = withComment();
+    // Handle the wake: task goes to in_review, comment processed (usual loop)
+    t.store.updateIssue(t.issueId, { status: 'in_review' });
+    t.store.updateComment(t.commentId, { status: 'processed' }, 'watch');
+    // User re-wakes the SAME comment (edit path) instead of writing a new one
+    t.store.updateComment(t.commentId, { status: 'pending' }, 'web');
+    assert.equal(t.store.getIssue(t.issueId).status, 'in_progress');
+    const acts = t.store.listActivities(t.issueId).map(a => a.detail);
+    assert.ok(acts.some(d => d.includes('→in_progress (wake)')), 'wake reopen should leave an activity line');
+  });
+
   it('rejects unknown comments and blank bodies', () => {
     const t = withComment();
     throwsWith(() => t.store.updateComment('nope', { body: 'x' }), NotFoundError, 'comment not found: nope');
