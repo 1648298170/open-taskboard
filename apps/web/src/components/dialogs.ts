@@ -72,9 +72,11 @@ export function promptDialog(o: PromptOpts): Promise<string | null> {
   input.placeholder = o.placeholder ?? '';
   input.value = o.value ?? '';
   const menu = field(form, 'menu', 'tb-dialog-menu') as HTMLElement;
+  // 取消改 type=button：否则它是表单第一个 submit，输入框里按 Enter 会
+  // 触发「取消」而非「确定」（HTML 隐式提交取第一个提交按钮）。
   const cancel = field(menu, 'button', 'btn', '取消') as HTMLButtonElement;
-  cancel.type = 'submit';
-  cancel.value = 'cancel';
+  cancel.type = 'button';
+  cancel.onclick = () => d.close('cancel');
   const ok = field(menu, 'button', 'btn primary', '确定') as HTMLButtonElement;
   ok.type = 'submit';
   ok.value = 'ok';
