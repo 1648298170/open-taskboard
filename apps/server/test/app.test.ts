@@ -434,3 +434,24 @@ describe('in_review 评论门禁（TASKBOARD_REVIEW_COMMENT 默认开）', () =>
     cleanup();
   });
 });
+
+describe('in_review 门禁只拦状态流转', () => {
+  it('re-affirming in_review (no transition) by a comment-less agent passes', async () => {
+    const { app, cleanup } = await makeApp();
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    // web 先置 in_review（人工/已有交验语义）
+    await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { status: 'in_review', version: 1 }
+    });
+    // 无评论 agent 重申 in_review（非流转）→ 不拦（动态取最新 version）
+    const vNow = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<{ version: number }>().version;
+    const res = await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: vNow }
+    });
+    assert.equal(res.statusCode, 200);
+    cleanup();
+  });
+});

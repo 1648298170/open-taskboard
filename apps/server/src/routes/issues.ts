@@ -89,10 +89,11 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     // v0.4: 先落评再交验——非 web 来源置 in_review 时，执行者必须在任务上
     // 留过评论（工作与验证的书面痕迹）；默认开启，TASKBOARD_REVIEW_COMMENT=0 退出。
+    // 仅拦状态流转（当前已 in_review 的非流转补丁不拦——已有人交验过，无信息损失）。
     if (config.reviewComment && parsed.data.status === 'in_review' &&
+        store.getIssue(req.params.id)?.status !== 'in_review' &&
         String(req.headers['x-taskboard-actor'] ?? '') !== 'web' &&
         store.commentCountBy(req.params.id, String(req.headers['x-taskboard-actor'] ?? '')) === 0) {
-      req.log.warn({ dbgId: req.params.id, dbgActor: String(req.headers['x-taskboard-actor'] ?? ''), dbgCount: store.commentCountBy(req.params.id, String(req.headers['x-taskboard-actor'] ?? '')) }, 'DBG in_review gate');
       return reply.code(403).send({ error: 'in_review requires a comment by this actor (先落评再交验)' });
     }
     // T7-36: optional human final-review gate. With TASKBOARD_HUMAN_DONE=1, only
