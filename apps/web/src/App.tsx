@@ -29,7 +29,7 @@ export default function App() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [connError, setConnError] = useState(false);
-  const [sortBy, setSortBy] = useState<SortBy>('priority');
+  const [sortBy, setSortBy] = useState<SortBy>('created');
   const [filters, setFilters] = useState({ text: '', assignee: '', label: '', due: '' as '' | 'overdue' | 'today' });
   // T2-9: 令牌认证 —— 任一 API 调用 401 时置 true，渲染令牌输入浮层。
   const [needToken, setNeedToken] = useState(false);
@@ -495,10 +495,10 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
         <button type="button" className={`btn tiny${batchMode ? ' active' : ''}`}
           onClick={() => { setBatchMode(b => !b); setSelected(new Set()); }}>批量模式</button>
         <div className="sort-toggle">
-          <button type="button" className={sortBy === 'priority' ? 'active' : ''}
-            onClick={() => setSortBy('priority')}>按优先级</button>
           <button type="button" className={sortBy === 'created' ? 'active' : ''}
             onClick={() => setSortBy('created')}>按创建时间</button>
+          <button type="button" className={sortBy === 'priority' ? 'active' : ''}
+            onClick={() => setSortBy('priority')}>按优先级</button>
         </div>
       </div>
 
