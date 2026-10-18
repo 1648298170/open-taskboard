@@ -561,7 +561,8 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 
 /* v0.4: dnd-kit 拖拽 + mention 浮层（floating-ui fixed 定位） */
 .card { touch-action: none; }
-.card.dragging { opacity: .55; }
+.card.dragging { opacity: .45; }
+.card.overlay { box-shadow: 0 16px 40px #000b; cursor: grabbing; }
 .mention-hint {
   position: fixed; z-index: 40;
   display: inline-flex; gap: 6px;

@@ -1,5 +1,7 @@
 import { activeClaim, Issue, STATUSES, Status } from '../api';
-import { DndContext, DragEndEvent, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
+import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
+import { useState } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { buildLanes, buildBlockedByMap, flattenCardOrder, todayStr } from '../logic/board';
 import type { BlockedByMap } from '../logic/board';
 
@@ -87,11 +89,18 @@ export function Board({ issues, onOpen, onDrop, emptyHint, blockedByMap, groupBy
 }) {
   // v0.4: dnd-kit —— PointerSensor 5px 激活阈值（点击不误拖），拖完回调
   // 既有 onDrop 契约（blocked 守卫 / done 整组确认都在 App 侧不变）。
+  // DragOverlay：拖拽浮层副本（fixed 定位逃逸 .cards 的 overflow 裁剪，
+  // 源卡留原位半透明）——否则卡片拖出本列边界即被遮挡。
+  const [activeId, setActiveId] = useState<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const handleDragStart = (e: DragStartEvent): void => setActiveId(String(e.active.id));
   const handleDragEnd = (e: DragEndEvent): void => {
     const { active, over } = e;
     if (over && active.id !== over.id) onDrop(String(active.id), String(over.id) as Status);
+    setActiveId(null);
   };
+  const handleDragCancel = (): void => setActiveId(null);
+  const activeIssue = activeId ? issues.find(i => i.id === activeId) ?? null : null;
   const renderColumns = (laneIssues: Issue[]): JSX.Element[] =>
     STATUSES.map(s => (
       <Column key={s} status={s} laneIssues={laneIssues} boardEmpty={issues.length === 0}
@@ -102,8 +111,9 @@ export function Board({ issues, onOpen, onDrop, emptyHint, blockedByMap, groupBy
   // 无分组：保持原单网格 DOM（main.board 直接承载四列）。
   if (groupBy === 'none') {
     return (
-      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={handleDragCancel}>
         <main className="board">{renderColumns(issues)}</main>
+        <DragOverlay>{activeIssue ? <CardView issue={activeIssue} child={!!activeIssue.parentId} overlay /> : null}</DragOverlay>
       </DndContext>
     );
   }
@@ -111,7 +121,7 @@ export function Board({ issues, onOpen, onDrop, emptyHint, blockedByMap, groupBy
   // T5-27: 泳道布局 —— 每条泳道一个带标题的小节，内含完整四列网格。
   const lanes = buildLanes(issues, groupBy);
   return (
-    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={handleDragCancel}>
       <main className="board grouped">
         {lanes.length === 0 && emptyHint && <div className="column-empty board-empty">{emptyHint}</div>}
         {lanes.map(lane => (
@@ -126,6 +136,7 @@ export function Board({ issues, onOpen, onDrop, emptyHint, blockedByMap, groupBy
           </section>
         ))}
       </main>
+      <DragOverlay>{activeIssue ? <CardView issue={activeIssue} child={!!activeIssue.parentId} overlay /> : null}</DragOverlay>
     </DndContext>
   );
 }
@@ -164,6 +175,49 @@ function ClaimBadge({ issue }: { issue: Issue }) {
   );
 }
 
+/** 卡片纯展示（Card 与 DragOverlay 浮层共用）。 */
+function CardView({ issue, child, locked, childProgress, active, overlay,
+  domRef, listeners, attributes, style, className, onClick, children }: {
+  issue: Issue;
+  child?: boolean;
+  locked?: boolean;
+  childProgress?: { done: number; inProgress: number; total: number };
+  active?: boolean;
+  /** DragOverlay 模式：无拖拽句柄，带浮层阴影。 */
+  overlay?: boolean;
+  domRef?: (el: HTMLElement | null) => void;
+  listeners?: Record<string, unknown>;
+  attributes?: Record<string, unknown>;
+  style?: CSSProperties;
+  className?: string;
+  onClick?: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <article ref={domRef}
+      className={`card${active ? ' card-active' : ''}${className ?? ''}${overlay ? ' overlay' : ''}`}
+      data-status={issue.status}
+      data-card-id={issue.id}
+      style={{ ...(child && !overlay ? { marginLeft: 18 } : {}), ...(style ?? {}) }}
+      {...(listeners ?? {})}
+      {...(attributes ?? {})}
+      onClick={onClick}>
+      {children}
+      <div className="card-title">{child ? '└ ' : ''}{issue.title}</div>
+      {!child && childProgress && <ChildProgress done={childProgress.done} inProgress={childProgress.inProgress} total={childProgress.total} />}
+      <div className="card-meta">
+        {locked && <span className="dep-lock" title="被未完成的依赖阻塞">🔒</span>}
+        {!overlay && <ClaimBadge issue={issue} />}
+        <span className={`badge ${issue.priority}`}>{issue.priority}</span>
+        {issue.dueDate && <DuePill dueDate={issue.dueDate} />}
+        {issue.branch && <span className="badge branch">⟂ {issue.branch}</span>}
+        {issue.worktree && <span className="wt-badge" title={`worktree: ${issue.worktree}`}>⎇ {issue.worktree}</span>}
+        <span>#{issue.id}</span>
+      </div>
+    </article>
+  );
+}
+
 function Card({ issue, child, onOpen, locked, childProgress, batchMode, checked, onToggleSelect, active }: {
   issue: Issue;
   child?: boolean;
@@ -175,21 +229,15 @@ function Card({ issue, child, onOpen, locked, childProgress, batchMode, checked,
   onToggleSelect?: (id: string) => void;
   active?: boolean;
 }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: issue.id,
     disabled: batchMode === true
   });
-  const style = {
-    ...(child ? { marginLeft: 18 } : {}),
-    ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, zIndex: 30 } : {})
-  };
   return (
-    <article ref={setNodeRef} className={`card${active ? ' card-active' : ''}${isDragging ? ' dragging' : ''}`}
-      data-status={issue.status}
-      data-card-id={issue.id}
-      style={style}
-      {...listeners}
-      {...attributes}
+    <CardView issue={issue} child={child} locked={locked} childProgress={childProgress} active={active}
+      domRef={setNodeRef} listeners={{ ...listeners }} attributes={{ ...attributes }}
+      className={isDragging ? ' dragging' : ''}
+      style={isDragging ? { opacity: 0.45 } : undefined}
       onClick={() => {
         // 批量模式下点卡片 = 切换选中，避免误开抽屉。
         if (batchMode) onToggleSelect?.(issue.id);
@@ -202,17 +250,6 @@ function Card({ issue, child, onOpen, locked, childProgress, batchMode, checked,
           <input type="checkbox" checked={checked ?? false} onChange={() => onToggleSelect(issue.id)} />
         </label>
       )}
-      <div className="card-title">{child ? '└ ' : ''}{issue.title}</div>
-      {!child && childProgress && <ChildProgress done={childProgress.done} inProgress={childProgress.inProgress} total={childProgress.total} />}
-      <div className="card-meta">
-        {locked && <span className="dep-lock" title="被未完成的依赖阻塞">🔒</span>}
-        <ClaimBadge issue={issue} />
-        <span className={`badge ${issue.priority}`}>{issue.priority}</span>
-        {issue.dueDate && <DuePill dueDate={issue.dueDate} />}
-        {issue.branch && <span className="badge branch">⟂ {issue.branch}</span>}
-        {issue.worktree && <span className="wt-badge" title={`worktree: ${issue.worktree}`}>⎇ {issue.worktree}</span>}
-        <span>#{issue.id}</span>
-      </div>
-    </article>
+    </CardView>
   );
 }
