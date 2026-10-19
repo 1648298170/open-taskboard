@@ -883,3 +883,31 @@ describe('server bind safety', () => {
     }
   });
 });
+
+
+describe('project routing safety', () => {
+  it('rejects workspace/server changes while an agent holds an active lease', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      await seedProject(app);
+      const issueId = await seedIssue(app, {}, 'agent-a');
+      const claim = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/claim`, headers: json,
+        payload: { agent: 'agent-a', sessionId: 'ses_a', branch: 'feat/task-a', ttlMinutes: 30 }
+      });
+      assert.equal(claim.statusCode, 200);
+
+      const changed = await app.inject({
+        method: 'PATCH', url: '/api/projects/p1', headers: json,
+        payload: { workspacePath: '/workspace/other', wakeChannel: 'http://127.0.0.1:4097' }
+      });
+      assert.equal(changed.statusCode, 409);
+      assert.match(changed.json<{ error: string }>().error, /active agent leases/);
+
+      const project = await app.inject({ method: 'GET', url: '/api/projects/p1' });
+      assert.equal(project.json<{ workspacePath: string }>().workspacePath, '');
+    } finally {
+      cleanup();
+    }
+  });
+});
