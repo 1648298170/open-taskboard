@@ -159,17 +159,17 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
 });
 
 describe('workspace directory API', () => {
-  it('creates a directory and inherits its path/server URL into projects', async () => {
+  it('creates a directory group and stores project-specific path/server/session bindings', async () => {
     const { app, cleanup } = await makeApp();
     const directoryRes = await app.inject({
       method: 'POST', url: '/api/directories', headers: json,
-      payload: { name: 'Workspace A', path: '/workspace/a', serverUrl: 'http://127.0.0.1:4096' }
+      payload: { name: 'Workspace A' }
     });
     assert.equal(directoryRes.statusCode, 201);
     const directory = directoryRes.json<{ id: string }>();
     const projectRes = await app.inject({
       method: 'POST', url: '/api/projects', headers: json,
-      payload: { name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a' }
+      payload: { name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a', workspacePath: '/workspace/a', wakeChannel: 'http://127.0.0.1:4096' }
     });
     assert.equal(projectRes.statusCode, 201);
     const project = projectRes.json<{ directoryId: string; defaultSessionId: string; workspacePath: string; wakeChannel: string }>();
@@ -180,21 +180,21 @@ describe('workspace directory API', () => {
     cleanup();
   });
 
-  it('updates directory routing for all child projects and prevents deleting a non-empty directory', async () => {
+  it('keeps project routing independent from directory grouping and prevents deleting a non-empty directory', async () => {
     const { app, cleanup } = await makeApp();
     const created = await app.inject({
       method: 'POST', url: '/api/directories', headers: json,
-      payload: { name: 'Workspace', path: '/workspace', serverUrl: 'http://127.0.0.1:4096' }
+      payload: { name: 'Workspace' }
     });
     const directoryId = created.json<{ id: string }>().id;
     const project = await app.inject({
       method: 'POST', url: '/api/projects', headers: json,
-      payload: { name: 'Project', directoryId }
+      payload: { name: 'Project', directoryId, workspacePath: '/workspace', wakeChannel: 'http://127.0.0.1:4096' }
     });
     const projectId = project.json<{ id: string }>().id;
     const updated = await app.inject({
-      method: 'PATCH', url: `/api/directories/${directoryId}`, headers: json,
-      payload: { path: '/workspace/renamed', serverUrl: 'http://127.0.0.1:4097' }
+      method: 'PATCH', url: `/api/projects/${projectId}`, headers: json,
+      payload: { workspacePath: '/workspace/renamed', wakeChannel: 'http://127.0.0.1:4097' }
     });
     assert.equal(updated.statusCode, 200);
     const projectAfter = (await app.inject({ method: 'GET', url: `/api/projects/${projectId}` })).json<{ workspacePath: string; wakeChannel: string }>();
@@ -211,7 +211,7 @@ describe('directory OpenCode session routes', () => {
     const { app, cleanup } = await makeApp();
     const created = await app.inject({
       method: 'POST', url: '/api/directories', headers: json,
-      payload: { name: 'Workspace', path: '/workspace' }
+      payload: { name: 'Workspace' }
     });
     assert.equal(created.statusCode, 201);
     const id = created.json<{ id: string }>().id;
