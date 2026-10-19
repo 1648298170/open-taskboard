@@ -850,3 +850,36 @@ describe('in_review 门禁只拦状态流转', () => {
     cleanup();
   });
 });
+
+
+describe('server bind safety', () => {
+  it('refuses non-loopback binding without an API token', async () => {
+    await assert.rejects(
+      () => buildApp({ env: { TASKBOARD_HOST: '0.0.0.0' } }),
+      /TASKBOARD_TOKEN/
+    );
+  });
+
+  it('allows loopback binding without a token for local-only use', async () => {
+    const { app, cleanup } = await makeApp({ TASKBOARD_HOST: '127.0.0.1' });
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/meta' });
+      assert.equal(response.statusCode, 200);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('allows non-loopback binding when an API token is configured', async () => {
+    const { app, cleanup } = await makeApp({ TASKBOARD_HOST: '0.0.0.0', TASKBOARD_TOKEN: 'test-token' });
+    try {
+      const response = await app.inject({
+        method: 'GET', url: '/api/meta',
+        headers: { authorization: 'Bearer test-token' }
+      });
+      assert.equal(response.statusCode, 200);
+    } finally {
+      cleanup();
+    }
+  });
+});
