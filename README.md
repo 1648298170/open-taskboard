@@ -269,6 +269,6 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 - 评论、活动流、标签、负责人、分支/worktree 绑定、起止日期（校验真实日历）、归档（归档父任务连带其未归档子任务）
 - 全文搜索（FTS5 trigram，标题/描述/评论，短查询退化 LIKE）、导出/导入 JSON（taskboard export/import）、统计面板（周吞吐/平均周期/贡献榜）、时间线视图、Mermaid 图渲染
 - 附件（元数据入库、正文落盘 `attachments/`，单文件 ≤10MB，每任务限额 20 个/总量 50MB 超限 400）、桌面通知、暗/亮主题、泳道分组、批量操作、j/k 键盘导航
-- 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE（`--exec` 适配任意 agent CLI）。已绑定 `sessionId` 的任务优先调用 OpenCode v1 `POST /session/:id/prompt_async`，复用原会话上下文；未绑定任务才走项目 `wake_channel` / `--tui-url` TUI 注入，再到 headless spawn。绑定会话投递失败时不创建新会话，评论保留 pending 供重试；`--on` 可改唤醒前缀，`--project` 可选作用域过滤
+- 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE（`--exec` 适配任意 agent CLI）。已绑定 `sessionId` 的任务优先调用 OpenCode v1 `POST /session/:id/prompt_async`，复用原会话上下文；未绑定任务才走项目 `wake_channel` / `--tui-url` TUI 注入，再到 headless spawn。绑定会话投递失败时不创建新会话，评论保留 pending 供重试；`--on` 可改唤醒前缀，`--project` 可选作用域过滤，`--ignore-author a,b` 按作者忽略唤醒评论（防 agent 自我唤醒循环，`watch` 自身 actor 始终忽略）
 - SSE 实时刷新（Web 多端 + 跨 agent 工具共享同一块板；25s 心跳保活，断线指数退避重连 + 全量兜底拉取）
 - LAN 共享（`TASKBOARD_HOST=0.0.0.0`）、Bearer 令牌认证、只读模式、人工 done 门禁、webhook 事件转发
