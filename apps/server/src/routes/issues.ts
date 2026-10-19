@@ -53,18 +53,18 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       return reply.code(400).send({ error: '创建任务前必须先选择一个 OpenCode 会话（sessionId 不能为空）' });
     }
     // T7-36 门禁的 create 侧：直接以 status:'done' 创建与 PATCH 置 done 同责，
-    // 非 web 来源必须带 confirm 逃生舱（env 未设时零行为变化）。
+    // 非 web 来源不能通过客户端自报 confirm 绕过人工完成门禁。
     if (config.humanDone && parsed.data.status === 'done' &&
-        String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true) {
+        String(req.headers['x-taskboard-actor'] ?? '') !== 'web') {
       return reply.code(403).send({ error: 'done requires human confirmation' });
     }
     // v0.4: in_review 评论门禁的 create 侧——创建即 in_review 时评论尚不可
-    // 能存在，改用 confirm 逃生舱（与 done 同构）。
+    // 能存在，非 web 来源必须先创建任务，再评论并提交验收。
     if (config.reviewComment && parsed.data.status === 'in_review' &&
-        String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true) {
+        String(req.headers['x-taskboard-actor'] ?? '') !== 'web') {
       return reply.code(403).send({ error: 'in_review requires a comment by this actor (先落评再交验)' });
     }
-    // confirm 是门禁逃生舱字段——从 create body 剥离，不透传 Store
+    // 兼容旧客户端的 confirm 字段不作为审批凭证，且不透传 Store
     const { confirm: _confirm, ...body } = parsed.data;
     return reply.code(201).send(store.createIssue({ ...body, projectId: req.params.projectId }, actor));
   });
@@ -96,13 +96,13 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     // 留过评论（工作与验证的书面痕迹）；默认开启，TASKBOARD_REVIEW_COMMENT=0 退出。
     // 仅拦状态流转（当前已 in_review 的非流转补丁不拦——已有人交验过，无信息损失）。
     // require-session：agent 流转 to in_progress 必须携带 sessionId（或任务已
-    // 绑定 / web 来源 / confirm: true）——错误文案直接教学，agent 重试即补齐。
+    // 绑定 / web 来源）——错误文案直接教学，agent 重试即补齐。
     if (config.requireSession && parsed.data.status === 'in_progress'
       && store.getIssue(req.params.id)?.status !== 'in_progress'
-      && String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true
+      && String(req.headers['x-taskboard-actor'] ?? '') !== 'web'
       && !parsed.data.sessionId && !store.getIssue(req.params.id)?.sessionId) {
       return reply.code(403).send({
-        error: 'starting a task requires binding: claim/PATCH with sessionId and branch, or confirm: true (TASKBOARD_REQUIRE_SESSION)'
+        error: 'starting a task requires binding: claim/PATCH with sessionId and branch, ; confirm:true is not an approval credential (TASKBOARD_REQUIRE_SESSION)'
       });
     }
     if (config.reviewComment && parsed.data.status === 'in_review' &&
@@ -118,11 +118,10 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     // check first), so a gated request gets 403 even with a stale version.
     // Only direct status='done' patches are gated; other statuses and archive
     // are unaffected. Default (env unset/empty): zero behavior change.
-    // T7-36 逃生舱（spec：默认仅 web）：用户在对话中确认后，agent 可传
-    // confirm: true 代为设置。已知边界（本地优先工具）：actor 是客户端自报
-    // 头，可被伪造——门禁约束的是守规矩的 stock cli/mcp 客户端，非恶意对手。
+    // confirm is retained for request compatibility, but is not proof of human approval.
+    // The actor header remains a workflow label; it must not be treated as identity authentication.
     if (config.humanDone && parsed.data.status === 'done' &&
-        String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true) {
+        String(req.headers['x-taskboard-actor'] ?? '') !== 'web') {
       return reply.code(403).send({ error: 'done requires human confirmation' });
     }
     // confirm 是门禁逃生舱字段——从 patch 剥离，不透传 Store
@@ -159,9 +158,9 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
     if (config.requireSession && !parsed.data.sessionId && !store.getIssue(req.params.id)?.sessionId
-      && String(req.headers['x-taskboard-actor'] ?? '') !== 'web' && parsed.data.confirm !== true) {
+      && String(req.headers['x-taskboard-actor'] ?? '') !== 'web') {
       return reply.code(403).send({
-        error: 'starting a task requires binding: claim/PATCH with sessionId and branch, or confirm: true (TASKBOARD_REQUIRE_SESSION)'
+        error: 'starting a task requires binding: claim/PATCH with sessionId and branch, ; confirm:true is not an approval credential (TASKBOARD_REQUIRE_SESSION)'
       });
     }
     return store.claimIssue(req.params.id, parsed.data.agent, parsed.data.ttlMinutes ?? 30, actor || parsed.data.agent, parsed.data.sessionId, parsed.data.branch);
