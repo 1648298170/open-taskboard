@@ -3,6 +3,8 @@ import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { Store, ValidationError } from '@taskboard/core';
 import { createProjectSchema, projectPatchSchema, z } from '@taskboard/core/schemas';
 import { listCommits, scanGitRefs } from '../git-refs.js';
+import { listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
+import { resolve } from 'node:path';
 
 interface ProjectParams { projectId: string }
 interface CommitsQuery { ref?: string }
@@ -32,6 +34,31 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     const parsed = projectPatchSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     return store.updateProject(req.params.projectId, parsed.data);
+  });
+
+  // OpenCode v1 sessions available to bind to a task. Sessions are read from
+  // the same server URL used by the project's TUI wake channel.
+  app.get('/api/projects/:projectId/opencode-sessions', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
+    const project = store.getProject(req.params.projectId);
+    if (!project) return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
+    if (!project.wakeChannel) {
+      return reply.code(400).send({ error: '先在项目设置中配置 OpenCode 唤醒端口，再选择会话' });
+    }
+    try {
+      const base = normalizeOpenCodeBase(project.wakeChannel);
+      const sessions = await listOpenCodeSessions(base);
+      const normalizePath = (value: string): string => {
+        const absolute = resolve(value).replace(/\\\\/g, '/').replace(/\/$/, '');
+        return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+      };
+      const workspace = project.workspacePath.trim();
+      const compatible = workspace
+        ? sessions.filter(session => session.directory && normalizePath(session.directory) === normalizePath(workspace))
+        : sessions;
+      return { sessions: compatible, workspacePath: workspace, serverUrl: base };
+    } catch (err) {
+      return reply.code(502).send({ error: `无法读取 OpenCode 会话：${(err as Error).message}` });
+    }
   });
 
   // T2-8: branches + worktrees of the project's workspacePath. Git failures
