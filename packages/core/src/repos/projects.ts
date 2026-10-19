@@ -10,7 +10,7 @@ const shortId = (): string => randomUUID().slice(0, 8);
 export interface ProjectPatch {
   name?: string;
   labels?: string;
-  /** Updating this updates the parent directory's OpenCode server. */
+  workspacePath?: string;
   wakeChannel?: string;
   defaultSessionId?: string | null;
 }
@@ -27,27 +27,26 @@ export class ProjectRepo {
     if (this.get(id)) throw new ConflictError(`project already exists: ${id}`);
     if (!input.name.trim()) throw new ValidationError('name: must not be blank');
 
+    const workspacePath = input.workspacePath?.trim() ?? '';
+    const wakeChannel = input.wakeChannel?.trim() ?? '';
     let directoryId = input.directoryId;
-    let workspacePath = input.workspacePath?.trim() ?? '';
-    let wakeChannel = input.wakeChannel?.trim() ?? '';
     if (directoryId) {
-      const directory = this.db.prepare(
-        'SELECT path, server_url AS serverUrl FROM directories WHERE id = ?'
-      ).get(directoryId) as { path: string; serverUrl: string } | undefined;
+      const directory = this.db.prepare('SELECT id FROM directories WHERE id = ?').get(directoryId) as { id: string } | undefined;
       if (!directory) throw new NotFoundError(`directory not found: ${directoryId}`);
-      workspacePath = directory.path;
-      wakeChannel = directory.serverUrl;
     } else {
+      // Legacy CLI/MCP clients do not send directoryId. Reuse a matching group
+      // when possible, otherwise create one named after the workspace path.
       const existing = this.db.prepare(
-        'SELECT id FROM directories WHERE path = ? AND server_url = ? ORDER BY created_at LIMIT 1'
+        'SELECT directory_id AS id FROM projects WHERE workspace_path = ? AND wake_channel = ? AND directory_id IS NOT NULL ORDER BY created_at LIMIT 1'
       ).get(workspacePath, wakeChannel) as { id: string } | undefined;
       if (existing) {
         directoryId = existing.id;
       } else {
         directoryId = shortId();
+        const label = workspacePath.split(/[\\/]/).filter(Boolean).at(-1) || '默认目录';
         this.db.prepare(
           'INSERT INTO directories (id, name, path, server_url, created_at) VALUES (?, ?, ?, ?, ?)'
-        ).run(directoryId, workspacePath || '默认目录', workspacePath, wakeChannel, now());
+        ).run(directoryId, label, workspacePath, wakeChannel, now());
       }
     }
 
@@ -66,13 +65,11 @@ export class ProjectRepo {
     if (patch.name !== undefined) { sets.push('name = ?'); vals.push(patch.name.trim()); }
     if (patch.labels !== undefined) { sets.push('labels = ?'); vals.push(patch.labels); }
     if (patch.defaultSessionId !== undefined) { sets.push('default_session_id = ?'); vals.push(patch.defaultSessionId); }
+    if (patch.workspacePath !== undefined) { sets.push('workspace_path = ?'); vals.push(patch.workspacePath.trim()); }
+    if (patch.wakeChannel !== undefined) { sets.push('wake_channel = ?'); vals.push(patch.wakeChannel.trim()); }
     if (sets.length > 0) {
       vals.push(id);
       this.db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
-    }
-    if (patch.wakeChannel !== undefined && project.directoryId) {
-      this.db.prepare('UPDATE directories SET server_url = ? WHERE id = ?').run(patch.wakeChannel.trim(), project.directoryId);
-      this.db.prepare('UPDATE projects SET wake_channel = ? WHERE directory_id = ?').run(patch.wakeChannel.trim(), project.directoryId);
     }
   }
 
