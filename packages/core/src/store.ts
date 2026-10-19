@@ -97,10 +97,12 @@ export class Store {
 
   revision(): number {
     return this.db.prepare(
-      `SELECT (SELECT COUNT(*) FROM directories) + (SELECT COUNT(*) FROM projects) * 10 + (SELECT COUNT(*) FROM issues) * 100
-             + (SELECT COUNT(*) FROM comments) * 100
-             + (SELECT COUNT(*) FROM issue_dependencies) * 1000
-             + (SELECT COUNT(*) FROM attachments) * 10000
+      `SELECT (SELECT COUNT(*) FROM directories)
+             + (SELECT COUNT(*) FROM projects) * 10
+             + (SELECT COUNT(*) FROM issues) * 100
+             + (SELECT COUNT(*) FROM comments) * 1000
+             + (SELECT COUNT(*) FROM issue_dependencies) * 10000
+             + (SELECT COUNT(*) FROM attachments) * 100000
              + (SELECT COALESCE(SUM(version),0) FROM issues) AS rev`
     ).get()!.rev as number;
   }
