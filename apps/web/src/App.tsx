@@ -807,7 +807,7 @@ export default function App() {
             </label>
             {projSessionsError && <p className="form-error">{projSessionsError}</p>}
             <label>标签（可选）<input value={projLabels} placeholder="标签,逗号分隔" onChange={e => setProjLabels(e.target.value)} /></label>
-            <p className="dialog-note">工作目录默认继承所选目录；项目允许单独覆盖。新建任务时会自动继承项目的工作目录和默认 Session，无需重复填写。</p>
+            <p className="dialog-note">目录工作目录仅是默认值；项目实际工作目录、OpenCode Server 和默认 Session 必须配置。服务端会校验 Session 的实际目录。新建任务自动继承项目的工作目录和默认 Session。</p>
             <menu><button type="button" className="btn" onClick={() => { setProjCreateOpen(false); setSessionCreateOpen(false); }}>取消</button><button type="submit" className="btn primary" disabled={projSessionsLoading || !projSessions.some(session => session.id === projDefaultSessionId)}>创建项目</button></menu>
           </form>
         </dialog>
