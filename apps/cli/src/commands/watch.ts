@@ -242,7 +242,7 @@ export const watchCommand: Command = {
               console.log(`watch: 补拉唤醒 #${w.issueId}: ${w.instruction}`);
               const backfillTui = channelFor(backfillChannel, tuiBase);
               queue = queue.then(async () => {
-                const delivered = await executeWake(w.issueId, buildWakePrompt(w.issueId, w.issueTitle, w.instruction), backfillTui, w.commentId);
+                const delivered = await executeWake(w.issueId, buildWakePrompt(w.issueId, w.issueTitle, w.instruction), backfillTui, w.commentId, backfillChannel);
                 if (!delivered) processed.delete(w.key);
               }).catch(err => { processed.delete(w.key); console.error(`watch: 补拉唤醒失败: ${(err as Error).message}`); });
             }
@@ -268,7 +268,7 @@ export const watchCommand: Command = {
       }
     };
 
-    const executeWake = async (issueId: string, prompt: string, tuiUrl?: string, commentId = ''): Promise<boolean> => {
+    const executeWake = async (issueId: string, prompt: string, tuiUrl?: string, commentId = '', projectChannel?: string | null): Promise<boolean> => {
       // Session binding is authoritative. Never inject a bound task into the
       // currently selected TUI session, and never silently spawn a new session.
       let sessionId: string | null = null;
@@ -293,7 +293,7 @@ export const watchCommand: Command = {
         // Prefer the explicit session server, then use the project's configured
         // OpenCode endpoint. /prompt_async is the OpenCode v1 API that queues
         // execution in the EXISTING session and returns without waiting for it.
-        const sessionBase = opencodeBase ?? tuiUrl;
+        const sessionBase = projectChannel?.trim() || opencodeBase || tuiUrl;
         if (!sessionBase) {
           console.error(`watch: task ${issueId} is bound to ${sessionId}, but no OpenCode server URL is configured; refusing to start a new session`);
           return false;
@@ -380,7 +380,8 @@ export const watchCommand: Command = {
             const issueId = String(p.issueId ?? '');
             const projectId = await resolveProject(issueId);
             if (projectFilter && !wantsProject(projectFilter, projectId)) return;
-            const tuiUrl = channelFor(await resolveChannel(projectId), tuiBase);
+            const projectChannel = await resolveChannel(projectId);
+            const tuiUrl = channelFor(projectChannel, tuiBase);
             const issueTitle = String(p.issueTitle ?? '');
             const commentId = String(p.id ?? '');
             const stripped = String(p.body ?? '').slice(prefix.length).trim();
@@ -391,7 +392,7 @@ export const watchCommand: Command = {
             const by = typeof p.author === 'string' && p.author ? ` (${p.author})` : '';
             console.log(`watch: wake${by}: ${stripped}`);
             queue = queue.then(async () => {
-              const delivered = await executeWake(issueId, buildWakePrompt(issueId, issueTitle, stripped), tuiUrl, commentId);
+              const delivered = await executeWake(issueId, buildWakePrompt(issueId, issueTitle, stripped), tuiUrl, commentId, projectChannel);
               if (!delivered) processed.delete(key);
             }).catch(err => { processed.delete(key); console.error(`watch: wake failed: ${(err as Error).message}`); });
           });
