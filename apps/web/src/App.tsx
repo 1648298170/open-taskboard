@@ -747,56 +747,166 @@ export default function App() {
         onCreated={id => { void refresh(); if (id) openIssue(id); }}
         onError={msg => showToast(`✗ ${msg}`)} />
 
-      {/* v0.4: 新建项目对话框（id 可选留空由后端定，name 必填）。 */}
+      {directoryCreateOpen && (
+        <dialog open className="new-dialog">
+          <form onSubmit={async e => {
+            e.preventDefault();
+            const name = directoryName.trim();
+            const path = directoryPath.trim();
+            const serverUrl = directoryServerUrl.trim();
+            if (!name || !path) { showToast('✗ 目录名称和路径不能为空'); return; }
+            if (serverUrl) {
+              try {
+                const parsed = new URL(serverUrl);
+                if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) {
+                  throw new Error('请输入纯 HTTP(S) Server 地址，例如 http://127.0.0.1:4096');
+                }
+              } catch (err) { showToast('✗ ' + (err as Error).message); return; }
+            }
+            try {
+              const directory = await api_.createDirectory({ name, path, serverUrl });
+              setDirectories(prev => [...prev, directory]);
+              setExpandedDirectories(prev => new Set(prev).add(directory.id));
+              setDirectoryCreateOpen(false);
+              setProjectDirectoryId(directory.id);
+              showToast('已创建工作目录：' + directory.name);
+            } catch (err) { showToast('✗ ' + (err as Error).message); }
+          }}>
+            <h2>新建工作目录</h2>
+            <label>目录名称
+              <input required autoFocus value={directoryName} placeholder="例如：前端项目"
+                onChange={e => setDirectoryName(e.target.value)} />
+            </label>
+            <label>工作目录绝对路径
+              <input required value={directoryPath} placeholder="例如：D:\\workspace\\projects"
+                onChange={e => setDirectoryPath(e.target.value)} />
+            </label>
+            <label>OpenCode Server URL
+              <input value={directoryServerUrl} placeholder="例如：http://127.0.0.1:4096"
+                onChange={e => setDirectoryServerUrl(e.target.value)} />
+            </label>
+            <p className="dialog-note">目录路径和 Server 地址会作为该目录下新建项目的默认配置。</p>
+            <menu>
+              <button type="button" className="btn" onClick={() => setDirectoryCreateOpen(false)}>取消</button>
+              <button type="submit" className="btn primary">创建目录</button>
+            </menu>
+          </form>
+        </dialog>
+      )}
+
       {projCreateOpen && (
         <dialog open className="new-dialog">
           <form onSubmit={async e => {
             e.preventDefault();
             const name = projName.trim();
-            if (!name) return;
             const id = projId.trim();
-            const port = projWakePort.trim();
-            if (port && (!/^\d{2,5}$/.test(port) || Number(port) > 65535)) { showToast('✗ 唤醒端口须为 1024-65535 的数字'); return; }
             const labels = projLabels.trim();
-            const wakeChannel = port ? `http://127.0.0.1:${port}` : undefined;
+            if (!name) { showToast('✗ 项目名称不能为空'); return; }
+            if (!projectDirectoryId || !directories.some(directory => directory.id === projectDirectoryId)) {
+              showToast('✗ 请先选择工作目录'); return;
+            }
+            if (!projDefaultSessionId) {
+              showToast('✗ 请先选择或新建一个 OpenCode Session'); return;
+            }
             try {
-              const workspacePath = projWorkspacePath.trim();
-              const p = await api_.createProject({ ...(id ? { id } : {}), name, ...(workspacePath ? { workspacePath } : {}), ...(wakeChannel ? { wakeChannel } : {}), ...(labels ? { labels } : {}) });
+              const project = await api_.createProject({
+                ...(id ? { id } : {}),
+                name,
+                directoryId: projectDirectoryId,
+                defaultSessionId: projDefaultSessionId,
+                ...(labels ? { labels } : {})
+              });
               setProjCreateOpen(false);
-              setProjects(prev => [...prev, p]);
-              setProjectId(p.id);
-              showToast(`已创建项目 ${p.id}${p.wakeChannel ? `（唤醒 → ${p.wakeChannel}）` : ''}`);
-            } catch (err) { showToast(`✗ ${(err as Error).message}`); }
+              setProjects(prev => [...prev, project]);
+              setProjectId(project.id);
+              setExpandedDirectories(prev => new Set(prev).add(projectDirectoryId));
+              showToast('已创建项目 ' + project.name);
+              void refresh(project.id);
+            } catch (err) { showToast('✗ ' + (err as Error).message); }
           }}>
             <h2>新建项目</h2>
+            <label>项目名称
+              <input required autoFocus value={projName} placeholder="例如：登录模块"
+                onChange={e => setProjName(e.target.value)} />
+            </label>
             <div className="row">
-              <label>名称
-                <input required autoFocus value={projName} placeholder="如 登录模块"
-                  onChange={e => setProjName(e.target.value)} />
-              </label>
-              <label>id（可选）
+              <label>项目 ID（可选）
                 <input value={projId} placeholder="留空自动生成"
                   onChange={e => setProjId(e.target.value)} />
               </label>
-            </div>
-            <div className="row">
-              <label>唤醒端口（可选）
-                <input inputMode="numeric" value={projWakePort} placeholder="如 4097"
-                  onChange={e => setProjWakePort(e.target.value)} />
-              </label>
-              <label>标签（可选）
-                <input value={projLabels} placeholder="标签,逗号分隔"
-                  onChange={e => setProjLabels(e.target.value)} />
+              <label>工作目录
+                <Select value={projectDirectoryId}
+                  onChange={value => { setProjectDirectoryId(value); setProjDefaultSessionId(''); setProjSessions([]); }}
+                  options={directories.map(directory => ({ value: directory.id, label: directory.name }))}
+                  placeholder="选择工作目录" />
               </label>
             </div>
-            <label>项目工作区路径（可选，建议填写）
-              <input value={projWorkspacePath} placeholder="如 D:\\workspace\\projects\\my-app"
-                onChange={e => setProjWorkspacePath(e.target.value)} />
+            {projectDirectoryId && directories.find(directory => directory.id === projectDirectoryId) && (
+              <div className="directory-config-summary">
+                <div><span>路径</span><code>{directories.find(directory => directory.id === projectDirectoryId)?.path}</code></div>
+                <div><span>Server</span><code>{directories.find(directory => directory.id === projectDirectoryId)?.serverUrl || '未配置'}</code></div>
+              </div>
+            )}
+            <label>OpenCode Session（必选）
+              <div className="session-select-row">
+                <div className="session-select-control">
+                  <Select value={projDefaultSessionId}
+                    onChange={setProjDefaultSessionId}
+                    options={projSessions.map(session => ({
+                      value: session.id,
+                      label: session.title + ' · ' + session.id.slice(0, 12)
+                    }))}
+                    placeholder={projSessionsLoading ? '正在读取 Session…' : '选择已有 Session'} />
+                </div>
+                <button type="button" className="btn" disabled={!projectDirectoryId || projSessionsLoading}
+                  onClick={() => { setSessionTitle(projName.trim() || '新项目'); setSessionCreateOpen(true); }}>
+                  <Plus size={13} /> 新建 Session
+                </button>
+              </div>
             </label>
-            <p style={{ margin: '0 0 4px', fontSize: 11, color: 'var(--ink-dim)' }}>配置 OpenCode 服务后可选择已有会话；填写工作区路径后，会过滤掉其他目录的会话。</p>
+            {projSessionsError && <p className="form-error">{projSessionsError}</p>}
+            <label>标签（可选）
+              <input value={projLabels} placeholder="标签,逗号分隔"
+                onChange={e => setProjLabels(e.target.value)} />
+            </label>
+            <p className="dialog-note">项目会绑定所选 Session、目录路径和 OpenCode Server。后续任务默认预选该 Session，但仍可选择同目录的其他会话。</p>
             <menu>
               <button type="button" className="btn" onClick={() => setProjCreateOpen(false)}>取消</button>
-              <button type="submit" className="btn primary">创建</button>
+              <button type="submit" className="btn primary">创建项目</button>
+            </menu>
+          </form>
+        </dialog>
+      )}
+
+      {sessionCreateOpen && (
+        <dialog open className="new-dialog">
+          <form onSubmit={async e => {
+            e.preventDefault();
+            if (!projectDirectoryId) { showToast('✗ 请先选择工作目录'); return; }
+            const title = sessionTitle.trim();
+            if (!title) { showToast('✗ Session 标题不能为空'); return; }
+            try {
+              const result = await api_.createOpenCodeSession(projectDirectoryId, title);
+              setProjSessions(prev => [result.session, ...prev.filter(session => session.id !== result.session.id)]);
+              setProjDefaultSessionId(result.session.id);
+              setProjSessionsError(null);
+              setSessionCreateOpen(false);
+              showToast('已创建并绑定 Session：' + result.session.id);
+            } catch (err) { showToast('✗ ' + (err as Error).message); }
+          }}>
+            <h2>新建 OpenCode Session</h2>
+            <label>Session 标题
+              <input required autoFocus value={sessionTitle}
+                onChange={e => setSessionTitle(e.target.value)} placeholder="例如：登录模块开发" />
+            </label>
+            <div className="directory-config-summary">
+              <div><span>目录</span><code>{directories.find(directory => directory.id === projectDirectoryId)?.path ?? ''}</code></div>
+              <div><span>Server</span><code>{directories.find(directory => directory.id === projectDirectoryId)?.serverUrl ?? ''}</code></div>
+            </div>
+            <p className="dialog-note">Session 将在所选目录中创建。创建成功后会自动选为当前项目的默认 Session。</p>
+            <menu>
+              <button type="button" className="btn" onClick={() => setSessionCreateOpen(false)}>取消</button>
+              <button type="submit" className="btn primary">创建 Session</button>
             </menu>
           </form>
         </dialog>
