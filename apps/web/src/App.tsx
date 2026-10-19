@@ -452,6 +452,460 @@ export default function App() {
             loadProjects();
           } catch (err) { showToast('✗ ' + (err as Error).message); }
         }}>＋ 新建工作目录</button>
+        <p className="dialog-note">创建工作目录后，在左侧目录节点下新建项目，并选择或创建一个 OpenCode Session。</p>eCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUS_CN, STATUSES, WorkspaceDirectory } from './api';
+import { Board, buildBlockedByMap, flattenCardOrder, GroupBy, todayStr } from './components/Board';
+import { issueMatchesFilters } from './logic/filters';
+import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
+import { confirmDialog, promptDialog } from './components/dialogs';
+import { Select } from './components/Select';
+import { Bell, ChartColumn, GanttChart, Keyboard, Moon, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react';
+import { Drawer } from './components/Drawer';
+import { NewIssueDialog } from './components/NewIssueDialog';
+import { StatsPanel } from './components/StatsPanel';
+import { Timeline } from './components/Timeline';
+
+/** 从 location.hash 解析深链：#/issue/<id> → <id>，其余 → null。 */
+function issueIdFromHash(): string | null {
+  const m = window.location.hash.match(/^#\/issue\/([^/]+)$/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+type SortBy = 'priority' | 'created';
+type Theme = 'dark' | 'light';
+
+export default function App() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [directories, setDirectories] = useState<WorkspaceDirectory[]>([]);
+  const [expandedDirectories, setExpandedDirectories] = useState<Set<string>>(new Set());
+  const [directoryCreateOpen, setDirectoryCreateOpen] = useState(false);
+  const [directoryName, setDirectoryName] = useState('');
+  const [directoryPath, setDirectoryPath] = useState('');
+  const [directoryServerUrl, setDirectoryServerUrl] = useState('');
+  const [projectDirectoryId, setProjectDirectoryId] = useState('');
+  const [projDefaultSessionId, setProjDefaultSessionId] = useState('');
+  const [projSessions, setProjSessions] = useState<import('./api').OpenCodeSessionOption[]>([]);
+  const [projSessionsLoading, setProjSessionsLoading] = useState(false);
+  const [projSessionsError, setProjSessionsError] = useState<string | null>(null);
+  const [sessionCreateOpen, setSessionCreateOpen] = useState(false);
+  const [sessionTitle, setSessionTitle] = useState('');
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [issues, setIssues] = useState<Issue[]>([]);
+  const [deps, setDeps] = useState<DependencyEdge[]>([]);
+  const [progress, setProgress] = useState<Progress | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [connError, setConnError] = useState(false);
+  const [sortBy, setSortBy] = useState<SortBy>('created');
+  const [filters, setFilters] = useState({ text: '', assignee: '', label: '', due: '' as '' | 'overdue' | 'today' });
+  // T2-9: 令牌认证 —— 任一 API 调用 401 时置 true，渲染令牌输入浮层。
+  const [needToken, setNeedToken] = useState(false);
+  const [tokenInput, setTokenInput] = useState('');
+  // toast 支持附一行弱化明细（批量操作列出失败 id）。
+  const [toast, setToast] = useState<{ msg: string; detail?: string } | null>(null);
+  // T5-26: 批量模式 + 已选 id 集合。
+  const [batchMode, setBatchMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // T5-27: 泳道分组。
+  const [groupBy, setGroupBy] = useState<GroupBy>('none');
+  // T5-28: 主题（localStorage 持久化，默认暗色）。
+  const [theme, setTheme] = useState<Theme>(() => localStorage.getItem('taskboard-theme') === 'light' ? 'light' : 'dark');
+  // T6-35: 桌面通知开关（存储 '1' 且权限已授予才算开）。
+  const [notify, setNotify] = useState(() =>
+    localStorage.getItem('taskboard-notify') === '1' && 'Notification' in window && Notification.permission === 'granted');
+  // T5-29: j/k 高亮的卡片 id。
+  const [cursorId, setCursorId] = useState<string | null>(null);
+  // T6-31: 统计面板开关 + 面板数据（打开时拉取，refresh 时重取）。
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [stats, setStats] = useState<Stats | null>(null);
+  // T7-37: 时间线视图开关（打开时替代看板主体渲染）。
+  const [timelineOpen, setTimelineOpen] = useState(false);
+  // v0.4: 项目管理（新建对话框浮层；删除走 prompt 输入 id 确认）。
+  const [projCreateOpen, setProjCreateOpen] = useState(false);
+  const [projName, setProjName] = useState('');
+  const [projId, setProjId] = useState('');
+  const [projLabels, setProjLabels] = useState('');
+  const [projWakePort, setProjWakePort] = useState('');
+  const [projWorkspacePath, setProjWorkspacePath] = useState('');
+  const [helpOpen, setHelpOpen] = useState(false);
+  // v0.4: 旧标签页检测 —— SPA 部署后旧标签页继续跑旧 bundle（多次坑用户的根源）。
+  // 周期比对服务器最新 bundle 与当前运行版本，不一致则提示刷新。
+  const [staleBundle, setStaleBundle] = useState(false);
+  const [bundleHintDismissed, setBundleHintDismissed] = useState(false);
+
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  // T6-35: refresh 回调里读的最新通知开关 + 上次数据签名（ref 防 SSE 闭包过期）。
+  const notifyRef = useRef(notify);
+  const lastSigRef = useRef<string | null>(null);
+  // T6-31: refresh 里读的统计面板开关（同 notifyRef 的防过期手法）。
+  const statsOpenRef = useRef(statsOpen);
+
+  const isUnauthorized = (err: unknown): boolean => err instanceof ApiError && err.status === 401;
+
+  const showToast = useCallback((msg: string, detail?: string) => {
+    setToast({ msg, detail });
+    setTimeout(() => setToast(null), 2600);
+  }, []);
+
+  // T5-28: 主题同步到 <html data-theme>；默认（无值/暗色）走 :root 暗色变量。
+  useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+  useEffect(() => { notifyRef.current = notify; }, [notify]);
+  useEffect(() => { statsOpenRef.current = statsOpen; }, [statsOpen]);
+
+  useEffect(() => {
+    if (!projCreateOpen || !projectDirectoryId) {
+      setProjSessions([]);
+      setProjDefaultSessionId('');
+      setProjSessionsError(null);
+      return;
+    }
+    let cancelled = false;
+    setProjSessionsLoading(true);
+    setProjSessionsError(null);
+    api_.openCodeSessionsForDirectory(projectDirectoryId)
+      .then(result => {
+        if (cancelled) return;
+        setProjSessions(result.sessions);
+        setProjSessionsError(result.sessions.length ? null : '该工作目录下还没有 Session，请点击右侧按钮创建。');
+      })
+      .catch(err => {
+        if (!cancelled) setProjSessionsError((err as Error).message);
+      })
+      .finally(() => { if (!cancelled) setProjSessionsLoading(false); });
+    return () => { cancelled = true; };
+  }, [projCreateOpen, projectDirectoryId]);
+
+
+  // ---- 深链 #/issue/<id> ----
+  // 关闭→打开用 pushState 留一条历史（支持浏览器返回键）；抽屉内切换只 replace，历史不膨胀。
+  // pushState/replaceState 不触发 hashchange；hashchange 回调只改 state 不写 hash——无回环。
+  const openIssue = useCallback((id: string) => {
+    if (openId === null) history.pushState(null, '', `#/issue/${id}`);
+    else history.replaceState(null, '', `#/issue/${id}`);
+    setOpenId(id);
+  }, [openId]);
+
+  const closeDrawer = useCallback(() => {
+    setOpenId(null);
+    // 清 hash 且不留裸 '#'
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }, []);
+
+  // 首次加载：若带 #/issue/<id> 直接打开抽屉（数据未加载也没关系，Drawer 按 id 自取）
+  useEffect(() => {
+    const id = issueIdFromHash();
+    if (id) setOpenId(id);
+  }, []);
+
+  // 浏览器前进/后退或外部改 hash 时同步抽屉（hash 清空 → 关闭）
+  useEffect(() => {
+    const onHashChange = (): void => setOpenId(issueIdFromHash());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  const refresh = useCallback(async (pid = projectId) => {
+    if (!pid) return;
+    try {
+      const [list, prog, edges] = await Promise.all([
+        api_.listIssues(pid), api_.progress(pid), api_.listDependencies(pid)
+      ]);
+      // T6-35: 粗粒度变更检测 —— ids+versions 签名与上次不同且页面隐藏时发桌面通知。
+      const sig = list.map(i => `${i.id}@${i.version}`).join(',');
+      const prev = lastSigRef.current;
+      lastSigRef.current = sig;
+      if (prev !== null && prev !== sig && notifyRef.current && document.hidden) {
+        try { new Notification('任务看板', { body: '看板有更新' }); } catch { /* 通知失败静默 */ }
+      }
+      setIssues(list);
+      setProgress(prog);
+      setDeps(edges);
+      // T6-31: 统计面板开着时随本次 refresh 一起重取（失败静默——主列表
+      // 的 catch 已处理 401 等公共错误路径）。
+      if (statsOpenRef.current) api_.stats(pid).then(setStats).catch(() => {});
+    } catch (err) {
+      // SSE 回调里的 void refresh() 失败时静默忽略，避免未处理的 Promise 拒绝；
+      // 401（令牌缺失/失效）除外 —— 需要弹出令牌输入浮层。
+      if (isUnauthorized(err)) setNeedToken(true);
+    }
+  }, [projectId]);
+
+  const loadProjects = useCallback(() => {
+    Promise.all([api_.listProjects(), api_.listDirectories()]).then(([list, directoryList]) => {
+      setConnError(false);
+      setProjects(list);
+      setDirectories(directoryList);
+      setExpandedDirectories(prev => {
+        const next = new Set(prev);
+        for (const directory of directoryList) if (!next.size) next.add(directory.id);
+        return next;
+      });
+      if (list.length) {
+        const prev = localStorage.getItem('project');
+        const pid = prev && list.some(p => p.id === prev) ? prev : list[0].id;
+        setProjectId(pid);
+        const selected = list.find(p => p.id === pid);
+        if (selected?.directoryId) setExpandedDirectories(old => new Set(old).add(selected.directoryId!));
+      } else {
+        setProjectId(null);
+      }
+    }).catch(err => {
+      if (isUnauthorized(err)) setNeedToken(true);
+      else setConnError(true);
+    });
+  }, []);
+
+  useEffect(() => { loadProjects(); }, [loadProjects]);
+
+  // v0.4: bundle 版本检测（挂载时 + 每分钟 + 回到标签页时）
+  useEffect(() => {
+    const check = async (): Promise<void> => {
+      try {
+        const html = await (await fetch(location.href, { cache: 'no-store' })).text();
+        const latest = (html.match(/assets\/index-[^"]+\.js/) || [])[0]?.split('/').pop();
+        const running = [...document.querySelectorAll('script[src]')]
+          .map(s => (s as HTMLScriptElement).src.split('/').pop()).find(name => name?.startsWith('index-'));
+        if (latest && running) setStaleBundle(running !== latest);
+      } catch { /* 离线忽略 */ }
+    };
+    void check();
+    const timer = setInterval(() => void check(), 60_000);
+    const onVis = (): void => { if (document.visibilityState === 'visible') void check(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVis); };
+  }, []);
+
+  useEffect(() => { if (projectId) { localStorage.setItem('project', projectId); void refresh(projectId); } }, [projectId, refresh]);
+  useEffect(() => connectSSE(() => { void loadProjects(); void refresh(); }), [loadProjects, refresh]);
+  // T6-31: 面板打开（或切换项目）时立即拉取一次；开着期间的更新走 refresh 内的重取。
+  useEffect(() => {
+    if (!statsOpen || !projectId) return;
+    api_.stats(projectId).then(setStats).catch(err => { if (isUnauthorized(err)) setNeedToken(true); });
+  }, [statsOpen, projectId]);
+
+  // ---- 过滤 / 排序 ----
+  const filtersActive = filters.text.trim() !== '' || filters.assignee !== '' || filters.label !== '' || filters.due !== '';
+
+  const assigneeOptions = useMemo(() => {
+    const s = new Set<string>();
+    for (const i of issues) if (i.assignee) s.add(i.assignee);
+    return [...s];
+  }, [issues]);
+
+  const labelOptions = useMemo(() => {
+    const s = new Set<string>();
+    for (const i of issues) for (const raw of i.labels.split(',')) {
+      const t = raw.trim();
+      if (t) s.add(t);
+    }
+    return [...s];
+  }, [issues]);
+
+  // issueId → blocked-by ids（卡片 🔒 徽章的数据源）
+  const blockedByMap = useMemo(() => buildBlockedByMap(deps), [deps]);
+
+  const visibleIssues = useMemo(() => {
+    // 'priority' 保持 API 顺序（urgent>high>medium>low, createdAt）；'created' 按创建时间倒序
+    // ——扁平数组排序后 Board 内父/子分组各自保持该相对顺序。
+    const byCreatedDesc = (list: Issue[]): Issue[] =>
+      [...list].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    if (!filtersActive) return sortBy === 'created' ? byCreatedDesc(issues) : issues;
+    // due 过滤复用 DuePill 同款纯字符串日期比较（本地时区今天）。
+    const today = todayStr();
+    const matches = (i: Issue): boolean => issueMatchesFilters(i, filters, today);
+    const visible = new Set<string>();
+    for (const i of issues) {
+      if (!matches(i)) continue;
+      visible.add(i.id);
+      if (i.parentId) visible.add(i.parentId); // 子命中 → 父可见
+    }
+    // 父自身命中 → 其全部子任务可见（父仅因子命中而可见时，只显示命中的子任务）
+    for (const top of issues) {
+      if (top.parentId || !matches(top)) continue;
+      for (const c of issues) if (c.parentId === top.id) visible.add(c.id);
+    }
+    const list = issues.filter(i => visible.has(i.id));
+    return sortBy === 'created' ? byCreatedDesc(list) : list;
+  }, [issues, filters, filtersActive, sortBy]);
+
+  // T5-29: 可见卡片按渲染顺序的扁平 id 序列（与 Board 泳道/列渲染一致）。
+  const flatIds = useMemo(() => flattenCardOrder(visibleIssues, groupBy), [visibleIssues, groupBy]);
+
+  // ---- T5-26: 批量操作 ----
+  const toggleSelect = useCallback((id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const exitBatch = useCallback(() => {
+    setBatchMode(false);
+    setSelected(new Set());
+  }, []);
+
+  // 逐个执行（乐观锁用全量列表里的当前 version），汇总成功/失败并 toast。
+  const runBulk = async (kind: 'done' | 'archive' | 'delete'): Promise<void> => {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    if (kind === 'delete') {
+      const ok = await confirmDialog({ title: `删除 ${ids.length} 个任务及其子任务/评论？`, danger: true, confirmText: '删除' });
+      if (!ok) return;
+    }
+    let ok = 0;
+    const failed: string[] = [];
+    for (const id of ids) {
+      try {
+        if (kind === 'done') {
+          const cur = issues.find(i => i.id === id);
+          if (!cur) throw new Error('issue not found');
+          await api_.updateIssue(id, { status: 'done', version: cur.version });
+        } else if (kind === 'archive') {
+          await api_.archiveIssue(id);
+        } else {
+          await api_.deleteIssue(id);
+        }
+        ok++;
+      } catch {
+        failed.push(id);
+      }
+    }
+    setSelected(new Set());
+    await refresh();
+    showToast(`成功 ${ok} · 失败 ${failed.length}`,
+      failed.length ? `失败: ${failed.map(id => `#${id}`).join(' ')}` : undefined);
+  };
+
+  // ---- T5-29: 键盘快捷键 ----
+  // 输入法组合中不抢键；焦点在表单控件里时除 Escape 外全部跳过。
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.isComposing) return;
+      if (e.key === 'Escape') {
+        // 优先级：帮助 > 对话框 > 抽屉 > 批量选择。输入框里也生效——通用逃生键。
+        if (helpOpen) { setHelpOpen(false); return; }
+        if (dialogOpen) { setDialogOpen(false); return; }
+        if (projCreateOpen) { setProjCreateOpen(false); return; }
+        if (openId !== null) { closeDrawer(); return; }
+        if (batchMode && selected.size > 0) setSelected(new Set());
+        return;
+      }
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (e.key === '/') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
+      if (e.key === '?') { setHelpOpen(true); return; }
+      if (e.key === 'n') { setDialogOpen(true); return; }
+      if (e.key === 'j' || e.key === 'k') {
+        if (flatIds.length === 0) return;
+        e.preventDefault();
+        const idx = cursorId !== null ? flatIds.indexOf(cursorId) : -1;
+        const next = e.key === 'j'
+          ? (idx < 0 || idx >= flatIds.length - 1 ? 0 : idx + 1)
+          : (idx <= 0 ? flatIds.length - 1 : idx - 1);
+        setCursorId(flatIds[next] ?? null);
+        return;
+      }
+      if (e.key === 'Enter' && cursorId !== null && flatIds.includes(cursorId)) {
+        e.preventDefault();
+        openIssue(cursorId);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [dialogOpen, projCreateOpen, openId, batchMode, selected, flatIds, cursorId, closeDrawer, openIssue, helpOpen]);
+
+  // 高亮卡片滚入可视区（j/k 移动可能超出视口）。
+  useEffect(() => {
+    if (cursorId === null) return;
+    document.querySelector(`[data-card-id="${CSS.escape(cursorId)}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [cursorId]);
+
+  // ---- T5-28 / T6-35: 头部开关 ----
+  const toggleTheme = (): void => {
+    setTheme(prev => {
+      const next: Theme = prev === 'dark' ? 'light' : 'dark';
+      localStorage.setItem('taskboard-theme', next);
+      return next;
+    });
+  };
+
+  const toggleNotify = async (): Promise<void> => {
+    if (notify) {
+      setNotify(false);
+      localStorage.removeItem('taskboard-notify');
+      return;
+    }
+    if (!('Notification' in window)) { showToast('✗ 此浏览器不支持桌面通知'); return; }
+    let perm: NotificationPermission = Notification.permission;
+    if (perm === 'default') {
+      try { perm = await Notification.requestPermission(); } catch { perm = 'denied'; }
+    }
+    if (perm === 'granted') {
+      setNotify(true);
+      localStorage.setItem('taskboard-notify', '1');
+      showToast('已开启桌面通知');
+    } else {
+      showToast('✗ 通知权限未授予');
+    }
+  };
+
+  if (needToken) {
+    return (
+      <div className="token-overlay">
+        <div className="token-card">
+          <h2>需要访问令牌</h2>
+          <form onSubmit={e => {
+            e.preventDefault();
+            const t = tokenInput.trim();
+            if (!t) return;
+            localStorage.setItem('taskboard-token', t);
+            setNeedToken(false);
+            setTokenInput('');
+            setConnError(false);
+            loadProjects();   // 重建项目列表（SSE 重连自动带上新令牌）
+            void refresh();
+          }}>
+            <input type="password" autoFocus value={tokenInput} placeholder="TASKBOARD_TOKEN"
+              onChange={e => setTokenInput(e.target.value)} />
+            <button className="btn primary" type="submit">保存</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (connError) {
+    return (
+      <div className="empty-state">
+        <p>无法连接 taskboard 服务 — 请先运行 `pnpm start`，或检查 TASKBOARD_URL</p>
+        <button className="btn primary" onClick={loadProjects}>重试</button>
+      </div>
+    );
+  }
+
+  if (!projects.length && !directories.length) {
+    return (
+      <div className="empty-state">
+        <p>还没有工作目录。先创建一个目录，再在目录下创建项目。</p>
+        <button className="btn primary" onClick={async () => {
+          const name = await promptDialog({ title: '新建工作目录', lines: ['为一组项目设置显示名称。'], placeholder: '例如：前端项目', value: '' });
+          if (name === null) return;
+          const path = await promptDialog({ title: '工作目录路径', lines: ['填写绝对路径。'], placeholder: 'D:\\workspace\\projects', value: '' });
+          if (path === null) return;
+          const serverUrl = await promptDialog({ title: 'OpenCode Server URL', lines: ['可以暂时留空，之后在目录设置中补充。'], placeholder: 'http://127.0.0.1:4096', value: '' });
+          if (serverUrl === null) return;
+          try {
+            await api_.createDirectory({ name: name.trim(), path: path.trim(), serverUrl: serverUrl.trim() });
+            loadProjects();
+          } catch (err) { showToast('✗ ' + (err as Error).message); }
+        }}>＋ 新建工作目录</button>
         <p><a href="#" onClick={async e => {
           e.preventDefault();
           try {
