@@ -2099,6 +2099,75 @@
           }
         }
       }
+    },
+    "/api/settings": {
+      "summary": "Read and update global application defaults",
+      "get": {
+        "operationId": "getAppSettings",
+        "summary": "Read global application settings",
+        "tags": [
+          "settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "Global settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "put": {
+        "operationId": "updateAppSettings",
+        "summary": "Update global application defaults",
+        "tags": [
+          "settings"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "defaultWorkspacePath": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "defaultWorkspacePath"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3115,6 +3184,20 @@
         },
         "additionalProperties": false,
         "required": []
+      },
+      "AppSettings": {
+        "type": "object",
+        "description": "Persistent global application defaults",
+        "properties": {
+          "defaultWorkspacePath": {
+            "type": "string",
+            "description": "Default path prefilled when creating workspace directories"
+          }
+        },
+        "required": [
+          "defaultWorkspacePath"
+        ],
+        "additionalProperties": false
       }
     },
     "responses": {
