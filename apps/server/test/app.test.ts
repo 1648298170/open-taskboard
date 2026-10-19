@@ -159,17 +159,18 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
 });
 
 describe('workspace directory API', () => {
-  it('creates a directory group and stores project-specific path/server/session bindings', async () => {
+  it('creates a directory default workspace path and lets projects inherit it', async () => {
     const { app, cleanup } = await makeApp();
     const directoryRes = await app.inject({
       method: 'POST', url: '/api/directories', headers: json,
-      payload: { name: 'Workspace A' }
+      payload: { name: 'Workspace A', workspacePath: '/workspace/a' }
     });
     assert.equal(directoryRes.statusCode, 201);
-    const directory = directoryRes.json<{ id: string }>();
+    const directory = directoryRes.json<{ id: string; workspacePath: string }>();
+    assert.equal(directory.workspacePath, '/workspace/a');
     const projectRes = await app.inject({
       method: 'POST', url: '/api/projects', headers: json,
-      payload: { name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a', workspacePath: '/workspace/a', wakeChannel: 'http://127.0.0.1:4096' }
+      payload: { name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a', wakeChannel: 'http://127.0.0.1:4096' }
     });
     assert.equal(projectRes.statusCode, 201);
     const project = projectRes.json<{ directoryId: string; defaultSessionId: string; workspacePath: string; wakeChannel: string }>();
