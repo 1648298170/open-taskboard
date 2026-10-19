@@ -25,6 +25,14 @@ export interface Commit {
   when: string;
 }
 
+/** OpenCode session returned by the project's configured OpenCode server. */
+export interface OpenCodeSessionOption {
+  id: string;
+  title: string;
+  directory: string;
+  updatedAt: number | null;
+}
+
 /** T2-9: API 错误，携带 HTTP status — App 据此识别 401 并弹出令牌输入。 */
 export class ApiError extends Error {
   readonly status: number;
@@ -112,6 +120,7 @@ export const api_ = {
     api<{ ok: true }>('DELETE', `/api/issues/${id}/dependencies/${dependsOnId}`),
   progress: (projectId: string) => api<Progress>('GET', `/api/projects/${projectId}/progress`),
   stats: (projectId: string) => api<Stats>('GET', `/api/projects/${projectId}/stats?weeks=8`),
+  openCodeSessions: (projectId: string) => api<{ sessions: OpenCodeSessionOption[]; workspacePath: string; serverUrl: string }>('GET', `/api/projects/${encodeURIComponent(projectId)}/opencode-sessions`),
   gitRefs: (projectId: string) => api<GitRefs>('GET', `/api/projects/${projectId}/git-refs`),
   commits: (projectId: string, ref: string) =>
     api<{ commits: Commit[] }>('GET', `/api/projects/${projectId}/commits?ref=${encodeURIComponent(ref)}`)
