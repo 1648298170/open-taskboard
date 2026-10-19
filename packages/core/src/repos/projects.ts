@@ -37,8 +37,7 @@ export class ProjectRepo {
     } else {
       // Legacy CLI/MCP clients do not send directoryId. Directories are only
       // sidebar groups now: reuse a group with the same display name, or create
-      // one from the workspace basename without storing project configuration
-      // on the directory itself.
+      // one from the workspace basename and initialize its default workspace path.
       const label = workspacePath.split(/[\\/]/).filter(Boolean).at(-1) || '默认目录';
       const existing = this.db.prepare(
         'SELECT id FROM directories WHERE name = ? ORDER BY created_at LIMIT 1'
