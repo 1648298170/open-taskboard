@@ -83,9 +83,9 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   // Without a token the API is safe to expose only on a loopback interface.
   // Refuse accidental LAN/public exposure instead of silently serving an
   // unauthenticated API when TASKBOARD_HOST is changed for deployment.
-  const normalizedHost = effectiveHost.toLowerCase().replace(/^\\[|\\]$/g, '');
+  const normalizedHost = effectiveHost.toLowerCase().replace(/^\[|\]$/g, '');
   const loopback = normalizedHost === 'localhost' || normalizedHost === '::1'
-    || /^127(?:\\.\\d{1,3}){3}$/.test(normalizedHost);
+    || /^127(?:\.\d{1,3}){3}$/.test(normalizedHost);
   if (!config.token && !loopback) {
     throw new Error('Refusing to bind Taskboard to a non-loopback host without TASKBOARD_TOKEN. Configure a strong token or bind to 127.0.0.1.');
   }
