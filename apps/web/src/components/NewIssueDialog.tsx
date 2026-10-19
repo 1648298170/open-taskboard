@@ -3,9 +3,10 @@ import { Select } from './Select';
 import { api_, OpenCodeSessionOption, PRIORITIES, Priority } from '../api';
 import { WAKE_PREFIX } from '@taskboard/core/types';
 
-export function NewIssueDialog({ open, projectId, defaultSessionId, onClose, onCreated, onError }: {
+export function NewIssueDialog({ open, projectId, workspacePath, defaultSessionId, onClose, onCreated, onError }: {
   open: boolean;
   projectId: string;
+  workspacePath?: string;
   defaultSessionId?: string | null;
   onClose: () => void;
   onCreated: (parentId?: string) => void;
@@ -93,6 +94,7 @@ export function NewIssueDialog({ open, projectId, defaultSessionId, onClose, onC
     <dialog open className="new-dialog">
       <form onSubmit={submit}>
         <h2>新任务</h2>
+        {workspacePath && <p className="session-hint">工作目录继承自所属项目：{workspacePath}</p>}
         <label>标题<input name="title" required autoFocus placeholder="一句话讲清楚要做什么" /></label>
         <label>父任务 ID（可选，留空为顶层任务）<input name="parent" placeholder="填父任务 id，如 a1b2c3d4" /></label>
         <label>OpenCode 会话（必选）
