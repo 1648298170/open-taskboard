@@ -285,7 +285,7 @@ export const openApiSpec: OpenApiDocument = {
       },
       post: {
         operationId: 'createProject',
-        summary: 'Create a project',
+        summary: 'Create a project; when a default Session is supplied, its actual directory is validated against workspacePath',
         tags: ['projects'],
         requestBody: {
           required: true,
@@ -314,7 +314,7 @@ export const openApiSpec: OpenApiDocument = {
       },
       patch: {
         operationId: 'patchProject',
-        summary: 'Update project name, workspace path, OpenCode Server URL, labels, or default Session',
+        summary: 'Update project configuration; an explicitly bound default Session is validated against the effective workspace path and Server URL',
         tags: ['projects'],
         requestBody: {
           required: true,
