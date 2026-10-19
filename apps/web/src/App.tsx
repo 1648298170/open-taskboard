@@ -5,7 +5,7 @@ import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
 import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
-import { Bell, ChartColumn, GanttChart, Keyboard, Moon, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react';
+import { Bell, ChartColumn, GanttChart, Keyboard, Moon, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings } from 'lucide-react';
 import { Drawer } from './components/Drawer';
 import { NewIssueDialog } from './components/NewIssueDialog';
 import { StatsPanel } from './components/StatsPanel';
@@ -35,6 +35,9 @@ export default function App() {
   const [directoryCreateOpen, setDirectoryCreateOpen] = useState(false);
   const [directoryName, setDirectoryName] = useState('');
   const [directoryWorkspacePath, setDirectoryWorkspacePath] = useState('');
+  const [defaultWorkspacePath, setDefaultWorkspacePath] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsPathInput, setSettingsPathInput] = useState('');
   const [projectDirectoryId, setProjectDirectoryId] = useState('');
   const [projDefaultSessionId, setProjDefaultSessionId] = useState('');
   const [projSessions, setProjSessions] = useState<import('./api').OpenCodeSessionOption[]>([]);
@@ -215,6 +218,16 @@ export default function App() {
   }, []);
 
   useEffect(() => { loadProjects(); }, [loadProjects]);
+
+  useEffect(() => {
+    api_.getSettings().then(settings => {
+      setDefaultWorkspacePath(settings.defaultWorkspacePath);
+      setSettingsPathInput(settings.defaultWorkspacePath);
+    }).catch(err => {
+      if (isUnauthorized(err)) setNeedToken(true);
+      else showToast('✗ 读取全局设置失败：' + (err as Error).message);
+    });
+  }, [showToast]);
 
   // v0.4: bundle 版本检测（挂载时 + 每分钟 + 回到标签页时）
   useEffect(() => {
@@ -479,7 +492,8 @@ export default function App() {
           </div>
           <div className="sidebar-heading">
             <span>目录</span>
-            <button className="icon-btn" title="新建目录" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(''); setDirectoryCreateOpen(true); }}><Plus size={15} /></button>
+            <button className="icon-btn" title="全局设置" aria-label="全局设置" onClick={() => { setSettingsPathInput(defaultWorkspacePath); setSettingsOpen(true); }}><Settings size={15} /></button>
+            <button className="icon-btn" title="新建目录" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryCreateOpen(true); }}><Plus size={15} /></button>
           </div>
           <nav className="side-projects" aria-label="目录与项目">
             {directories.map(directory => {
@@ -730,13 +744,36 @@ export default function App() {
         onCreated={id => { void refresh(); if (id) openIssue(id); }}
         onError={msg => showToast(`✗ ${msg}`)} />
 
+      {settingsOpen && (
+        <dialog open className="new-dialog">
+          <form onSubmit={async e => {
+            e.preventDefault();
+            try {
+              const settings = await api_.updateSettings({ defaultWorkspacePath: settingsPathInput.trim() });
+              setDefaultWorkspacePath(settings.defaultWorkspacePath);
+              if (directoryCreateOpen && !directoryWorkspacePath.trim()) setDirectoryWorkspacePath(settings.defaultWorkspacePath);
+              setSettingsOpen(false);
+              showToast(settings.defaultWorkspacePath ? '已保存全局默认工作目录' : '已清空全局默认工作目录');
+            } catch (err) { showToast('✗ 保存全局设置失败：' + (err as Error).message); }
+          }}>
+            <h2>全局设置</h2>
+            <label>默认工作目录地址
+              <input autoFocus value={settingsPathInput} placeholder="例如：D:\\workspace\\projects" onChange={e => setSettingsPathInput(e.target.value)} />
+            </label>
+            <p className="dialog-note">新建目录时会默认填入此路径。留空不会影响已有目录或项目；新建目录时必须手动填写工作目录。修改此设置不会自动修改已创建的目录和项目。</p>
+            <menu><button type="button" className="btn" onClick={() => setSettingsOpen(false)}>取消</button><button type="submit" className="btn primary">保存设置</button></menu>
+          </form>
+        </dialog>
+      )}
+
       {directoryCreateOpen && (
         <dialog open className="new-dialog">
           <form onSubmit={async e => {
             e.preventDefault();
             const name = directoryName.trim();
-            const workspacePath = directoryWorkspacePath.trim();
+            const workspacePath = directoryWorkspacePath.trim() || defaultWorkspacePath.trim();
             if (!name) { showToast('✗ 目录名称不能为空'); return; }
+            if (!workspacePath) { showToast('请先填写当前目录的工作目录，或在全局设置中配置默认工作目录。'); setSettingsPathInput(defaultWorkspacePath); setSettingsOpen(true); return; }
             try {
               const directory = await api_.createDirectory({ name, workspacePath });
               setDirectories(prev => [...prev, directory]);
@@ -750,7 +787,7 @@ export default function App() {
             <h2>新建目录</h2>
             <label>目录名称<input required autoFocus value={directoryName} placeholder="例如：前端项目" onChange={e => setDirectoryName(e.target.value)} /></label>
             <label>默认工作目录地址<input value={directoryWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app" onChange={e => setDirectoryWorkspacePath(e.target.value)} /></label>
-            <p className="dialog-note">新建项目时会自动继承此工作目录地址。需要时仍可在项目中单独修改；OpenCode Server 和 Session 由项目配置。</p>
+            <p className="dialog-note">新建项目时会自动继承此工作目录地址。需要时仍可在项目中单独修改；OpenCode Server 和 Session 由项目配置。若留空，将使用全局默认工作目录。</p>
             <menu><button type="button" className="btn" onClick={() => setDirectoryCreateOpen(false)}>取消</button><button type="submit" className="btn primary">创建目录</button></menu>
           </form>
         </dialog>
