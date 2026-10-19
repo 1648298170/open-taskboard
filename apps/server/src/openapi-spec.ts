@@ -988,12 +988,10 @@ export const openApiSpec: OpenApiDocument = {
         description: 'Workspace directory grouping for projects',
         properties: {
           id: { type: 'string' },
-          name: { type: 'string' },
-          path: { type: 'string' },
-          serverUrl: { type: 'string' },
+          name: { type: 'string', description: 'Sidebar grouping name; not a filesystem path' },
           createdAt: { type: 'string', format: 'date-time' }
         },
-        required: ['id', 'name', 'path', 'serverUrl', 'createdAt'],
+        required: ['id', 'name', 'createdAt'],
         additionalProperties: false
       },
       Project: {
@@ -1004,8 +1002,8 @@ export const openApiSpec: OpenApiDocument = {
           name: { type: 'string' },
           directoryId: { type: ['string', 'null'] },
           defaultSessionId: { type: ['string', 'null'], description: 'Optional default session preselected for new tasks' },
-          workspacePath: { type: 'string', description: 'Inherited workspace directory path' },
-          wakeChannel: { type: 'string', description: 'Inherited OpenCode Server URL' },
+          workspacePath: { type: 'string', description: 'Project-specific filesystem workspace path' },
+          wakeChannel: { type: 'string', description: 'Project-specific OpenCode Server URL' },
           labels: { type: 'string' },
           createdAt: { type: 'string', format: 'date-time' }
         },
@@ -1231,20 +1229,16 @@ export const openApiSpec: OpenApiDocument = {
         description: 'POST /api/directories body (strict)',
         properties: {
           id: { type: 'string' },
-          name: { type: 'string', minLength: 1 },
-          path: { type: 'string', minLength: 1 },
-          serverUrl: { type: 'string', maxLength: 500 }
+          name: { type: 'string', minLength: 1 }
         },
-        required: ['name', 'path'],
+        required: ['name'],
         additionalProperties: false
       },
       PatchDirectoryRequest: {
         type: 'object',
         description: 'PATCH /api/directories/{directoryId} body (strict)',
         properties: {
-          name: { type: 'string', minLength: 1 },
-          path: { type: 'string', minLength: 1 },
-          serverUrl: { type: 'string', maxLength: 500 }
+          name: { type: 'string', minLength: 1 }
         },
         additionalProperties: false
       },
@@ -1256,8 +1250,8 @@ export const openApiSpec: OpenApiDocument = {
           name: { type: 'string', minLength: 1 },
           directoryId: { type: 'string', description: 'Workspace directory to create the project under' },
           defaultSessionId: { type: ['string', 'null'], description: 'Selected OpenCode session for new tasks' },
-          workspacePath: { type: 'string', description: 'Legacy input; ignored when directoryId is supplied' },
-          wakeChannel: { type: 'string', description: 'Legacy input; ignored when directoryId is supplied' },
+          workspacePath: { type: 'string', description: 'Project filesystem workspace path' },
+          wakeChannel: { type: 'string', description: 'Project OpenCode Server URL' },
           labels: { type: 'string' }
         },
         required: ['name'],
