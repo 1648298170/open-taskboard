@@ -38,7 +38,7 @@ export const createProjectSchema = z
     directoryId: z.string().min(1).optional(),
     defaultSessionId: z.string().min(1).nullable().optional(),
     workspacePath: z.string().optional(),
-    // Directory is a sidebar grouping; workspacePath and wakeChannel remain project-specific.
+    // A directory provides the default workspacePath; projects may override it.
     // v0.4 wake routing: full TUI URL (http://127.0.0.1:4097); '' = unbound.
     wakeChannel: z.string().max(200).optional(),
     labels: z.string().optional(),
