@@ -160,7 +160,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     if (config.requireSession && !parsed.data.sessionId && !store.getIssue(req.params.id)?.sessionId
       && String(req.headers['x-taskboard-actor'] ?? '') !== 'web') {
       return reply.code(403).send({
-        error: 'starting a task requires binding: claim/PATCH with sessionId and branch, ; confirm:true is not an approval credential (TASKBOARD_REQUIRE_SESSION)'
+        error: 'starting a task requires binding: claim/PATCH with sessionId and branch; confirm:true is not an approval credential (TASKBOARD_REQUIRE_SESSION)'
       });
     }
     return store.claimIssue(req.params.id, parsed.data.agent, parsed.data.ttlMinutes ?? 30, actor || parsed.data.agent, parsed.data.sessionId, parsed.data.branch);
