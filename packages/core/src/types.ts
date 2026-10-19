@@ -23,6 +23,8 @@ export type Priority = (typeof PRIORITIES)[number];
 export interface WorkspaceDirectory {
   id: string;
   name: string;
+  /** Default filesystem workspace inherited by newly created projects in this directory. */
+  workspacePath: string;
   createdAt: string;
 }
 
