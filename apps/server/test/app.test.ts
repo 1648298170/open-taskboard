@@ -206,7 +206,7 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
     t.cleanup();
   });
 
-  it('web actor and confirm:true are exempt; disabled env restores old behavior', async () => {
+  it('web actor is exempt; disabled env restores old behavior', async () => {
     const t = await gated();
     const web = await t.app.inject({ method: 'PATCH', url: `/api/issues/${t.issueId}`, headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { status: 'in_progress', version: 1 } });
     assert.equal(web.statusCode, 200, 'web is exempt');
