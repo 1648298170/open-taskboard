@@ -1,10 +1,9 @@
 // v0.4: 看板反向驱动 — 评论唤醒 agent 侧车。常驻订阅 SSE，发现 @agent 开头
-// 的评论即按通道优先级唤醒 agent：TUI 注入（--tui-url，附着的 TUI 输入框
-// 出现指令文本，人工回车提交——同会话、全上下文、模型由 TUI 决定）→ 绑定
-// 会话 v2 prompt 注入（--opencode，1.19.3 上游只入队不执行，留作升级后通道）
-// → headless spawn（--exec/--model，全新会话兜底）。注意：TUI 未附着时
-// append-prompt 可能静默成功且不降级——这是有意的：人不在场就不该无人审核地
-// 自动跑 agent。串行执行唤醒（排队，不并发轰炸）；流断开 2s 后重连。
+// 的评论即按绑定路由唤醒 agent：已绑定 sessionId → OpenCode v1
+// /session/:id/prompt_async（复用原会话并自动执行）；只有未绑定任务才走
+// --tui-url 当前 TUI 输入框（人工回车提交）→ headless spawn（全新会话兜底）。
+// 绑定会话投递失败时不降级到其他会话，评论保持 pending 供重试。串行执行唤醒
+//（排队，不并发轰炸）；流断开 2s 后重连。
 // 单实例 flock 锁（.data/watch.lock，进程死残锁自动回收）；断线重连补拉
 // 上次断开窗口内漏掉的 @agent 评论（missedWakeComments + 已处理键去重）。
 import { spawn } from 'node:child_process';
@@ -55,8 +54,8 @@ export function shouldWake(evt: WakePayload, prefix: string): boolean {
 }
 
 /**
- * 项目级通道决议：项目绑定的 wake_channel 优先，其次 watch 的 --tui-url 兜底，
- * 两者皆无 → undefined（headless 通道）。
+ * 未绑定任务的 TUI 通道决议：项目绑定的 wake_channel 优先，其次 watch 的
+ * --tui-url 兜底；绑定了 sessionId 的任务不使用该通道，而走原会话 API。
  */
 export function channelFor(projectChannel: string | null, fallback: string | undefined): string | undefined {
   const bound = projectChannel && projectChannel.trim() !== '' ? projectChannel.trim() : undefined;
@@ -171,9 +170,9 @@ export const watchCommand: Command = {
     const tuiBase = String(flags['tui-url'] ?? process.env.OPENCODE_TUI_URL ?? '').replace(/\/+$/, '') || undefined;
     const projectFilter = String(flags.project ?? '') || undefined;
     const channels = [
-      tuiBase ? `tui(${tuiBase})` : null,
-      opencodeBase ? `session(${opencodeBase})` : null,
-      `spawn(${execParts.join(' ')})`
+      opencodeBase ? `bound-session(${opencodeBase})` : null,
+      tuiBase ? `tui-for-unbound(${tuiBase})` : null,
+      `spawn-unbound(${execParts.join(' ')})`
     ].filter(Boolean).join(' → ');
     console.log(`watch: ${base()}/api/events — wake on "${prefix}…" → ${channels}${projectFilter ? ` [project ${projectFilter}]` : ''} — 项目按其 wake_channel 数据绑定投递${tuiBase ? `（--tui-url ${tuiBase} 兜底未绑定项目）` : ''}`);
 
