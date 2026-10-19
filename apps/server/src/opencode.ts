@@ -35,9 +35,11 @@ export function normalizeOpenCodeBase(raw: string): string {
 }
 
 async function requestOpenCodeJson(url: string, directory: string, method = 'GET', body?: unknown): Promise<unknown> {
-  const response = await fetch(url, {
+  const requestUrl = new URL(url);
+  if (directory) requestUrl.searchParams.set('directory', directory);
+  const response = await fetch(requestUrl, {
     method,
-    headers: { accept: 'application/json', ...(directory ? { 'x-opencode-directory': directory } : {}), ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+    headers: { accept: 'application/json', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     // A configured server URL is user-controlled. Do not follow redirects to
     // a different host, and never let an unavailable local service hang the UI.
