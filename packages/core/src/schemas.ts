@@ -20,10 +20,25 @@ const nullableDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
   .refine(isRealCalendarDate, 'must be a real calendar date (YYYY-MM-DD)')
   .nullable().optional();
 
+export const createDirectorySchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  path: z.string().min(1),
+  serverUrl: z.string().max(500).optional(),
+}).strict();
+
+export const directoryPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  path: z.string().min(1).optional(),
+  serverUrl: z.string().max(500).optional(),
+}).strict();
+
 export const createProjectSchema = z
   .object({
     id: z.string().optional(),
     name: z.string().min(1),
+    directoryId: z.string().min(1).optional(),
+    defaultSessionId: z.string().min(1).nullable().optional(),
     workspacePath: z.string().optional(),
     // v0.4 wake routing: full TUI URL (http://127.0.0.1:4097); '' = unbound.
     wakeChannel: z.string().max(200).optional(),
@@ -34,6 +49,7 @@ export const createProjectSchema = z
 export const projectPatchSchema = z
   .object({
     name: z.string().min(1).optional(),
+    defaultSessionId: z.string().min(1).nullable().optional(),
     wakeChannel: z.string().max(200).optional(),
     labels: z.string().optional(),
   })
@@ -131,6 +147,8 @@ export const claimSchema = z
   })
   .strict();
 
+export type CreateDirectoryInput = z.infer<typeof createDirectorySchema>;
+export type DirectoryPatchInput = z.infer<typeof directoryPatchSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type CreateIssueInput = z.infer<typeof createIssueSchema>;
 export type IssuePatchInput = z.infer<typeof issuePatchSchema>;
