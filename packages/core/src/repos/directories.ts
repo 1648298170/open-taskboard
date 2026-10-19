@@ -45,6 +45,11 @@ export class DirectoryRepo {
     if (!sets.length) return;
     values.push(id);
     this.db.prepare(`UPDATE directories SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    const directory = this.get(id);
+    if (directory) {
+      this.db.prepare('UPDATE projects SET workspace_path = ?, wake_channel = ? WHERE directory_id = ?')
+        .run(directory.path, directory.serverUrl, id);
+    }
   }
 
   list(): WorkspaceDirectory[] {
