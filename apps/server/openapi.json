@@ -1814,7 +1814,7 @@
       },
       "post": {
         "operationId": "createDirectory",
-        "summary": "Create a workspace directory grouping",
+        "summary": "Create a workspace directory with an optional default workspace path",
         "tags": [
           "directories"
         ],
@@ -1868,7 +1868,7 @@
       ],
       "patch": {
         "operationId": "updateDirectory",
-        "summary": "Update directory name, path, or OpenCode Server URL",
+        "summary": "Update directory name or default workspace path",
         "tags": [
           "directories"
         ],
@@ -3067,11 +3067,16 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "workspacePath": {
+            "type": "string",
+            "description": "Default filesystem workspace path inherited by new projects"
           }
         },
         "required": [
           "id",
           "name",
+          "workspacePath",
           "createdAt"
         ],
         "additionalProperties": false
@@ -3086,6 +3091,9 @@
           "name": {
             "type": "string",
             "minLength": 1
+          },
+          "workspacePath": {
+            "type": "string"
           }
         },
         "required": [
@@ -3100,6 +3108,9 @@
           "name": {
             "type": "string",
             "minLength": 1
+          },
+          "workspacePath": {
+            "type": "string"
           }
         },
         "additionalProperties": false,
