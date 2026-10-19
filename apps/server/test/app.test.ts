@@ -158,6 +158,54 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
   });
 });
 
+describe('workspace directory API', () => {
+  it('creates a directory and inherits its path/server URL into projects', async () => {
+    const { app, cleanup } = await makeApp();
+    const directoryRes = await app.inject({
+      method: 'POST', url: '/api/directories', headers: json,
+      payload: { name: 'Workspace A', path: '/workspace/a', serverUrl: 'http://127.0.0.1:4096' }
+    });
+    assert.equal(directoryRes.statusCode, 201);
+    const directory = directoryRes.json<{ id: string }>();
+    const projectRes = await app.inject({
+      method: 'POST', url: '/api/projects', headers: json,
+      payload: { name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a' }
+    });
+    assert.equal(projectRes.statusCode, 201);
+    const project = projectRes.json<{ directoryId: string; defaultSessionId: string; workspacePath: string; wakeChannel: string }>();
+    assert.equal(project.directoryId, directory.id);
+    assert.equal(project.defaultSessionId, 'ses_a');
+    assert.equal(project.workspacePath, '/workspace/a');
+    assert.equal(project.wakeChannel, 'http://127.0.0.1:4096');
+    cleanup();
+  });
+
+  it('updates directory routing for all child projects and prevents deleting a non-empty directory', async () => {
+    const { app, cleanup } = await makeApp();
+    const created = await app.inject({
+      method: 'POST', url: '/api/directories', headers: json,
+      payload: { name: 'Workspace', path: '/workspace', serverUrl: 'http://127.0.0.1:4096' }
+    });
+    const directoryId = created.json<{ id: string }>().id;
+    const project = await app.inject({
+      method: 'POST', url: '/api/projects', headers: json,
+      payload: { name: 'Project', directoryId }
+    });
+    const projectId = project.json<{ id: string }>().id;
+    const updated = await app.inject({
+      method: 'PATCH', url: `/api/directories/${directoryId}`, headers: json,
+      payload: { path: '/workspace/renamed', serverUrl: 'http://127.0.0.1:4097' }
+    });
+    assert.equal(updated.statusCode, 200);
+    const projectAfter = (await app.inject({ method: 'GET', url: `/api/projects/${projectId}` })).json<{ workspacePath: string; wakeChannel: string }>();
+    assert.equal(projectAfter.workspacePath, '/workspace/renamed');
+    assert.equal(projectAfter.wakeChannel, 'http://127.0.0.1:4097');
+    const deletion = await app.inject({ method: 'DELETE', url: `/api/directories/${directoryId}` });
+    assert.equal(deletion.statusCode, 400);
+    cleanup();
+  });
+});
+
 describe('project OpenCode session discovery route', () => {
   it('returns a useful error when the project has no OpenCode server configured', async () => {
     const { app, cleanup } = await makeApp();
