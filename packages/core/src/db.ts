@@ -193,6 +193,19 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       CREATE INDEX idx_projects_directory ON projects(directory_id);
     `);
   },
+  // v13 → v14: a directory may provide a default workspace path for new projects.
+  // Backfill from an existing project in each directory to preserve migrated setups.
+  (db: DatabaseSync) => {
+    db.exec("ALTER TABLE directories ADD COLUMN workspace_path TEXT NOT NULL DEFAULT ''");
+    db.exec(`
+      UPDATE directories
+      SET workspace_path = COALESCE((
+        SELECT p.workspace_path FROM projects p
+        WHERE p.directory_id = directories.id AND p.workspace_path <> ''
+        ORDER BY p.created_at LIMIT 1
+      ), '')
+    `);
+  },
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after
