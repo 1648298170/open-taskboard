@@ -27,12 +27,13 @@ export class ProjectRepo {
     if (this.get(id)) throw new ConflictError(`project already exists: ${id}`);
     if (!input.name.trim()) throw new ValidationError('name: must not be blank');
 
-    const workspacePath = input.workspacePath?.trim() ?? '';
+    let workspacePath = input.workspacePath?.trim() ?? '';
     const wakeChannel = input.wakeChannel?.trim() ?? '';
     let directoryId = input.directoryId;
     if (directoryId) {
-      const directory = this.db.prepare('SELECT id FROM directories WHERE id = ?').get(directoryId) as { id: string } | undefined;
+      const directory = this.db.prepare('SELECT id, workspace_path AS workspacePath FROM directories WHERE id = ?').get(directoryId) as { id: string; workspacePath: string } | undefined;
       if (!directory) throw new NotFoundError(`directory not found: ${directoryId}`);
+      if (!workspacePath) workspacePath = directory.workspacePath;
     } else {
       // Legacy CLI/MCP clients do not send directoryId. Directories are only
       // sidebar groups now: reuse a group with the same display name, or create
@@ -47,8 +48,8 @@ export class ProjectRepo {
       } else {
         directoryId = shortId();
         this.db.prepare(
-          'INSERT INTO directories (id, name, created_at) VALUES (?, ?, ?)'
-        ).run(directoryId, label, now());
+          'INSERT INTO directories (id, name, workspace_path, created_at) VALUES (?, ?, ?, ?)'
+        ).run(directoryId, label, workspacePath, now());
       }
     }
 
