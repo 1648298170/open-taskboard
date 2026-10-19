@@ -26,8 +26,7 @@ export default function App() {
   const [expandedDirectories, setExpandedDirectories] = useState<Set<string>>(new Set());
   const [directoryCreateOpen, setDirectoryCreateOpen] = useState(false);
   const [directoryName, setDirectoryName] = useState('');
-  const [directoryPath, setDirectoryPath] = useState('');
-  const [directoryServerUrl, setDirectoryServerUrl] = useState('');
+
   const [projectDirectoryId, setProjectDirectoryId] = useState('');
   const [projDefaultSessionId, setProjDefaultSessionId] = useState('');
   const [projSessions, setProjSessions] = useState<import('./api').OpenCodeSessionOption[]>([]);
@@ -73,6 +72,7 @@ export default function App() {
   const [projLabels, setProjLabels] = useState('');
   const [projWakePort, setProjWakePort] = useState('');
   const [projWorkspacePath, setProjWorkspacePath] = useState('');
+  const [projServerUrl, setProjServerUrl] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
   // v0.4: 旧标签页检测 —— SPA 部署后旧标签页继续跑旧 bundle（多次坑用户的根源）。
   // 周期比对服务器最新 bundle 与当前运行版本，不一致则提示刷新。
@@ -106,9 +106,16 @@ export default function App() {
       return;
     }
     let cancelled = false;
+    setProjSessions([]);
+    setProjDefaultSessionId('');
+    if (!projWorkspacePath.trim() || !projServerUrl.trim()) {
+      setProjSessionsLoading(false);
+      setProjSessionsError('请先填写项目工作目录和 OpenCode Server URL，再选择或新建 Session。');
+      return;
+    }
     setProjSessionsLoading(true);
     setProjSessionsError(null);
-    api_.openCodeSessionsForDirectory(projectDirectoryId)
+    api_.openCodeSessionsForDirectory(projectDirectoryId, projWorkspacePath.trim(), projServerUrl.trim())
       .then(result => {
         if (cancelled) return;
         setProjSessions(result.sessions);
@@ -119,7 +126,7 @@ export default function App() {
       })
       .finally(() => { if (!cancelled) setProjSessionsLoading(false); });
     return () => { cancelled = true; };
-  }, [projCreateOpen, projectDirectoryId]);
+  }, [projCreateOpen, projectDirectoryId, projWorkspacePath, projServerUrl]);
 
 
   // ---- 深链 #/issue/<id> ----
@@ -936,7 +943,7 @@ export default function App() {
           <div className="sidebar-heading">
             <span>工作目录</span>
             <button className="icon-btn" title="新建工作目录" onClick={() => {
-              setDirectoryName(''); setDirectoryPath(''); setDirectoryServerUrl(''); setDirectoryCreateOpen(true);
+              setDirectoryName(''); setDirectoryCreateOpen(true);
             }}><Plus size={15} /></button>
           </div>
           <nav className="side-projects" aria-label="工作目录与项目">
@@ -957,7 +964,7 @@ export default function App() {
                       <span className="side-directory-name">{directory.name}</span>
                     </button>
                     <button className="icon-btn" title="在此目录下新建项目" onClick={() => {
-                      setProjName(''); setProjId(''); setProjLabels(''); setProjWakePort(''); setProjWorkspacePath('');
+                      setProjName(''); setProjId(''); setProjLabels(''); setProjWorkspacePath(projects.find(project => project.directoryId === directory.id)?.workspacePath ?? ''); setProjServerUrl(projects.find(project => project.directoryId === directory.id)?.wakeChannel ?? '');
                       setProjectDirectoryId(directory.id); setProjCreateOpen(true); setExpandedDirectories(prev => new Set(prev).add(directory.id));
                     }}><Plus size={14} /></button>
                     <button className="icon-btn" title="目录设置" onClick={async () => {
@@ -1001,7 +1008,7 @@ export default function App() {
             <button className="side-btn" disabled={!directories.length} onClick={() => {
               const current = projects.find(project => project.id === projectId);
               const directoryId = current?.directoryId ?? directories[0]?.id ?? '';
-              setProjName(''); setProjId(''); setProjLabels(''); setProjWakePort(''); setProjWorkspacePath('');
+              setProjName(''); setProjId(''); setProjLabels(''); setProjWorkspacePath(projects.find(project => project.directoryId === directoryId)?.workspacePath ?? ''); setProjServerUrl(projects.find(project => project.directoryId === directoryId)?.wakeChannel ?? '');
               setProjectDirectoryId(directoryId); setProjCreateOpen(true);
             }}>
               <Plus size={14} /> 新建项目</button>
