@@ -3064,13 +3064,13 @@
             "type": "string",
             "description": "Sidebar grouping name; not a filesystem path"
           },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
           "workspacePath": {
             "type": "string",
             "description": "Default filesystem workspace path inherited by new projects"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "required": [
