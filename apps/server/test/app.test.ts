@@ -158,6 +158,30 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
   });
 });
 
+// --- web task creation requires an OpenCode session -------------------------------
+describe('web-created task session binding', () => {
+  it('rejects a missing sessionId and accepts a non-empty binding', async () => {
+    const { app, cleanup } = await makeApp();
+    await seedProject(app);
+    const missing = await app.inject({
+      method: 'POST', url: '/api/projects/p1/issues',
+      headers: { ...json, 'x-taskboard-actor': 'web' },
+      payload: { title: 'must bind' }
+    });
+    assert.equal(missing.statusCode, 400);
+    assert.match(missing.json<{ error: string }>().error, /sessionId/);
+
+    const bound = await app.inject({
+      method: 'POST', url: '/api/projects/p1/issues',
+      headers: { ...json, 'x-taskboard-actor': 'web' },
+      payload: { title: 'bound task', sessionId: 'ses_existing' }
+    });
+    assert.equal(bound.statusCode, 201);
+    assert.equal(bound.json<{ sessionId: string }>().sessionId, 'ses_existing');
+    cleanup();
+  });
+});
+
 // --- readonly (T6-33) ----------------------------------------------------------
 
 describe('TASKBOARD_READONLY', () => {
@@ -206,7 +230,7 @@ describe('TASKBOARD_HUMAN_DONE gate', () => {
     });
     const create = await app.inject({
       method: 'POST', url: '/api/projects/p1/issues',
-      headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { title: 't', status: 'done' }
+      headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { title: 't', status: 'done', sessionId: 'ses_web' }
     });
     assert.equal(patch.statusCode, 200);
     assert.equal(create.statusCode, 201);
