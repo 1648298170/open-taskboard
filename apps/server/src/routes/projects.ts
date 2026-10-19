@@ -58,7 +58,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
 
   // Partial project update — name and/or the wake-channel binding. No version
   // guard (projects have no optimistic lock); last write wins like the web UI.
-  app.patch('/api/projects/:projectId', async (req: FastifyRequest<{ Params: ProjectParams }>) => {
+  app.patch('/api/projects/:projectId', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
     const parsed = projectPatchSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     const patch = parsed.data;
