@@ -34,19 +34,21 @@ export class ProjectRepo {
       const directory = this.db.prepare('SELECT id FROM directories WHERE id = ?').get(directoryId) as { id: string } | undefined;
       if (!directory) throw new NotFoundError(`directory not found: ${directoryId}`);
     } else {
-      // Legacy CLI/MCP clients do not send directoryId. Reuse a matching group
-      // when possible, otherwise create one named after the workspace path.
+      // Legacy CLI/MCP clients do not send directoryId. Directories are only
+      // sidebar groups now: reuse a group with the same display name, or create
+      // one from the workspace basename without storing project configuration
+      // on the directory itself.
+      const label = workspacePath.split(/[\\/]/).filter(Boolean).at(-1) || '默认目录';
       const existing = this.db.prepare(
-        'SELECT directory_id AS id FROM projects WHERE workspace_path = ? AND wake_channel = ? AND directory_id IS NOT NULL ORDER BY created_at LIMIT 1'
-      ).get(workspacePath, wakeChannel) as { id: string } | undefined;
+        'SELECT id FROM directories WHERE name = ? ORDER BY created_at LIMIT 1'
+      ).get(label) as { id: string } | undefined;
       if (existing) {
         directoryId = existing.id;
       } else {
         directoryId = shortId();
-        const label = workspacePath.split(/[\\/]/).filter(Boolean).at(-1) || '默认目录';
         this.db.prepare(
-          'INSERT INTO directories (id, name, path, server_url, created_at) VALUES (?, ?, ?, ?, ?)'
-        ).run(directoryId, label, workspacePath, wakeChannel, now());
+          'INSERT INTO directories (id, name, created_at) VALUES (?, ?, ?)'
+        ).run(directoryId, label, now());
       }
     }
 
