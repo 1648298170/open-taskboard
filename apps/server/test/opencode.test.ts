@@ -19,3 +19,25 @@ describe('normalizeOpenCodeBase', () => {
     }
   });
 });
+
+
+describe('OpenCode metadata destination guard', () => {
+  it('rejects common cloud metadata and link-local destinations', () => {
+    for (const url of [
+      'http://169.254.169.254',
+      'http://169.254.12.34:4096',
+      'http://metadata.google.internal',
+      'http://100.100.100.200',
+      'http://[fd00:ec2::254]'
+    ]) {
+      assert.throws(
+        () => normalizeOpenCodeBase(url),
+        /metadata address/
+      );
+    }
+  });
+
+  it('continues to allow a local OpenCode server', () => {
+    assert.equal(normalizeOpenCodeBase('http://127.0.0.1:4096'), 'http://127.0.0.1:4096');
+  });
+});
