@@ -960,3 +960,19 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   .toolbar { padding: 10px 12px; }
   .toolbar-search { width: 100%; }
 }
+
+.topbar-context {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0; margin-right: auto;
+}
+.topbar-context strong {
+  font-size: 14px; font-weight: 650; letter-spacing: -.02em;
+  line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.topbar-context span {
+  max-width: min(42vw, 620px); color: var(--ink-dim); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .topbar-context { max-width: 42%; }
+  .topbar-context span { max-width: 100%; }
+}
