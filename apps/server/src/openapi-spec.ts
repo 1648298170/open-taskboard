@@ -22,6 +22,7 @@ export type JsonSchemaObject = {
   required?: string[];
   additionalProperties?: boolean;
   minLength?: number;
+  maxLength?: number;
   minimum?: number;
   maximum?: number;
   allOf?: JsonSchemaObject[];
