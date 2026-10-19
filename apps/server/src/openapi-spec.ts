@@ -202,7 +202,7 @@ export const openApiSpec: OpenApiDocument = {
       },
       post: {
         operationId: 'createDirectory',
-        summary: 'Create a workspace directory grouping',
+        summary: 'Create a workspace directory with an optional default workspace path',
         tags: ['directories'],
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateDirectoryRequest' } } } },
         responses: {
@@ -217,7 +217,7 @@ export const openApiSpec: OpenApiDocument = {
       parameters: [{ name: 'directoryId', in: 'path', required: true, schema: { type: 'string' } }],
       patch: {
         operationId: 'updateDirectory',
-        summary: 'Update directory name, path, or OpenCode Server URL',
+        summary: 'Update directory name or default workspace path',
         tags: ['directories'],
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PatchDirectoryRequest' } } } },
         responses: {
@@ -1009,9 +1009,10 @@ export const openApiSpec: OpenApiDocument = {
         properties: {
           id: { type: 'string' },
           name: { type: 'string', description: 'Sidebar grouping name; not a filesystem path' },
+          workspacePath: { type: 'string', description: 'Default filesystem workspace path inherited by new projects' },
           createdAt: { type: 'string', format: 'date-time' }
         },
-        required: ['id', 'name', 'createdAt'],
+        required: ['id', 'name', 'workspacePath', 'createdAt'],
         additionalProperties: false
       },
       Project: {
@@ -1249,7 +1250,8 @@ export const openApiSpec: OpenApiDocument = {
         description: 'POST /api/directories body (strict)',
         properties: {
           id: { type: 'string' },
-          name: { type: 'string', minLength: 1 }
+          name: { type: 'string', minLength: 1 },
+          workspacePath: { type: 'string' }
         },
         required: ['name'],
         additionalProperties: false
@@ -1258,7 +1260,8 @@ export const openApiSpec: OpenApiDocument = {
         type: 'object',
         description: 'PATCH /api/directories/{directoryId} body (strict)',
         properties: {
-          name: { type: 'string', minLength: 1 }
+          name: { type: 'string', minLength: 1 },
+          workspacePath: { type: 'string' }
         },
         additionalProperties: false
       },
