@@ -58,7 +58,7 @@ export function shouldWake(evt: WakePayload, prefix: string): boolean {
  * --tui-url 兜底；绑定了 sessionId 的任务不使用该通道，而走原会话 API。
  */
 export function channelFor(projectChannel: string | null, fallback: string | undefined): string | undefined {
-  const normalize = (value: string): string => value.trim().replace(/\\/+$/, '');
+  const normalize = (value: string): string => value.trim().replace(/\/+$/, '');
   const bound = projectChannel && projectChannel.trim() !== '' ? normalize(projectChannel) : undefined;
   return bound ?? (fallback ? normalize(fallback) : undefined);
 }
