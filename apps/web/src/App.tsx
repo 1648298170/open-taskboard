@@ -438,20 +438,77 @@ export default function App() {
             <span className="glyph">▚</span>
             <h1>taskboard</h1>
           </div>
-          <nav className="side-projects" aria-label="项目">
-            {projects.map(p => (
-              <button key={p.id} className={`side-item${p.id === projectId ? ' active' : ''}`}
-                title={`${p.name} (${p.id})`}
-                onClick={() => { setProjectId(p.id); closeDrawer(); }}>
-                <span className="side-name">{p.name}</span>
-                {p.labels && <span className="side-label" title={p.labels}>{p.labels}</span>}
-                <span className="side-id">{p.id}</span>
-              </button>
-            ))}
+          <div className="sidebar-heading">
+            <span>工作目录</span>
+            <button className="icon-btn" title="新建工作目录" onClick={() => {
+              setDirectoryName(''); setDirectoryPath(''); setDirectoryServerUrl(''); setDirectoryCreateOpen(true);
+            }}><Plus size={15} /></button>
+          </div>
+          <nav className="side-projects" aria-label="工作目录与项目">
+            {directories.map(directory => {
+              const children = projects.filter(project => project.directoryId === directory.id);
+              const expanded = expandedDirectories.has(directory.id);
+              return (
+                <section className="side-directory" key={directory.id}>
+                  <div className="side-directory-row">
+                    <button className="side-directory-toggle" title={directory.path}
+                      onClick={() => setExpandedDirectories(prev => {
+                        const next = new Set(prev);
+                        if (next.has(directory.id)) next.delete(directory.id); else next.add(directory.id);
+                        return next;
+                      })}>
+                      {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      {expanded ? <FolderOpen size={15} /> : <Folder size={15} />}
+                      <span className="side-directory-name">{directory.name}</span>
+                    </button>
+                    <button className="icon-btn" title="在此目录下新建项目" onClick={() => {
+                      setProjName(''); setProjId(''); setProjLabels(''); setProjWakePort(''); setProjWorkspacePath('');
+                      setProjectDirectoryId(directory.id); setProjCreateOpen(true); setExpandedDirectories(prev => new Set(prev).add(directory.id));
+                    }}><Plus size={14} /></button>
+                    <button className="icon-btn" title="目录设置" onClick={async () => {
+                      const name = await promptDialog({ title: '目录名称', lines: [directory.path], placeholder: '目录名称', value: directory.name });
+                      if (name === null) return;
+                      const path = await promptDialog({ title: '工作目录路径', lines: ['修改后将同步到此目录下的项目。'], placeholder: '绝对路径', value: directory.path });
+                      if (path === null) return;
+                      const serverUrl = await promptDialog({ title: 'OpenCode Server URL', lines: ['留空表示尚未配置。'], placeholder: 'http://127.0.0.1:4096', value: directory.serverUrl });
+                      if (serverUrl === null) return;
+                      try {
+                        const updated = await api_.updateDirectory(directory.id, { name: name.trim(), path: path.trim(), serverUrl: serverUrl.trim() });
+                        setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
+                        loadProjects();
+                        showToast('目录配置已更新');
+                      } catch (err) { showToast('✗ ' + (err as Error).message); }
+                    }}><MoreHorizontal size={14} /></button>
+                  </div>
+                  <div className="side-directory-path" title={directory.path}>{directory.path || '未设置路径'}</div>
+                  {expanded && (
+                    <div className="side-directory-projects">
+                      {children.map(project => (
+                        <button key={project.id}
+                          className={`side-item side-project-item${project.id === projectId ? ' active' : ''}`}
+                          title={`${project.name} (${project.id})`}
+                          onClick={() => { setProjectId(project.id); closeDrawer(); }}>
+                          <span className="side-name">{project.name}</span>
+                          {project.labels && <span className="side-label" title={project.labels}>{project.labels}</span>}
+                        </button>
+                      ))}
+                      {!children.length && <div className="side-empty">此目录下还没有项目</div>}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
+            {!directories.length && <div className="side-empty">还没有工作目录</div>}
           </nav>
           <div className="side-actions">
-            {/* v0.4: 项目管理 —— 新建对话框；删除需输入项目 id 确认（防误删）。 */}
-            <button className="side-btn" onClick={() => { setProjName(''); setProjId(''); setProjLabels(''); setProjWakePort(''); setProjWorkspacePath(''); setProjCreateOpen(true); }}>
+            <button className="side-btn" onClick={() => { setDirectoryName(''); setDirectoryPath(''); setDirectoryServerUrl(''); setDirectoryCreateOpen(true); }}>
+              <Plus size={14} /> 新建工作目录</button>
+            <button className="side-btn" disabled={!directories.length} onClick={() => {
+              const current = projects.find(project => project.id === projectId);
+              const directoryId = current?.directoryId ?? directories[0]?.id ?? '';
+              setProjName(''); setProjId(''); setProjLabels(''); setProjWakePort(''); setProjWorkspacePath('');
+              setProjectDirectoryId(directoryId); setProjCreateOpen(true);
+            }}>
               <Plus size={14} /> 新建项目</button>
             <button className="side-btn" onClick={async () => {
               const pid = projectId ?? '';
