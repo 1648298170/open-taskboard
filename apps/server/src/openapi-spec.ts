@@ -311,6 +311,21 @@ export const openApiSpec: OpenApiDocument = {
           ...commonResponses(false)
         }
       },
+      patch: {
+        operationId: 'patchProject',
+        summary: 'Update project name, workspace path, OpenCode Server URL, labels, or default Session',
+        tags: ['projects'],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/PatchProjectRequest' } } }
+        },
+        responses: {
+          200: { description: 'Updated project', ...jsonResponse({ $ref: '#/components/schemas/Project' }) },
+          400: { $ref: '#/components/responses/BadRequest' },
+          404: { $ref: '#/components/responses/NotFound' },
+          ...commonResponses(true)
+        }
+      },
       delete: {
         operationId: 'deleteProject',
         summary: 'Delete a project and all its issues/comments',
@@ -1243,6 +1258,18 @@ export const openApiSpec: OpenApiDocument = {
         description: 'PATCH /api/directories/{directoryId} body (strict)',
         properties: {
           name: { type: 'string', minLength: 1 }
+        },
+        additionalProperties: false
+      },
+      PatchProjectRequest: {
+        type: 'object',
+        description: 'PATCH /api/projects/{projectId} body (strict)',
+        properties: {
+          name: { type: 'string', minLength: 1 },
+          workspacePath: { type: 'string' },
+          wakeChannel: { type: 'string', maxLength: 200 },
+          defaultSessionId: { type: ['string', 'null'] },
+          labels: { type: 'string' }
         },
         additionalProperties: false
       },
