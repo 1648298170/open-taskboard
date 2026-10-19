@@ -48,7 +48,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
       const base = normalizeOpenCodeBase(project.wakeChannel);
       const sessions = await listOpenCodeSessions(base);
       const normalizePath = (value: string): string => {
-        const absolute = resolve(value).replace(/\\\\/g, '/').replace(/\/$/, '');
+        const absolute = resolve(value).replace(/\\/g, '/').replace(/\/$/, '');
         return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
       };
       const workspace = project.workspacePath.trim();
