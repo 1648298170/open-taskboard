@@ -206,6 +206,26 @@ describe('workspace directory API', () => {
   });
 });
 
+describe('directory OpenCode session routes', () => {
+  it('requires an OpenCode Server URL before listing or creating sessions', async () => {
+    const { app, cleanup } = await makeApp();
+    const created = await app.inject({
+      method: 'POST', url: '/api/directories', headers: json,
+      payload: { name: 'Workspace', path: '/workspace' }
+    });
+    assert.equal(created.statusCode, 201);
+    const id = created.json<{ id: string }>().id;
+    const list = await app.inject({ method: 'GET', url: `/api/directories/${id}/opencode-sessions` });
+    const create = await app.inject({
+      method: 'POST', url: `/api/directories/${id}/opencode-sessions`,
+      headers: json, payload: { title: 'Session' }
+    });
+    assert.equal(list.statusCode, 400);
+    assert.equal(create.statusCode, 400);
+    cleanup();
+  });
+});
+
 describe('project OpenCode session discovery route', () => {
   it('returns a useful error when the project has no OpenCode server configured', async () => {
     const { app, cleanup } = await makeApp();
