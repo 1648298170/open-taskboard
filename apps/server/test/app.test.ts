@@ -158,6 +158,24 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
   });
 });
 
+describe('project OpenCode session discovery route', () => {
+  it('returns a useful error when the project has no OpenCode server configured', async () => {
+    const { app, cleanup } = await makeApp();
+    await seedProject(app);
+    const res = await app.inject({ method: 'GET', url: '/api/projects/p1/opencode-sessions' });
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json<{ error: string }>().error, /OpenCode/);
+    cleanup();
+  });
+
+  it('returns 404 for an unknown project', async () => {
+    const { app, cleanup } = await makeApp();
+    const res = await app.inject({ method: 'GET', url: '/api/projects/missing/opencode-sessions' });
+    assert.equal(res.statusCode, 404);
+    cleanup();
+  });
+});
+
 // --- web task creation requires an OpenCode session -------------------------------
 describe('web-created task session binding', () => {
   it('rejects a missing sessionId and accepts a non-empty binding', async () => {
