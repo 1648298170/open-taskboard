@@ -511,8 +511,8 @@ describe('TASKBOARD_HUMAN_DONE gate', () => {
       method: 'POST', url: '/api/projects/p1/issues',
       headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { title: 't', status: 'done', confirm: true }
     });
-    assert.equal(patch.statusCode, 200);
-    assert.equal(create.statusCode, 201);
+    assert.equal(patch.statusCode, 403);
+    assert.equal(create.statusCode, 403);
     cleanup();
   });
 
