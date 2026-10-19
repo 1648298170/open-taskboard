@@ -272,7 +272,6 @@ export const watchCommand: Command = {
       // Session binding is authoritative. Never inject a bound task into the
       // currently selected TUI session, and never silently spawn a new session.
       let sessionId: string | null = null;
-      let issueTitle = '';
       try {
         const res = await fetch(`${base()}/api/issues/${encodeURIComponent(issueId)}`, {
           headers: token() ? { Authorization: `Bearer ${token()}` } : {}
@@ -280,7 +279,6 @@ export const watchCommand: Command = {
         if (res.ok) {
           const issue = await res.json() as { sessionId?: string | null; title?: string };
           sessionId = issue.sessionId ?? null;
-          issueTitle = issue.title ?? '';
         } else {
           console.error(`watch: cannot load task ${issueId} (HTTP ${res.status}); wake skipped`);
           return false;
