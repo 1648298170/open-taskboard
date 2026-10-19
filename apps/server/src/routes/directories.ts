@@ -7,7 +7,7 @@ interface DirectoryParams { directoryId: string }
 const createSessionSchema = z.object({ title: z.string().min(1).max(200) }).strict();
 
 function normalizeDirectoryPath(value: string): string {
-  const trimmed = value.trim().replace(/\\/g, '/').replace(/\\/+$/, '');
+  const trimmed = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
   return /^[a-zA-Z]:\//.test(trimmed) ? trimmed.toLowerCase() : trimmed;
 }
 
