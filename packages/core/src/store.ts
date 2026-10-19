@@ -141,10 +141,17 @@ export class Store {
   }
 
   updateProject(id: string, patch: { name?: string; workspacePath?: string; wakeChannel?: string; labels?: string; defaultSessionId?: string | null }): Project {
-    if (!this.projects.get(id)) throw new NotFoundError(`project not found: ${id}`);
+    const current = this.projects.get(id);
+    if (!current) throw new NotFoundError(`project not found: ${id}`);
     if (patch.name !== undefined && patch.name.trim() === '') throw new ValidationError('name: must not be blank');
-    inTransaction(this.db, () => this.projects.update(id, patch));
-    this.emit('project.updated', { id, fields: Object.keys(patch) });
+    const routingChanged =
+      (patch.workspacePath !== undefined && patch.workspacePath.trim() !== current.workspacePath) ||
+      (patch.wakeChannel !== undefined && patch.wakeChannel.trim() !== current.wakeChannel);
+    const effectivePatch = routingChanged && patch.defaultSessionId === undefined
+      ? { ...patch, defaultSessionId: null }
+      : patch;
+    inTransaction(this.db, () => this.projects.update(id, effectivePatch));
+    this.emit('project.updated', { id, fields: Object.keys(effectivePatch) });
     return this.projects.get(id)!;
   }
 
