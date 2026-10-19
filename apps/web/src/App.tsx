@@ -434,6 +434,40 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
             {/* v0.4: 项目管理 —— 新建对话框；删除需输入项目 id 确认（防误删）。 */}
             <button className="side-btn" onClick={() => { setProjName(''); setProjId(''); setProjLabels(''); setProjWakePort(''); setProjCreateOpen(true); }}>
               <Plus size={14} /> 新建项目</button>
+            <button className="side-btn" onClick={async () => {
+              const pid = projectId ?? '';
+              const project = projects.find(p => p.id === pid);
+              if (!project) return;
+              const entered = await promptDialog({
+                title: `配置「${project.name}」的 OpenCode 服务`,
+                lines: [
+                  '填写当前项目对应的 OpenCode serve 地址。',
+                  '会用于读取会话列表，并确保任务唤醒发送到绑定的原会话。',
+                  '留空会解除绑定；示例：http://127.0.0.1:4096'
+                ],
+                placeholder: 'http://127.0.0.1:4096',
+                value: project.wakeChannel
+              });
+              if (entered === null) return;
+              const serverUrl = entered.trim();
+              if (serverUrl) {
+                try {
+                  const parsed = new URL(serverUrl);
+                  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) {
+                    throw new Error('请输入纯 HTTP(S) 服务地址，不要包含路径、查询参数或账号密码');
+                  }
+                } catch (err) {
+                  showToast('✗ ' + ((err as Error).message || 'OpenCode 地址无效'));
+                  return;
+                }
+              }
+              try {
+                const updated = await api_.updateProject(pid, { wakeChannel: serverUrl });
+                setProjects(prev => prev.map(p => p.id === pid ? updated : p));
+                showToast(serverUrl ? '已绑定 OpenCode 服务：' + serverUrl : '已解除 OpenCode 服务绑定');
+              } catch (err) { showToast('✗ ' + (err as Error).message); }
+            }}>
+              配置 OpenCode</button>
             <button className="side-btn danger" title="删除当前项目（输入 id 确认）"
               onClick={async () => {
                 const pid = projectId ?? '';
