@@ -155,7 +155,7 @@ taskboard watch                                        # opencode run（默认�
 
 > 模型注意：`--model` 走 opencode 的 `-m` 约定；Claude/Codex 用自家 `--model` 参数时直接写进 `--exec`（如 `--exec "claude --model sonnet -p"`），不要混用 `--model`。
 
-**绑定即路由（推荐）**：面板新建项目时配置 OpenCode 服务地址和工作区路径；已有项目可点「配置 OpenCode」。新建任务时必须选择该服务里的已有会话；工作区路径已配置时仅显示目录匹配的会话。`@agent` 评论对已绑定任务直接发往该 session 的 `prompt_async`，未绑定任务才注入 TUI。项目路由存在数据里，改绑即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时留空即可。
+**绑定即路由（推荐）**：面板新建项目时填写「唤醒端口」和工作区路径；已有项目可点「配置 OpenCode」设置完整服务地址。新建任务时必须选择该服务里的已有会话；工作区路径已配置时仅显示目录匹配的会话。`@agent` 评论对已绑定任务直接发往该 session 的 `prompt_async`，未绑定任务才注入 TUI。项目路由存在数据里，改绑即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时留空即可。
 
 ### 先把 opencode 终端跑起来（watch 的目的地）
 
