@@ -343,8 +343,10 @@ export default function App() {
       if (e.key === 'Escape') {
         // 优先级：帮助 > 对话框 > 抽屉 > 批量选择。输入框里也生效——通用逃生键。
         if (helpOpen) { setHelpOpen(false); return; }
+        if (sessionCreateOpen) { setSessionCreateOpen(false); return; }
+        if (directoryCreateOpen) { setDirectoryCreateOpen(false); return; }
         if (dialogOpen) { setDialogOpen(false); return; }
-        if (projCreateOpen) { setProjCreateOpen(false); return; }
+        if (projCreateOpen) { setProjCreateOpen(false); setSessionCreateOpen(false); return; }
         if (openId !== null) { closeDrawer(); return; }
         if (batchMode && selected.size > 0) setSelected(new Set());
         return;
@@ -357,7 +359,7 @@ export default function App() {
         return;
       }
       if (e.key === '?') { setHelpOpen(true); return; }
-      if (e.key === 'n') { setDialogOpen(true); return; }
+      if (e.key === 'n' && projectId) { setDialogOpen(true); return; }
       if (e.key === 'j' || e.key === 'k') {
         if (flatIds.length === 0) return;
         e.preventDefault();
@@ -375,7 +377,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [dialogOpen, projCreateOpen, openId, batchMode, selected, flatIds, cursorId, closeDrawer, openIssue, helpOpen]);
+  }, [dialogOpen, projCreateOpen, directoryCreateOpen, sessionCreateOpen, projectId, openId, batchMode, selected, flatIds, cursorId, closeDrawer, openIssue, helpOpen]);
 
   // 高亮卡片滚入可视区（j/k 移动可能超出视口）。
   useEffect(() => {
