@@ -238,7 +238,7 @@ describe('directory OpenCode session routes', () => {
     }
   });
 
-  it('creates a session with the requested directory context and refuses a mismatched result', async () => {
+  it('creates a session with the requested directory context', async () => {
     const { app, cleanup } = await makeApp();
     const created = await app.inject({
       method: 'POST', url: '/api/directories', headers: json, payload: { name: 'Workspace' }
@@ -267,6 +267,34 @@ describe('directory OpenCode session routes', () => {
       assert.equal(response.statusCode, 201);
       assert.equal(new URL(requestedUrl).searchParams.get('directory'), requestedPath);
       assert.equal(response.json<{ session: { id: string; directory: string } }>().session.directory, requestedPath);
+    } finally {
+      globalThis.fetch = originalFetch;
+      cleanup();
+    }
+  });
+
+  it('does not bind a session if OpenCode ignores the requested workspace', async () => {
+    const { app, cleanup } = await makeApp();
+    const created = await app.inject({
+      method: 'POST', url: '/api/directories', headers: json, payload: { name: 'Workspace' }
+    });
+    const directoryId = created.json<{ id: string }>().id;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      id: 'ses_wrong_workspace',
+      title: 'Wrong Workspace',
+      directory: 'D:/opencode-server-startup',
+      time: { updated: 30 }
+    }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/directories/${directoryId}/opencode-sessions`,
+        headers: json,
+        payload: { title: 'New Session', workspacePath: 'D:\\workspace\\project-a', serverUrl: 'http://127.0.0.1:4096' }
+      });
+      assert.equal(response.statusCode, 502);
+      assert.match(response.json<{ error: string }>().error, /目录与目标工作目录不一致/);
     } finally {
       globalThis.fetch = originalFetch;
       cleanup();
