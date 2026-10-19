@@ -73,8 +73,8 @@ export async function listOpenCodeSessions(serverUrl: string, directory = ''): P
 }
 
 function normalizeDirectoryPath(value: string): string {
-  const trimmed = value.trim().replace(/\\/g, '/').replace(/\\/+$/, '');
-  return /^[a-zA-Z]:\\//.test(trimmed) ? trimmed.toLowerCase() : trimmed;
+  const trimmed = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^[a-zA-Z]:\//.test(trimmed) ? trimmed.toLowerCase() : trimmed;
 }
 
 /** Create a session in an explicit workspace directory (OpenCode v1 POST /session). */
