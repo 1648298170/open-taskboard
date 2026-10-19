@@ -4,13 +4,17 @@ import { Store, ValidationError } from '@taskboard/core';
 import { createProjectSchema, projectPatchSchema, z } from '@taskboard/core/schemas';
 import { listCommits, scanGitRefs } from '../git-refs.js';
 import { listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
-import { resolve } from 'node:path';
 
 interface ProjectParams { projectId: string }
 interface CommitsQuery { ref?: string }
 interface StatsQuery { weeks?: string }
 
 // One readable line per zod issue: "field: message; field: message".
+function normalizeDirectoryPath(value: string): string {
+  const trimmed = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^[a-zA-Z]:\//.test(trimmed) ? trimmed.toLowerCase() : trimmed;
+}
+
 const validationMessage = (error: z.ZodError): string =>
   error.issues.map(i => (i.path.length > 0 ? `${i.path.map(String).join('.')}: ` : '') + i.message).join('; ');
 
@@ -47,13 +51,9 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     try {
       const base = normalizeOpenCodeBase(project.wakeChannel);
       const sessions = await listOpenCodeSessions(base, project.workspacePath);
-      const normalizePath = (value: string): string => {
-        const absolute = resolve(value).replace(/\\/g, '/').replace(/\/$/, '');
-        return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
-      };
       const workspace = project.workspacePath.trim();
       const compatible = workspace
-        ? sessions.filter(session => session.directory && normalizePath(session.directory) === normalizePath(workspace))
+        ? sessions.filter(session => session.directory && normalizeDirectoryPath(session.directory) === normalizeDirectoryPath(workspace))
         : sessions;
       return { sessions: compatible, workspacePath: workspace, serverUrl: base };
     } catch (err) {
