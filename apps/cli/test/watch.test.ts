@@ -154,4 +154,9 @@ describe('channelFor（数据驱动 wake_channel 路由）', () => {
     assert.equal(channelFor(null, 'http://f:1'), 'http://f:1');
     assert.equal(channelFor('', undefined), undefined);
   });
+  
+  it('normalizes trailing slashes before using the URL as an API base', () => {
+    assert.equal(channelFor('http://127.0.0.1:4096/', undefined), 'http://127.0.0.1:4096');
+    assert.equal(channelFor('', 'http://127.0.0.1:4096///'), 'http://127.0.0.1:4096');
+  });
 });
