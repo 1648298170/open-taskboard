@@ -206,6 +206,16 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       ), '')
     `);
   },
+  // v14 → v15: persistent application-level defaults shared by all browser clients.
+  (db: DatabaseSync) => {
+    db.exec(`
+      CREATE TABLE app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL DEFAULT ''
+      );
+      INSERT INTO app_settings (key, value) VALUES ('default_workspace_path', '');
+    `);
+  },
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after
