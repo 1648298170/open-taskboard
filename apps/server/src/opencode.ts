@@ -39,7 +39,7 @@ export function normalizeOpenCodeBase(raw: string): string {
   // this deliberately blocks known metadata destinations rather than all
   // private IP ranges. Deployments accepting untrusted project settings should
   // additionally enforce an outbound host allowlist at the network boundary.
-  const hostname = url.hostname.toLowerCase().replace(/^\\[|\\]$/g, '');
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
   const metadataHosts = new Set([
     'metadata', 'metadata.google.internal', 'metadata.azure.internal',
     'metadata.aws.internal', 'instance-data', 'metadata.tencentyun.com',
@@ -48,7 +48,7 @@ export function normalizeOpenCodeBase(raw: string): string {
   if (metadataHosts.has(hostname)
     || hostname === '100.100.100.200'
     || hostname === '169.254.169.254'
-    || /^169\\.254\\./.test(hostname)
+    || /^169\.254\./.test(hostname)
     || hostname === 'fd00:ec2::254'
     || /^fe[89ab][0-9a-f]:/i.test(hostname)) {
     throw new Error('OpenCode server URL targets a blocked link-local or cloud metadata address');
@@ -60,14 +60,14 @@ function isBlockedMetadataAddress(address: string): boolean {
   const normalized = address.toLowerCase().split('%')[0] ?? address.toLowerCase();
   return normalized === '100.100.100.200'
     || normalized === '169.254.169.254'
-    || /^169\\.254\\./.test(normalized)
+    || /^169\.254\./.test(normalized)
     || normalized === 'fd00:ec2::254'
     || /^fe[89ab][0-9a-f]:/i.test(normalized)
-    || /^::ffff:169\\.254\\./i.test(normalized);
+    || /^::ffff:169\.254\./i.test(normalized);
 }
 
 async function assertSafeOpenCodeDestination(url: URL): Promise<void> {
-  const hostname = url.hostname.replace(/^\\[|\\]$/g, '');
+  const hostname = url.hostname.replace(/^\[|\]$/g, '');
   if (isIP(hostname)) {
     if (isBlockedMetadataAddress(hostname)) {
       throw new Error('OpenCode server URL resolves to a blocked cloud metadata or link-local address');
