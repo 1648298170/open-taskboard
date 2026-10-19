@@ -554,16 +554,17 @@ export default function App() {
             <button className="side-btn" onClick={async () => {
               const pid = projectId ?? '';
               const project = projects.find(p => p.id === pid);
-              if (!project) return;
+              const directory = directories.find(item => item.id === project?.directoryId);
+              if (!project || !directory) return;
               const entered = await promptDialog({
-                title: `配置「${project.name}」的 OpenCode 服务`,
+                title: `配置目录「${directory.name}」的 OpenCode 服务`,
                 lines: [
-                  '填写当前项目对应的 OpenCode serve 地址。',
-                  '会用于读取会话列表，并确保任务唤醒发送到绑定的原会话。',
-                  '留空会解除绑定；示例：http://127.0.0.1:4096'
+                  '此设置会应用到该目录下的所有项目。',
+                  '填写完整的 OpenCode Server URL。',
+                  '示例：http://127.0.0.1:4096'
                 ],
                 placeholder: 'http://127.0.0.1:4096',
-                value: project.wakeChannel
+                value: directory.serverUrl
               });
               if (entered === null) return;
               const serverUrl = entered.trim();
@@ -579,12 +580,13 @@ export default function App() {
                 }
               }
               try {
-                const updated = await api_.updateProject(pid, { wakeChannel: serverUrl });
-                setProjects(prev => prev.map(p => p.id === pid ? updated : p));
-                showToast(serverUrl ? '已绑定 OpenCode 服务：' + serverUrl : '已解除 OpenCode 服务绑定');
+                const updated = await api_.updateDirectory(directory.id, { serverUrl });
+                setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
+                loadProjects();
+                showToast(serverUrl ? '已更新目录 OpenCode 服务：' + serverUrl : '已清空目录 OpenCode 服务');
               } catch (err) { showToast('✗ ' + (err as Error).message); }
             }}>
-              配置 OpenCode</button>
+              配置当前目录 OpenCode</button>
             <button className="side-btn danger" title="删除当前项目（输入 id 确认）"
               onClick={async () => {
                 const pid = projectId ?? '';
@@ -619,7 +621,7 @@ export default function App() {
                   {progress ? `${progress.weightedDone}/${progress.weightedTotal} · ${pct}%` : '–'}
                 </span>
               </div>
-              <button className="btn primary" onClick={() => setDialogOpen(true)}>
+              <button className="btn primary" disabled={!projectId} onClick={() => setDialogOpen(true)}>
                 <Plus size={14} /> 新任务</button>
               {/* T5-28 主题切换：图标显示将切换到的目标主题。 */}
               <button className="icon-btn" aria-label="切换主题" title="切换主题"
@@ -742,7 +744,7 @@ export default function App() {
           statuses={STATUSES} />
       )}
 
-      <NewIssueDialog open={dialogOpen} projectId={projectId!}
+      <NewIssueDialog open={dialogOpen} projectId={projectId!} defaultSessionId={projects.find(project => project.id === projectId)?.defaultSessionId}
         onClose={() => setDialogOpen(false)}
         onCreated={id => { void refresh(); if (id) openIssue(id); }}
         onError={msg => showToast(`✗ ${msg}`)} />
