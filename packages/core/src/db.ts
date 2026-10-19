@@ -162,24 +162,34 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       CREATE TABLE directories (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        path TEXT NOT NULL DEFAULT '',
-        server_url TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL
       );
       ALTER TABLE projects ADD COLUMN directory_id TEXT REFERENCES directories(id);
       ALTER TABLE projects ADD COLUMN default_session_id TEXT;
-      INSERT INTO directories (id, name, path, server_url, created_at)
-      SELECT lower(hex(randomblob(4))),
-             CASE WHEN workspace_path <> '' THEN workspace_path ELSE '默认目录' END,
-             workspace_path, wake_channel, MIN(created_at)
+      CREATE TEMP TABLE directory_migration_map (
+        workspace_path TEXT NOT NULL,
+        server_url TEXT NOT NULL,
+        directory_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_path, server_url)
+      );
+      INSERT INTO directory_migration_map (workspace_path, server_url, directory_id)
+      SELECT workspace_path, wake_channel, lower(hex(randomblob(4)))
       FROM projects
       GROUP BY workspace_path, wake_channel;
+      INSERT INTO directories (id, name, created_at)
+      SELECT m.directory_id,
+             CASE WHEN m.workspace_path <> '' THEN m.workspace_path ELSE '默认目录' END,
+             MIN(p.created_at)
+      FROM directory_migration_map m
+      JOIN projects p ON p.workspace_path = m.workspace_path AND p.wake_channel = m.server_url
+      GROUP BY m.directory_id, m.workspace_path;
       UPDATE projects
       SET directory_id = (
-        SELECT d.id FROM directories d
-        WHERE d.path = projects.workspace_path AND d.server_url = projects.wake_channel
+        SELECT m.directory_id FROM directory_migration_map m
+        WHERE m.workspace_path = projects.workspace_path AND m.server_url = projects.wake_channel
         LIMIT 1
       );
+      DROP TABLE directory_migration_map;
       CREATE INDEX idx_projects_directory ON projects(directory_id);
     `);
   },
