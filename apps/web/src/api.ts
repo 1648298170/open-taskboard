@@ -64,9 +64,9 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 
 export const api_ = {
   listDirectories: () => api<WorkspaceDirectory[]>('GET', '/api/directories'),
-  createDirectory: (p: { id?: string; name: string }) =>
+  createDirectory: (p: { id?: string; name: string; workspacePath?: string }) =>
     api<WorkspaceDirectory>('POST', '/api/directories', p),
-  updateDirectory: (id: string, p: { name?: string }) =>
+  updateDirectory: (id: string, p: { name?: string; workspacePath?: string }) =>
     api<WorkspaceDirectory>('PATCH', `/api/directories/${encodeURIComponent(id)}`, p),
   deleteDirectory: (id: string) => api<{ ok: true }>('DELETE', `/api/directories/${encodeURIComponent(id)}`),
   openCodeSessionsForDirectory: (id: string, workspacePath: string, serverUrl: string) =>
