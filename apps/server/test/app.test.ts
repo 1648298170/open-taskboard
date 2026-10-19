@@ -490,7 +490,7 @@ describe('TASKBOARD_HUMAN_DONE gate', () => {
     cleanup();
   });
 
-  it('honors the confirm escape hatch on both paths', async () => {
+  it('does not treat confirm:true as human approval on either path', async () => {
     const { app, cleanup, issueId } = await gated();
     const v = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<{ version: number }>().version;
     const patch = await app.inject({
@@ -714,8 +714,10 @@ describe('ready/next views', () => {
     assert.equal(before.json<{ issue: { id: string } | null }>().issue?.id, a);
     assert.equal(before.json<{ issue: { id: string } | null }>().issue?.status, 'todo');
 
-    // 默认开启的 HUMAN_DONE 门禁下，非 web 来源置 done 需显式 confirm 逃生舱。
-    await app.inject({ method: 'PATCH', url: `/api/issues/${a}`, headers: json, payload: { status: 'done', confirm: true } });
+    // 完成任务必须走 web 审批入口，客户端自报 confirm 不能绕过门禁。
+    const doneVersion = (await app.inject({ method: 'GET', url: `/api/issues/${a}` })).json<{ version: number }>().version;
+    const done = await app.inject({ method: 'PATCH', url: `/api/issues/${a}`, headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { status: 'done', version: doneVersion } });
+    assert.equal(done.statusCode, 200);
     const after = await app.inject({ method: 'GET', url: '/api/projects/p1/next' });
     assert.equal(after.json<{ issue: { id: string } | null }>().issue?.id, b);
     cleanup();
@@ -796,7 +798,7 @@ describe('in_review 评论门禁（TASKBOARD_REVIEW_COMMENT 默认开）', () =>
     cleanup();
   });
 
-  it('web actor is exempt; create-at-in_review gated with confirm escape', async () => {
+  it('web actor is exempt; confirm cannot bypass create-at-in_review gate', async () => {
     const { app, cleanup } = await makeApp();
     await seedProject(app);
     const issueId = await seedIssue(app);
@@ -812,7 +814,7 @@ describe('in_review 评论门禁（TASKBOARD_REVIEW_COMMENT 默认开）', () =>
     const escaped = await app.inject({
       method: 'POST', url: '/api/projects/p1/issues', headers: json, payload: { title: '直接交验', status: 'in_review', confirm: true }
     });
-    assert.equal(escaped.statusCode, 201);
+    assert.equal(escaped.statusCode, 403);
     cleanup();
   });
 
