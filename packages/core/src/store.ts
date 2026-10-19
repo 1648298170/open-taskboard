@@ -160,6 +160,14 @@ export class Store {
     const routingChanged =
       (patch.workspacePath !== undefined && patch.workspacePath.trim() !== current.workspacePath) ||
       (patch.wakeChannel !== undefined && patch.wakeChannel.trim() !== current.wakeChannel);
+    if (routingChanged) {
+      const activeIssues = this.issues.list(id, { archived: 'all' }).filter(issue => activeClaim(issue));
+      if (activeIssues.length > 0) {
+        throw new ConflictError(
+          `cannot change project workspace/server while ${activeIssues.length} task(s) have active agent leases; release or wait for the leases to expire first`
+        );
+      }
+    }
     const effectivePatch = routingChanged && patch.defaultSessionId === undefined
       ? { ...patch, defaultSessionId: null }
       : patch;
