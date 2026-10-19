@@ -189,6 +189,18 @@ export const openApiSpec: OpenApiDocument = {
         }
       }
     },
+    '/api/settings': {
+      summary: 'Read and update global application defaults',
+      get: {
+        operationId: 'getAppSettings', summary: 'Read global application settings', tags: ['settings'],
+        responses: { 200: { description: 'Global settings', ...jsonResponse({ $ref: '#/components/schemas/AppSettings' }) }, ...commonResponses(false) }
+      },
+      put: {
+        operationId: 'updateAppSettings', summary: 'Update global application defaults', tags: ['settings'],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { defaultWorkspacePath: { type: 'string' } }, required: ['defaultWorkspacePath'], additionalProperties: false } } },
+        responses: { 200: { description: 'Updated settings', ...jsonResponse({ $ref: '#/components/schemas/AppSettings' }) }, 400: { $ref: '#/components/responses/BadRequest' }, ...commonResponses(true) }
+      }
+    },
     '/api/directories': {
       summary: 'List and create workspace directories',
       get: {
@@ -1002,6 +1014,11 @@ export const openApiSpec: OpenApiDocument = {
         type: 'string',
         description: 'Issue priority (list order: urgent first)',
         enum: [...PRIORITIES]
+      },
+      AppSettings: {
+        type: 'object', description: 'Persistent global application defaults',
+        properties: { defaultWorkspacePath: { type: 'string', description: 'Default path prefilled when creating workspace directories' } },
+        required: ['defaultWorkspacePath'], additionalProperties: false
       },
       WorkspaceDirectory: {
         type: 'object',
