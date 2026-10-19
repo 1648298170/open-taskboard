@@ -46,6 +46,12 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
   app.post('/api/projects/:projectId/issues', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
     const parsed = createIssueBodySchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    // Web task creation must bind an existing OpenCode session before saving.
+    // CLI/MCP can still create unbound tasks intentionally and bind them on claim.
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    if (actor === 'web' && !parsed.data.sessionId?.trim()) {
+      return reply.code(400).send({ error: '创建任务前必须先选择一个 OpenCode 会话（sessionId 不能为空）' });
+    }
     // T7-36 门禁的 create 侧：直接以 status:'done' 创建与 PATCH 置 done 同责，
     // 非 web 来源必须带 confirm 逃生舱（env 未设时零行为变化）。
     if (config.humanDone && parsed.data.status === 'done' &&
