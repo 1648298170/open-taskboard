@@ -242,8 +242,10 @@ export const watchCommand: Command = {
               found++;
               console.log(`watch: 补拉唤醒 #${w.issueId}: ${w.instruction}`);
               const backfillTui = channelFor(backfillChannel, tuiBase);
-              queue = queue.then(() => executeWake(w.issueId, buildWakePrompt(w.issueId, w.issueTitle, w.instruction), backfillTui, w.commentId))
-                .catch(err => console.error(`watch: 补拉唤醒失败: ${(err as Error).message}`));
+              queue = queue.then(async () => {
+                const delivered = await executeWake(w.issueId, buildWakePrompt(w.issueId, w.issueTitle, w.instruction), backfillTui, w.commentId);
+                if (!delivered) processed.delete(w.key);
+              }).catch(err => { processed.delete(w.key); console.error(`watch: 补拉唤醒失败: ${(err as Error).message}`); });
             }
           }
         }
@@ -267,10 +269,59 @@ export const watchCommand: Command = {
       }
     };
 
-    const executeWake = async (issueId: string, prompt: string, tuiUrl?: string, commentId = ''): Promise<void> => {
-      // 通道 1：TUI 注入（附着的 TUI 输入框出现唤醒文本，人工回车提交）。
-      // 同会话、全上下文、实时可见，且模型/agent 由 TUI 自身决定。
-      // tuiUrl = 项目 wake_channel（数据驱动）?? --tui-url 兜底；undefined → 跳过。
+    const executeWake = async (issueId: string, prompt: string, tuiUrl?: string, commentId = ''): Promise<boolean> => {
+      // Session binding is authoritative. Never inject a bound task into the
+      // currently selected TUI session, and never silently spawn a new session.
+      let sessionId: string | null = null;
+      let issueTitle = '';
+      try {
+        const res = await fetch(`${base()}/api/issues/${encodeURIComponent(issueId)}`, {
+          headers: token() ? { Authorization: `Bearer ${token()}` } : {}
+        });
+        if (res.ok) {
+          const issue = await res.json() as { sessionId?: string | null; title?: string };
+          sessionId = issue.sessionId ?? null;
+          issueTitle = issue.title ?? '';
+        } else {
+          console.error(`watch: cannot load task ${issueId} (HTTP ${res.status}); wake skipped`);
+          return false;
+        }
+      } catch (err) {
+        console.error(`watch: cannot load task ${issueId} (${(err as Error).message}); wake skipped`);
+        return false;
+      }
+
+      if (sessionId) {
+        // Project wakeChannel and --opencode normally point at the same server.
+        // Prefer the explicit session server, then use the project's configured
+        // OpenCode endpoint. /prompt_async is the OpenCode v1 API that queues
+        // execution in the EXISTING session and returns without waiting for it.
+        const sessionBase = opencodeBase ?? tuiUrl;
+        if (!sessionBase) {
+          console.error(`watch: task ${issueId} is bound to ${sessionId}, but no OpenCode server URL is configured; refusing to start a new session`);
+          return false;
+        }
+        try {
+          const res = await fetch(`${sessionBase}/session/${encodeURIComponent(sessionId)}/prompt_async`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ parts: [{ type: 'text', text: prompt }] })
+          });
+          if (!res.ok) {
+            console.error(`watch: bound session ${sessionId} rejected prompt (HTTP ${res.status}); no fallback session will be created`);
+            return false;
+          }
+          console.log(`watch: queued prompt in bound session ${sessionId}`);
+          await markStatus(commentId, 'processing');
+          return true;
+        } catch (err) {
+          console.error(`watch: bound session ${sessionId} failed (${(err as Error).message}); no fallback session will be created`);
+          return false;
+        }
+      }
+
+      // Only unbound tasks may use the TUI input box (which belongs to the
+      // currently selected TUI session) or headless spawn fallback.
       if (tuiUrl) {
         try {
           const res = await fetch(`${tuiUrl}/tui/append-prompt`, {
@@ -281,47 +332,15 @@ export const watchCommand: Command = {
           if (res.ok) {
             console.log(`watch: appended wake to TUI (${tuiUrl}) — 等待人工回车提交`);
             await markStatus(commentId, 'processing');
-            return;
+            return true;
           }
-          console.error(`watch: TUI append failed (HTTP ${res.status}) — 尝试下一通道`);
+          console.error(`watch: TUI append failed (HTTP ${res.status}) — 尝试 headless`);
         } catch (err) {
-          console.error(`watch: TUI append failed (${(err as Error).message}) — 尝试下一通道`);
+          console.error(`watch: TUI append failed (${(err as Error).message}) — 尝试 headless`);
         }
       }
-      // 通道 2：绑定会话的 v2 prompt 注入（opencode 1.19.3 只入队不执行
-      // LLM turn，留作上游修复后的通道；失败自动降级 spawn）。
-      if (opencodeBase) {
-        let sessionId: string | null = null;
-        try {
-          const res = await fetch(`${base()}/api/issues/${encodeURIComponent(issueId)}`, {
-            headers: token() ? { Authorization: `Bearer ${token()}` } : {}
-          });
-          if (res.ok) sessionId = (await res.json() as { sessionId?: string | null }).sessionId ?? null;
-        } catch { /* probe failure → spawn fallback */ }
 
-        if (decideWake(sessionId, opencodeBase) === 'prompt') {
-          try {
-            const res = await fetch(`${opencodeBase}/api/session/${encodeURIComponent(sessionId!)}/prompt`, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ prompt: { text: prompt } })
-            });
-            if (res.ok) {
-              console.log(`watch: prompted bound session ${sessionId}`);
-              await markStatus(commentId, 'processing');
-              return;
-            }
-            console.error(`watch: session prompt failed (HTTP ${res.status}) — falling back to headless`);
-          } catch (err) {
-            console.error(`watch: session prompt failed (${(err as Error).message}) — falling back to headless`);
-          }
-        } else if (sessionId) {
-          console.log(`watch: task bound to ${sessionId} but no --opencode server — headless fallback`);
-        }
-      }
-      // opencode 1.19.3 的 headless run 偶发 "Unexpected server error"
-      // （与交互 TUI 并发访问存储相关，间歇性）——重试三次（0/10/25s）。
-      // spawn 本身 ENOENT 属永久错误，不重试。
+      // Headless is reserved for tasks without a session binding.
       const attempts = [0, 10_000, 25_000];
       for (let i = 0; i < attempts.length; i++) {
         if (attempts[i]! > 0) await new Promise(r => setTimeout(r, attempts[i]));
@@ -330,11 +349,15 @@ export const watchCommand: Command = {
           child.on('exit', code => resolve(code === 0 ? 'ok' : 'failed'));
           child.on('error', () => resolve('missing'));
         });
-        if (outcome === 'ok') { await markStatus(commentId, 'processed'); return; }
-        if (outcome === 'missing') { console.error(`watch: exec ${execParts[0]} not found in PATH`); return; }
+        if (outcome === 'ok') { await markStatus(commentId, 'processed'); return true; }
+        if (outcome === 'missing') {
+          console.error(`watch: exec ${execParts[0]} not found in PATH`);
+          return false;
+        }
         console.error(`watch: headless run failed (attempt ${i + 1}/${attempts.length})`);
       }
       console.error('watch: headless run failed after all retries — 结果不可用，请检查 exec 命令与目标 agent CLI 状态');
+      return false;
     };
 
     const connect = (): void => {
@@ -370,8 +393,10 @@ export const watchCommand: Command = {
             processed.add(key);
             const by = typeof p.author === 'string' && p.author ? ` (${p.author})` : '';
             console.log(`watch: wake${by}: ${stripped}`);
-            queue = queue.then(() => executeWake(issueId, buildWakePrompt(issueId, issueTitle, stripped), tuiUrl, commentId))
-              .catch(err => console.error(`watch: wake failed: ${(err as Error).message}`));
+            queue = queue.then(async () => {
+              const delivered = await executeWake(issueId, buildWakePrompt(issueId, issueTitle, stripped), tuiUrl, commentId);
+              if (!delivered) processed.delete(key);
+            }).catch(err => { processed.delete(key); console.error(`watch: wake failed: ${(err as Error).message}`); });
           });
           const decoder = new TextDecoder();
           for await (const chunk of res.body) parser.push(decoder.decode(chunk, { stream: true }));
