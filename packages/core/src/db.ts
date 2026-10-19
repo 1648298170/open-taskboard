@@ -154,6 +154,35 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
   (db: DatabaseSync) => {
     db.exec("ALTER TABLE comments ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'");
   },
+  // v12 → v13: workspace directories group projects in the sidebar. Existing
+  // projects are grouped by their current workspace path + OpenCode server,
+  // preserving the configuration they already use.
+  (db: DatabaseSync) => {
+    db.exec(`
+      CREATE TABLE directories (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL,
+        server_url TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+      );
+      ALTER TABLE projects ADD COLUMN directory_id TEXT REFERENCES directories(id);
+      ALTER TABLE projects ADD COLUMN default_session_id TEXT;
+      INSERT INTO directories (id, name, path, server_url, created_at)
+      SELECT lower(hex(randomblob(4))),
+             CASE WHEN workspace_path <> '' THEN workspace_path ELSE '默认目录' END,
+             workspace_path, wake_channel, MIN(created_at)
+      FROM projects
+      GROUP BY workspace_path, wake_channel;
+      UPDATE projects
+      SET directory_id = (
+        SELECT d.id FROM directories d
+        WHERE d.path = projects.workspace_path AND d.server_url = projects.wake_channel
+        LIMIT 1
+      );
+      CREATE INDEX idx_projects_directory ON projects(directory_id);
+    `);
+  },
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after
