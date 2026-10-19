@@ -243,8 +243,12 @@ export const openApiSpec: OpenApiDocument = {
       parameters: [{ name: 'directoryId', in: 'path', required: true, schema: { type: 'string' } }],
       get: {
         operationId: 'listDirectoryOpenCodeSessions',
-        summary: 'List OpenCode sessions for the directory path',
+        summary: 'List OpenCode sessions for the supplied project workspace path and server',
         tags: ['directories'],
+        parameters: [
+          { name: 'workspacePath', in: 'query', required: true, schema: { type: 'string' } },
+          { name: 'serverUrl', in: 'query', required: true, schema: { type: 'string', format: 'uri' } }
+        ],
         responses: {
           200: { description: 'Sessions in the directory', ...jsonResponse({ type: 'object', additionalProperties: true }) },
           400: { $ref: '#/components/responses/BadRequest' },
