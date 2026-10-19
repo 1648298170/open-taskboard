@@ -1408,7 +1408,7 @@ describe('project wake_channel', () => {
     store.updateProject('p1', { wakeChannel: 'http://h:1' });
     const upd = events.find(e => e.type === 'project.updated');
     assert.ok(upd);
-    assert.deepEqual(upd!.payload.fields, ['wakeChannel']);
+    assert.deepEqual(upd!.payload.fields, ['wakeChannel', 'defaultSessionId']);
   });
 });
 
