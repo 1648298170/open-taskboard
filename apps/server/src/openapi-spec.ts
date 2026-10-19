@@ -239,6 +239,51 @@ export const openApiSpec: OpenApiDocument = {
         }
       }
     },
+    '/api/projects/{projectId}/opencode-sessions': {
+      summary: 'OpenCode sessions available for task binding',
+      get: {
+        operationId: 'listProjectOpenCodeSessions',
+        summary: 'List sessions from the configured OpenCode v1 server',
+        description: 'Uses the project wakeChannel as the OpenCode server origin. If workspacePath is configured, only sessions with the same directory are returned.',
+        tags: ['projects'],
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        responses: {
+          200: {
+            description: 'Compatible OpenCode sessions',
+            ...jsonResponse({
+              type: 'object',
+              properties: {
+                sessions: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      title: { type: 'string' },
+                      directory: { type: 'string' },
+                      updatedAt: { type: ['integer', 'null'] }
+                    },
+                    required: ['id', 'title', 'directory', 'updatedAt'],
+                    additionalProperties: false
+                  }
+                },
+                workspacePath: { type: 'string' },
+                serverUrl: { type: 'string' }
+              },
+              required: ['sessions', 'workspacePath', 'serverUrl'],
+              additionalProperties: false
+            })
+          },
+          400: { $ref: '#/components/responses/BadRequest' },
+          404: { $ref: '#/components/responses/NotFound' },
+          502: {
+            description: 'OpenCode server is unreachable or returned an invalid response',
+            ...jsonResponse({ $ref: '#/components/schemas/Error' })
+          },
+          ...commonResponses(false)
+        }
+      }
+    },
     '/api/projects/{projectId}/git-refs': {
       summary: 'Branches + worktrees of the project workspace',
       get: {
