@@ -1428,14 +1428,15 @@ describe('project wake_channel', () => {
 });
 
 describe('workspace directories', () => {
-  it('groups projects while keeping path and OpenCode Server on each project', () => {
+  it('inherits the directory workspace path when creating a project without an override', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
-    const directory = store.createDirectory({ id: 'work-a', name: 'Workspace A' });
+    const directory = store.createDirectory({ id: 'work-a', name: 'Workspace A', workspacePath: 'D:\\workspace\\project-a' });
     const project = store.createProject({
       id: 'p-a', name: 'Project A', directoryId: directory.id,
-      workspacePath: 'D:\\workspace\\project-a', wakeChannel: 'http://127.0.0.1:4096', defaultSessionId: 'ses_a'
+      wakeChannel: 'http://127.0.0.1:4096', defaultSessionId: 'ses_a'
     });
     assert.equal(project.directoryId, directory.id);
+    assert.equal(directory.workspacePath, 'D:\\workspace\\project-a');
     assert.equal(project.workspacePath, 'D:\\workspace\\project-a');
     assert.equal(project.wakeChannel, 'http://127.0.0.1:4096');
     assert.equal(project.defaultSessionId, 'ses_a');
