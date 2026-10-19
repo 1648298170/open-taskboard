@@ -93,7 +93,7 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
         <label>标题<input name="title" required autoFocus placeholder="一句话讲清楚要做什么" /></label>
         <label>父任务 ID（可选，留空为顶层任务）<input name="parent" placeholder="填父任务 id，如 a1b2c3d4" /></label>
         <label>OpenCode 会话（必选）
-          <Select value={sessionId} onChange={setSessionId}
+          <Select value={sessionId} onChange={value => { setSessionId(value); setError(null); }}
             options={sessions.map(session => ({
               value: session.id,
               label: session.title + ' · ' + session.id.slice(0, 12)
