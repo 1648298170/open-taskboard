@@ -52,6 +52,41 @@ async function seedProject(app: FastifyInstance): Promise<string> {
 
 // --- auth (T2-9) -------------------------------------------------------------
 
+describe('project default Session workspace validation', () => {
+  it('rejects a Session whose actual directory differs from the project workspace', async () => {
+    const { app, cleanup, store } = await makeApp();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify([
+      { id: 'ses_expected', title: 'Expected', directory: 'D:/workspace/project-a', time: { updated: 10 } },
+      { id: 'ses_other', title: 'Other', directory: 'D:/workspace/project-b', time: { updated: 20 } }
+    ]), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+    try {
+      const mismatch = await app.inject({
+        method: 'POST', url: '/api/projects', headers: json,
+        payload: {
+          id: 'p-mismatch', name: 'Mismatch', workspacePath: 'D:/workspace/project-a',
+          wakeChannel: 'http://127.0.0.1:4096', defaultSessionId: 'ses_other'
+        }
+      });
+      assert.equal(mismatch.statusCode, 400);
+      assert.equal(store.getProject('p-mismatch'), null);
+
+      const matching = await app.inject({
+        method: 'POST', url: '/api/projects', headers: json,
+        payload: {
+          id: 'p-matching', name: 'Matching', workspacePath: 'D:/workspace/project-a',
+          wakeChannel: 'http://127.0.0.1:4096', defaultSessionId: 'ses_expected'
+        }
+      });
+      assert.equal(matching.statusCode, 201);
+      assert.equal(matching.json<{ defaultSessionId: string }>().defaultSessionId, 'ses_expected');
+    } finally {
+      globalThis.fetch = originalFetch;
+      cleanup();
+    }
+  });
+});
+
 describe('TASKBOARD_TOKEN auth', () => {
   it('rejects tokenless requests with 401', async () => {
     const { app, cleanup } = await makeApp({ TASKBOARD_TOKEN: 'sekret' });
