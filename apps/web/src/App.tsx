@@ -780,7 +780,7 @@ export default function App() {
             <div className="row">
               <label>项目 ID（可选）<input value={projId} placeholder="留空自动生成" onChange={e => setProjId(e.target.value)} /></label>
               <label>目录
-                <Select value={projectDirectoryId} onChange={value => { const existing = projects.find(project => project.directoryId === value); setProjectDirectoryId(value); setProjWorkspacePath(directory.workspacePath || existing?.workspacePath || ''); setProjServerUrl(existing?.wakeChannel ?? ''); setProjDefaultSessionId(''); setProjSessions([]); }}
+                <Select value={projectDirectoryId} onChange={value => { const existing = projects.find(project => project.directoryId === value); setProjectDirectoryId(value); setProjWorkspacePath(directories.find(directory => directory.id === value)?.workspacePath || existing?.workspacePath || ''); setProjServerUrl(existing?.wakeChannel ?? ''); setProjDefaultSessionId(''); setProjSessions([]); }}
                   options={directories.map(directory => ({ value: directory.id, label: directory.name }))} placeholder="选择目录" />
               </label>
             </div>
