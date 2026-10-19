@@ -3,9 +3,10 @@ import { Select } from './Select';
 import { api_, OpenCodeSessionOption, PRIORITIES, Priority } from '../api';
 import { WAKE_PREFIX } from '@taskboard/core/types';
 
-export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }: {
+export function NewIssueDialog({ open, projectId, defaultSessionId, onClose, onCreated, onError }: {
   open: boolean;
   projectId: string;
+  defaultSessionId?: string | null;
   onClose: () => void;
   onCreated: (parentId?: string) => void;
   onError: (msg: string) => void;
@@ -29,6 +30,7 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
       .then(result => {
         if (cancelled) return;
         setSessions(result.sessions);
+        if (defaultSessionId && result.sessions.some(session => session.id === defaultSessionId)) setSessionId(defaultSessionId);
         if (result.sessions.length === 0) {
           setSessionsError(result.workspacePath
             ? '没有找到目录匹配项目工作区的会话：' + result.workspacePath
@@ -40,7 +42,7 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
       })
       .finally(() => { if (!cancelled) setSessionsLoading(false); });
     return () => { cancelled = true; };
-  }, [open, projectId]);
+  }, [open, projectId, defaultSessionId]);
 
   if (!open) return null;
 
