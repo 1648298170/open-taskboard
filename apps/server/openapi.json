@@ -1781,6 +1781,287 @@
           }
         }
       }
+    },
+    "/api/directories": {
+      "summary": "List and create workspace directories",
+      "get": {
+        "operationId": "listDirectories",
+        "summary": "List workspace directories",
+        "tags": [
+          "directories"
+        ],
+        "responses": {
+          "200": {
+            "description": "Workspace directories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceDirectory"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createDirectory",
+        "summary": "Create a workspace directory grouping",
+        "tags": [
+          "directories"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDirectoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceDirectory"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/directories/{directoryId}": {
+      "summary": "Update or delete a workspace directory",
+      "parameters": [
+        {
+          "name": "directoryId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "updateDirectory",
+        "summary": "Update directory name, path, or OpenCode Server URL",
+        "tags": [
+          "directories"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchDirectoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceDirectory"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteDirectory",
+        "summary": "Delete an empty workspace directory",
+        "tags": [
+          "directories"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ok"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/directories/{directoryId}/opencode-sessions": {
+      "summary": "List or create OpenCode sessions in a workspace directory",
+      "parameters": [
+        {
+          "name": "directoryId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listDirectoryOpenCodeSessions",
+        "summary": "List OpenCode sessions for the directory path",
+        "tags": [
+          "directories"
+        ],
+        "responses": {
+          "200": {
+            "description": "Sessions in the directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createDirectoryOpenCodeSession",
+        "summary": "Create an OpenCode session in the directory path",
+        "tags": [
+          "directories"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "title"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1835,20 +2116,34 @@
           },
           "wakeChannel": {
             "type": "string",
-            "description": "Wake channel binding (TUI URL, e.g. http://127.0.0.1:4097); empty string = unbound"
+            "description": "OpenCode Server URL inherited from the workspace directory"
           },
           "labels": {
-            "type": "string",
-            "description": "Comma-separated free-form labels"
+            "type": "string"
           },
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "directoryId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "defaultSessionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional default session preselected for new tasks"
           }
         },
         "required": [
           "id",
           "name",
+          "directoryId",
+          "defaultSessionId",
           "workspacePath",
           "wakeChannel",
           "labels",
@@ -2416,16 +2711,26 @@
             "minLength": 1
           },
           "workspacePath": {
-            "type": "string"
+            "type": "string",
+            "description": "Legacy input; ignored when directoryId is supplied"
           },
           "wakeChannel": {
             "type": "string",
-            "maxLength": 200,
-            "description": "Wake channel binding: full TUI URL (e.g. http://127.0.0.1:4097) the data-driven watch delivers this project's @agent wakes to; omit/'' = unbound (falls back to the watch default, then headless)"
+            "description": "Legacy input; ignored when directoryId is supplied"
           },
           "labels": {
+            "type": "string"
+          },
+          "directoryId": {
             "type": "string",
-            "description": "Comma-separated free-form labels"
+            "description": "Workspace directory to create the project under"
+          },
+          "defaultSessionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Selected OpenCode session for new tasks"
           }
         },
         "required": [
@@ -2702,6 +3007,81 @@
           "actor",
           "createdAt"
         ],
+        "additionalProperties": false
+      },
+      "WorkspaceDirectory": {
+        "type": "object",
+        "description": "Workspace directory grouping for projects",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "serverUrl": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "path",
+          "serverUrl",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "CreateDirectoryRequest": {
+        "type": "object",
+        "description": "POST /api/directories body (strict)",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "serverUrl": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "name",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "PatchDirectoryRequest": {
+        "type": "object",
+        "description": "PATCH /api/directories/{directoryId} body (strict)",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "serverUrl": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
         "additionalProperties": false
       }
     },
