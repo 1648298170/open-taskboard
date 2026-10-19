@@ -5,6 +5,9 @@
  * Reuse that base URL for session discovery and dispatch so task binding and
  * wake-up cannot accidentally target different OpenCode instances.
  */
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+
 export interface OpenCodeSessionOption {
   id: string;
   title: string;
@@ -53,8 +56,38 @@ export function normalizeOpenCodeBase(raw: string): string {
   return url.origin;
 }
 
+function isBlockedMetadataAddress(address: string): boolean {
+  const normalized = address.toLowerCase().split('%')[0] ?? address.toLowerCase();
+  return normalized === '100.100.100.200'
+    || normalized === '169.254.169.254'
+    || /^169\\.254\\./.test(normalized)
+    || normalized === 'fd00:ec2::254'
+    || /^fe[89ab][0-9a-f]:/i.test(normalized)
+    || /^::ffff:169\\.254\\./i.test(normalized);
+}
+
+async function assertSafeOpenCodeDestination(url: URL): Promise<void> {
+  const hostname = url.hostname.replace(/^\\[|\\]$/g, '');
+  if (isIP(hostname)) {
+    if (isBlockedMetadataAddress(hostname)) {
+      throw new Error('OpenCode server URL resolves to a blocked cloud metadata or link-local address');
+    }
+    return;
+  }
+  let addresses: { address: string; family: number }[];
+  try {
+    addresses = await lookup(hostname, { all: true, verbatim: true });
+  } catch {
+    throw new Error('OpenCode server hostname could not be resolved');
+  }
+  if (addresses.length === 0 || addresses.some(item => isBlockedMetadataAddress(item.address))) {
+    throw new Error('OpenCode server hostname resolves to a blocked cloud metadata or link-local address');
+  }
+}
+
 async function requestOpenCodeJson(url: string, directory: string, method = 'GET', body?: unknown): Promise<unknown> {
   const requestUrl = new URL(url);
+  await assertSafeOpenCodeDestination(requestUrl);
   if (directory) requestUrl.searchParams.set('directory', directory);
   const response = await fetch(requestUrl, {
     method,
