@@ -69,6 +69,10 @@ export const api_ = {
   updateDirectory: (id: string, p: { name?: string; path?: string; serverUrl?: string }) =>
     api<WorkspaceDirectory>('PATCH', `/api/directories/${encodeURIComponent(id)}`, p),
   deleteDirectory: (id: string) => api<{ ok: true }>('DELETE', `/api/directories/${encodeURIComponent(id)}`),
+  openCodeSessionsForDirectory: (id: string) =>
+    api<{ sessions: OpenCodeSessionOption[]; directoryId: string; directoryPath: string; serverUrl: string }>('GET', `/api/directories/${encodeURIComponent(id)}/opencode-sessions`),
+  createOpenCodeSession: (id: string, title: string) =>
+    api<{ session: OpenCodeSessionOption; directoryId: string; serverUrl: string }>('POST', `/api/directories/${encodeURIComponent(id)}/opencode-sessions`, { title }),
   listProjects: () => api<Project[]>('GET', '/api/projects'),
   createProject: (p: { id?: string; name: string; directoryId?: string; defaultSessionId?: string | null; workspacePath?: string; wakeChannel?: string; labels?: string }) => api<Project>('POST', '/api/projects', p),
   updateProject: (id: string, p: { name?: string; wakeChannel?: string; defaultSessionId?: string | null }) => api<Project>('PATCH', `/api/projects/${id}`, p),
