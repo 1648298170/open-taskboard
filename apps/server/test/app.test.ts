@@ -169,6 +169,11 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
     const bare = await t.app.inject({ method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json, payload: { agent: 'bot' } });
     assert.equal(bare.statusCode, 403);
     assert.match(bare.json<{ error: string }>().error, /sessionId/);
+    const fakeApproval = await t.app.inject({
+      method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json,
+      payload: { agent: 'bot', confirm: true }
+    });
+    assert.equal(fakeApproval.statusCode, 403, 'confirm:true must not bypass session binding');
 
     const bound = await t.app.inject({
       method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json,
@@ -196,6 +201,11 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
       payload: { status: 'in_progress', version: 1 }
     });
     assert.equal(bare.statusCode, 403);
+    const fakeApproval = await t.app.inject({
+      method: 'PATCH', url: `/api/issues/${freshId}`, headers: json,
+      payload: { status: 'in_progress', version: 1, confirm: true }
+    });
+    assert.equal(fakeApproval.statusCode, 403, 'confirm:true must not bypass session binding');
 
     const withBind = await t.app.inject({
       method: 'PATCH', url: `/api/issues/${freshId}`, headers: json,
