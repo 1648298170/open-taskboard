@@ -66,7 +66,6 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     }
     // confirm 是门禁逃生舱字段——从 create body 剥离，不透传 Store
     const { confirm: _confirm, ...body } = parsed.data;
-    const actor = String(req.headers['x-taskboard-actor'] ?? '');
     return reply.code(201).send(store.createIssue({ ...body, projectId: req.params.projectId }, actor));
   });
 
