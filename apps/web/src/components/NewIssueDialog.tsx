@@ -91,9 +91,13 @@ export function NewIssueDialog({ open, projectId, workspacePath, defaultSessionI
   };
 
   return (
-    <dialog open className="new-dialog">
-      <form onSubmit={submit}>
-        <h2>新任务</h2>
+    <dialog open className="new-dialog new-issue-dialog">
+      <form className="new-issue-form" onSubmit={submit}>
+        <div className="dialog-heading">
+          <span className="dialog-eyebrow">TASK</span>
+          <h2>新建任务</h2>
+          <p>为当前项目创建一个任务，并绑定对应的 OpenCode 会话。</p>
+        </div>
         {workspacePath && <p className="session-hint">工作目录继承自所属项目：{workspacePath}</p>}
         <label>标题<input name="title" required autoFocus placeholder="一句话讲清楚要做什么" /></label>
         <label>父任务 ID（可选，留空为顶层任务）<input name="parent" placeholder="填父任务 id，如 a1b2c3d4" /></label>
