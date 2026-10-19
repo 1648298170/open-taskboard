@@ -150,8 +150,23 @@ export class Store {
     const effectivePatch = routingChanged && patch.defaultSessionId === undefined
       ? { ...patch, defaultSessionId: null }
       : patch;
-    inTransaction(this.db, () => this.projects.update(id, effectivePatch));
-    this.emit('project.updated', { id, fields: Object.keys(effectivePatch) });
+    const unboundIssueIds: string[] = [];
+    inTransaction(this.db, () => {
+      this.projects.update(id, effectivePatch);
+      if (routingChanged) {
+        // A task's sessionId is meaningful only in the project server + path
+        // context. Clear bindings when that context changes to prevent routing
+        // an old session ID to a different OpenCode server or directory.
+        for (const issue of this.issues.list(id, { archived: 'all' })) {
+          if (!issue.sessionId) continue;
+          this.issues.update(issue.id, { sessionId: null });
+          this.logActivity(issue.id, 'system', 'session-unbound', 'Project workspace/server changed; bind a session again');
+          unboundIssueIds.push(issue.id);
+        }
+      }
+    });
+    for (const issueId of unboundIssueIds) this.emit('issue.updated', { id: issueId, fields: ['sessionId'] });
+    this.emit('project.updated', { id, fields: Object.keys(effectivePatch), unboundIssueIds });
     return this.projects.get(id)!;
   }
 
