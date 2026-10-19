@@ -1946,7 +1946,7 @@
       }
     },
     "/api/directories/{directoryId}/opencode-sessions": {
-      "summary": "List or create OpenCode sessions in a workspace directory",
+      "summary": "List or create OpenCode sessions for a project workspace",
       "parameters": [
         {
           "name": "directoryId",
@@ -1959,7 +1959,7 @@
       ],
       "get": {
         "operationId": "listDirectoryOpenCodeSessions",
-        "summary": "List OpenCode sessions for the directory path",
+        "summary": "List OpenCode sessions for the supplied project workspace path and server",
         "tags": [
           "directories"
         ],
@@ -1997,11 +1997,38 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "directoryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspacePath",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "serverUrl",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ]
       },
       "post": {
         "operationId": "createDirectoryOpenCodeSession",
-        "summary": "Create an OpenCode session in the directory path",
+        "summary": "Create an OpenCode session in the supplied project workspace path",
         "tags": [
           "directories"
         ],
@@ -2016,10 +2043,20 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 200
+                  },
+                  "workspacePath": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "serverUrl": {
+                    "type": "string",
+                    "format": "uri"
                   }
                 },
                 "required": [
-                  "title"
+                  "title",
+                  "workspacePath",
+                  "serverUrl"
                 ],
                 "additionalProperties": false
               }
@@ -2112,11 +2149,11 @@
           },
           "workspacePath": {
             "type": "string",
-            "description": "Bound git workspace; empty string = unbound"
+            "description": "Project-specific filesystem workspace path"
           },
           "wakeChannel": {
             "type": "string",
-            "description": "OpenCode Server URL inherited from the workspace directory"
+            "description": "Project-specific OpenCode Server URL"
           },
           "labels": {
             "type": "string"
@@ -2712,11 +2749,11 @@
           },
           "workspacePath": {
             "type": "string",
-            "description": "Legacy input; ignored when directoryId is supplied"
+            "description": "Project filesystem workspace path"
           },
           "wakeChannel": {
             "type": "string",
-            "description": "Legacy input; ignored when directoryId is supplied"
+            "description": "Project OpenCode Server URL"
           },
           "labels": {
             "type": "string"
@@ -3017,13 +3054,8 @@
             "type": "string"
           },
           "name": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          },
-          "serverUrl": {
-            "type": "string"
+            "type": "string",
+            "description": "Sidebar grouping name; not a filesystem path"
           },
           "createdAt": {
             "type": "string",
@@ -3033,8 +3065,6 @@
         "required": [
           "id",
           "name",
-          "path",
-          "serverUrl",
           "createdAt"
         ],
         "additionalProperties": false
@@ -3049,19 +3079,10 @@
           "name": {
             "type": "string",
             "minLength": 1
-          },
-          "path": {
-            "type": "string",
-            "minLength": 1
-          },
-          "serverUrl": {
-            "type": "string",
-            "maxLength": 500
           }
         },
         "required": [
-          "name",
-          "path"
+          "name"
         ],
         "additionalProperties": false
       },
@@ -3072,17 +3093,10 @@
           "name": {
             "type": "string",
             "minLength": 1
-          },
-          "path": {
-            "type": "string",
-            "minLength": 1
-          },
-          "serverUrl": {
-            "type": "string",
-            "maxLength": 500
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": []
       }
     },
     "responses": {
