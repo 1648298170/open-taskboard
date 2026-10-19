@@ -23,8 +23,6 @@ export type Priority = (typeof PRIORITIES)[number];
 export interface WorkspaceDirectory {
   id: string;
   name: string;
-  path: string;
-  serverUrl: string;
   createdAt: string;
 }
 
