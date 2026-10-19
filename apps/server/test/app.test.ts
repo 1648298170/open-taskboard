@@ -50,6 +50,33 @@ async function seedProject(app: FastifyInstance): Promise<string> {
   return 'p1';
 }
 
+describe('global application settings', () => {
+  it('persists the default workspace path and validates updates', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      const initial = await app.inject({ method: 'GET', url: '/api/settings' });
+      assert.equal(initial.statusCode, 200);
+      assert.equal(initial.json<{ defaultWorkspacePath: string }>().defaultWorkspacePath, '');
+
+      const updated = await app.inject({
+        method: 'PUT', url: '/api/settings', headers: json,
+        payload: { defaultWorkspacePath: 'D:/workspace/projects' }
+      });
+      assert.equal(updated.statusCode, 200);
+      assert.equal(updated.json<{ defaultWorkspacePath: string }>().defaultWorkspacePath, 'D:/workspace/projects');
+
+      const reread = await app.inject({ method: 'GET', url: '/api/settings' });
+      assert.equal(reread.json<{ defaultWorkspacePath: string }>().defaultWorkspacePath, 'D:/workspace/projects');
+
+      const invalid = await app.inject({
+        method: 'PUT', url: '/api/settings', headers: json,
+        payload: { defaultWorkspacePath: 123 }
+      });
+      assert.equal(invalid.statusCode, 400);
+    } finally { cleanup(); }
+  });
+});
+
 // --- auth (T2-9) -------------------------------------------------------------
 
 describe('project default Session workspace validation', () => {
