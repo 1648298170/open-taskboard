@@ -410,7 +410,18 @@ export default function App() {
     return (
       <div className="empty-state">
         <p>还没有工作目录。先创建一个目录，再在目录下创建项目。</p>
-        <button className="btn primary" onClick={() => { setDirectoryName(''); setDirectoryPath(''); setDirectoryServerUrl(''); setDirectoryCreateOpen(true); }}>＋ 新建工作目录</button>
+        <button className="btn primary" onClick={async () => {
+          const name = await promptDialog({ title: '新建工作目录', lines: ['为一组项目设置显示名称。'], placeholder: '例如：前端项目', value: '' });
+          if (name === null) return;
+          const path = await promptDialog({ title: '工作目录路径', lines: ['填写绝对路径。'], placeholder: 'D:\\workspace\\projects', value: '' });
+          if (path === null) return;
+          const serverUrl = await promptDialog({ title: 'OpenCode Server URL', lines: ['可以暂时留空，之后在目录设置中补充。'], placeholder: 'http://127.0.0.1:4096', value: '' });
+          if (serverUrl === null) return;
+          try {
+            await api_.createDirectory({ name: name.trim(), path: path.trim(), serverUrl: serverUrl.trim() });
+            loadProjects();
+          } catch (err) { showToast('✗ ' + (err as Error).message); }
+        }}>＋ 新建工作目录</button>
         <p><a href="#" onClick={async e => {
           e.preventDefault();
           try {
