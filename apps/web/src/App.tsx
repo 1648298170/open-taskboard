@@ -29,6 +29,12 @@ export default function App() {
   const [directoryPath, setDirectoryPath] = useState('');
   const [directoryServerUrl, setDirectoryServerUrl] = useState('');
   const [projectDirectoryId, setProjectDirectoryId] = useState('');
+  const [projDefaultSessionId, setProjDefaultSessionId] = useState('');
+  const [projSessions, setProjSessions] = useState<import('./api').OpenCodeSessionOption[]>([]);
+  const [projSessionsLoading, setProjSessionsLoading] = useState(false);
+  const [projSessionsError, setProjSessionsError] = useState<string | null>(null);
+  const [sessionCreateOpen, setSessionCreateOpen] = useState(false);
+  const [sessionTitle, setSessionTitle] = useState('');
   const [projectId, setProjectId] = useState<string | null>(null);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [deps, setDeps] = useState<DependencyEdge[]>([]);
@@ -91,6 +97,30 @@ export default function App() {
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => { notifyRef.current = notify; }, [notify]);
   useEffect(() => { statsOpenRef.current = statsOpen; }, [statsOpen]);
+
+  useEffect(() => {
+    if (!projCreateOpen || !projectDirectoryId) {
+      setProjSessions([]);
+      setProjDefaultSessionId('');
+      setProjSessionsError(null);
+      return;
+    }
+    let cancelled = false;
+    setProjSessionsLoading(true);
+    setProjSessionsError(null);
+    api_.openCodeSessionsForDirectory(projectDirectoryId)
+      .then(result => {
+        if (cancelled) return;
+        setProjSessions(result.sessions);
+        setProjSessionsError(result.sessions.length ? null : '该工作目录下还没有 Session，请点击右侧按钮创建。');
+      })
+      .catch(err => {
+        if (!cancelled) setProjSessionsError((err as Error).message);
+      })
+      .finally(() => { if (!cancelled) setProjSessionsLoading(false); });
+    return () => { cancelled = true; };
+  }, [projCreateOpen, projectDirectoryId]);
+
 
   // ---- 深链 #/issue/<id> ----
   // 关闭→打开用 pushState 留一条历史（支持浏览器返回键）；抽屉内切换只 replace，历史不膨胀。
