@@ -642,6 +642,14 @@ export default function App() {
             </div>
           </header>
 
+      <section className="workspace-toolbar" aria-label="任务工作区">
+        <div className="workspace-toolbar-heading">
+          <div>
+            <h2>任务</h2>
+            <p>管理当前项目的任务、进度与优先级</p>
+          </div>
+          <span className="workspace-task-count">{visibleIssues.length} 项任务</span>
+        </div>
       <div className="toolbar">
         <input ref={searchInputRef} className="toolbar-search" placeholder="搜索标题/描述…" value={filters.text}
           onChange={e => setFilters(f => ({ ...f, text: e.target.value }))} />
@@ -669,6 +677,7 @@ export default function App() {
             onClick={() => setSortBy('priority')}>按优先级</button>
         </div>
       </div>
+      </section>
 
       {/* T6-31: 统计面板 —— toolbar 与看板之间的一个区段。 */}
       {statsOpen && <StatsPanel stats={stats} />}
