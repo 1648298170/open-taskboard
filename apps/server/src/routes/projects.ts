@@ -46,7 +46,10 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     const project = store.getProject(req.params.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
     if (!project.wakeChannel) {
-      return reply.code(400).send({ error: '先在项目设置中配置 OpenCode 唤醒端口，再选择会话' });
+      return reply.code(400).send({ error: '先在项目设置中配置 OpenCode Server URL，再选择会话' });
+    }
+    if (!project.workspacePath.trim()) {
+      return reply.code(400).send({ error: '先在项目设置中配置工作目录，再查询 Session' });
     }
     try {
       const base = normalizeOpenCodeBase(project.wakeChannel);
