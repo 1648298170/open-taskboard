@@ -724,6 +724,7 @@ export default function App() {
       )}
 
       <NewIssueDialog open={dialogOpen} projectId={projectId!}
+        workspacePath={projects.find(project => project.id === projectId)?.workspacePath}
         defaultSessionId={projects.find(project => project.id === projectId)?.defaultSessionId}
         onClose={() => setDialogOpen(false)}
         onCreated={id => { void refresh(); if (id) openIssue(id); }}
