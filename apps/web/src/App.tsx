@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUS_CN, STATUSES } from './api';
+import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUS_CN, STATUSES, WorkspaceDirectory } from './api';
 import { Board, buildBlockedByMap, flattenCardOrder, GroupBy, todayStr } from './components/Board';
 import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
 import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
-import { Bell, ChartColumn, GanttChart, Keyboard, Moon, Plus, Sun, Trash2, X } from 'lucide-react';
+import { Bell, ChartColumn, GanttChart, Keyboard, Moon, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react';
 import { Drawer } from './components/Drawer';
 import { NewIssueDialog } from './components/NewIssueDialog';
 import { StatsPanel } from './components/StatsPanel';
@@ -22,6 +22,13 @@ type Theme = 'dark' | 'light';
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [directories, setDirectories] = useState<WorkspaceDirectory[]>([]);
+  const [expandedDirectories, setExpandedDirectories] = useState<Set<string>>(new Set());
+  const [directoryCreateOpen, setDirectoryCreateOpen] = useState(false);
+  const [directoryName, setDirectoryName] = useState('');
+  const [directoryPath, setDirectoryPath] = useState('');
+  const [directoryServerUrl, setDirectoryServerUrl] = useState('');
+  const [projectDirectoryId, setProjectDirectoryId] = useState('');
   const [projectId, setProjectId] = useState<string | null>(null);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [deps, setDeps] = useState<DependencyEdge[]>([]);
@@ -140,13 +147,23 @@ export default function App() {
   }, [projectId]);
 
   const loadProjects = useCallback(() => {
-    api_.listProjects().then(list => {
+    Promise.all([api_.listProjects(), api_.listDirectories()]).then(([list, directoryList]) => {
       setConnError(false);
       setProjects(list);
+      setDirectories(directoryList);
+      setExpandedDirectories(prev => {
+        const next = new Set(prev);
+        for (const directory of directoryList) if (!next.size) next.add(directory.id);
+        return next;
+      });
       if (list.length) {
         const prev = localStorage.getItem('project');
         const pid = prev && list.some(p => p.id === prev) ? prev : list[0].id;
         setProjectId(pid);
+        const selected = list.find(p => p.id === pid);
+        if (selected?.directoryId) setExpandedDirectories(old => new Set(old).add(selected.directoryId!));
+      } else {
+        setProjectId(null);
       }
     }).catch(err => {
       if (isUnauthorized(err)) setNeedToken(true);
@@ -389,22 +406,23 @@ export default function App() {
     );
   }
 
-  if (!projects.length) {
+  if (!projects.length && !directories.length) {
     return (
       <div className="empty-state">
-        <p>还没有项目。<a href="#" onClick={async e => {
+        <p>还没有工作目录。先创建一个目录，再在目录下创建项目。</p>
+        <button className="btn primary" onClick={() => { setDirectoryName(''); setDirectoryPath(''); setDirectoryServerUrl(''); setDirectoryCreateOpen(true); }}>＋ 新建工作目录</button>
+        <p><a href="#" onClick={async e => {
           e.preventDefault();
           try {
-            const p = await api_.createProject({ id: 'demo', name: 'Demo 项目' });
+            const d = await api_.createDirectory({ name: '默认目录', path: 'D:\\workspace\\projects', serverUrl: '' });
+            const p = await api_.createProject({ id: 'demo', name: 'Demo 项目', directoryId: d.id });
             const parent = await api_.createIssue(p.id, { title: '搭建登录模块', priority: 'high', branch: 'feat/login', description: '示例父任务，包含可拆解的子任务。' });
             for (const [title, priority] of [['登录表单 UI', 'medium'], ['JWT 鉴权接口', 'high'], ['会话刷新逻辑', 'medium']] as const) {
               await api_.createIssue(p.id, { parentId: parent.id, title, priority });
             }
-            setProjects([p]); setProjectId(p.id);
+            loadProjects();
           } catch (err) { showToast(`✗ ${(err as Error).message}`); }
         }}>一键创建示例项目</a></p>
-        <pre>taskboard project create --id my-project --name "My project"
-taskboard issue create --project my-project --title "第一个任务"</pre>
       </div>
     );
   }
