@@ -231,7 +231,7 @@
       },
       "patch": {
         "operationId": "patchProject",
-        "summary": "Update project name and/or wake-channel binding",
+        "summary": "Update project name, workspace path, OpenCode Server URL, labels, or default Session",
         "tags": [
           "projects"
         ],
@@ -247,7 +247,7 @@
         },
         "responses": {
           "200": {
-            "description": "The updated project",
+            "description": "Updated project",
             "content": {
               "application/json": {
                 "schema": {
@@ -2777,20 +2777,27 @@
       },
       "PatchProjectRequest": {
         "type": "object",
-        "description": "PATCH /api/projects/{projectId} body (strict — unknown keys → 400)",
+        "description": "PATCH /api/projects/{projectId} body (strict)",
         "properties": {
           "name": {
             "type": "string",
             "minLength": 1
           },
+          "workspacePath": {
+            "type": "string"
+          },
           "wakeChannel": {
             "type": "string",
-            "maxLength": 200,
-            "description": "Rewrite the wake binding; '' clears it (unbound)"
+            "maxLength": 200
+          },
+          "defaultSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "labels": {
-            "type": "string",
-            "description": "Comma-separated free-form labels (rewrite; '' clears)"
+            "type": "string"
           }
         },
         "additionalProperties": false
