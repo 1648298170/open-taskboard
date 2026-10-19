@@ -31,6 +31,25 @@ export function normalizeOpenCodeBase(raw: string): string {
   if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
     throw new Error('OpenCode server URL must be an origin, e.g. http://127.0.0.1:4096');
   }
+  // Defense in depth against common cloud metadata SSRF targets. OpenCode
+  // servers may legitimately run on loopback or a private LAN address, so
+  // this deliberately blocks known metadata destinations rather than all
+  // private IP ranges. Deployments accepting untrusted project settings should
+  // additionally enforce an outbound host allowlist at the network boundary.
+  const hostname = url.hostname.toLowerCase().replace(/^\\[|\\]$/g, '');
+  const metadataHosts = new Set([
+    'metadata', 'metadata.google.internal', 'metadata.azure.internal',
+    'metadata.aws.internal', 'instance-data', 'metadata.tencentyun.com',
+    'metadata.oraclecloud.com'
+  ]);
+  if (metadataHosts.has(hostname)
+    || hostname === '100.100.100.200'
+    || hostname === '169.254.169.254'
+    || /^169\\.254\\./.test(hostname)
+    || hostname === 'fd00:ec2::254'
+    || /^fe[89ab][0-9a-f]:/i.test(hostname)) {
+    throw new Error('OpenCode server URL targets a blocked link-local or cloud metadata address');
+  }
   return url.origin;
 }
 
