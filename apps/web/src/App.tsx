@@ -471,9 +471,26 @@ export default function App() {
         <button className="btn primary" onClick={async () => {
           const name = await promptDialog({ title: '新建目录', lines: ['目录用于在左侧分组管理项目。'], placeholder: '例如：前端项目', value: '' });
           if (name === null) return;
-          try { await api_.createDirectory({ name: name.trim() }); loadProjects(); }
+          const workspacePath = await promptDialog({
+            title: '设置目录工作目录',
+            lines: ['新建项目会默认继承此路径。也可以先在全局设置中配置默认工作目录。'],
+            placeholder: '例如：D:\\workspace\\projects',
+            value: defaultWorkspacePath
+          });
+          if (workspacePath === null || !workspacePath.trim()) { showToast('✗ 请填写工作目录后再创建目录'); return; }
+          try { await api_.createDirectory({ name: name.trim(), workspacePath: workspacePath.trim() }); loadProjects(); }
           catch (err) { showToast('✗ ' + (err as Error).message); }
         }}>＋ 新建目录</button>
+        <button className="btn" onClick={async () => {
+          const path = await promptDialog({ title: '全局设置：默认工作目录', lines: ['该路径会预填到以后新建的目录中，不会修改已有目录或项目。'], placeholder: '例如：D:\\workspace\\projects', value: defaultWorkspacePath });
+          if (path === null) return;
+          try {
+            const settings = await api_.updateSettings({ defaultWorkspacePath: path.trim() });
+            setDefaultWorkspacePath(settings.defaultWorkspacePath);
+            setSettingsPathInput(settings.defaultWorkspacePath);
+            showToast('已保存全局默认工作目录');
+          } catch (err) { showToast('✗ 保存全局设置失败：' + (err as Error).message); }
+        }}>全局设置</button>
         <p className="dialog-note">创建目录后，在左侧目录节点下新建项目，并为项目配置工作目录、OpenCode Server 和 Session。</p>
       </div>
     );
