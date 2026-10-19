@@ -140,7 +140,7 @@ export class Store {
     return this.projects.get(id)!;
   }
 
-  updateProject(id: string, patch: { name?: string; wakeChannel?: string; labels?: string; defaultSessionId?: string | null }): Project {
+  updateProject(id: string, patch: { name?: string; workspacePath?: string; wakeChannel?: string; labels?: string; defaultSessionId?: string | null }): Project {
     if (!this.projects.get(id)) throw new NotFoundError(`project not found: ${id}`);
     if (patch.name !== undefined && patch.name.trim() === '') throw new ValidationError('name: must not be blank');
     inTransaction(this.db, () => this.projects.update(id, patch));
