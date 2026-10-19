@@ -136,6 +136,16 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
     });
   }
 
+  // Persistent global defaults are shared across browser clients and survive restarts.
+  app.get('/api/settings', async () => store.getAppSettings());
+  app.put('/api/settings', async (req, reply) => {
+    const body = req.body as { defaultWorkspacePath?: unknown } | null;
+    if (!body || typeof body.defaultWorkspacePath !== 'string' || Object.keys(body).some(key => key !== 'defaultWorkspacePath')) {
+      return reply.code(400).send({ error: 'defaultWorkspacePath must be a string' });
+    }
+    return store.updateAppSettings({ defaultWorkspacePath: body.defaultWorkspacePath });
+  });
+
   // ---- meta ----
   app.get('/api/meta', async () => ({ statuses: STATUSES, priorities: PRIORITIES }));
 
