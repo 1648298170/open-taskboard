@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Select } from './Select';
 import { api_, OpenCodeSessionOption, PRIORITIES, Priority } from '../api';
+import { WAKE_PREFIX } from '@taskboard/core/types';
 
 export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }: {
   open: boolean;
@@ -67,7 +68,7 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
       // 请求送达 agent 的 TUI 输入框。评论失败不阻塞创建（best-effort）。
       if (wake) {
         try {
-          await api_.addComment(created.id, 'web', '@agent 认领此任务并编排（拆解子任务、排依赖）');
+          await api_.addComment(created.id, 'web', `${WAKE_PREFIX} 认领此任务并编排（拆解子任务、排依赖）`);
         } catch (err) {
           onError(`任务已创建，但唤醒失败：${(err as Error).message}`);
         }

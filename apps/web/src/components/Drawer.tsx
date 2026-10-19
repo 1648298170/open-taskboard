@@ -6,6 +6,7 @@ import { confirmDialog, promptDialog } from './dialogs';
 import { fmtHMLocal, fmtWhenLocal } from '../logic/time';
 import { applyMention, mentionCandidatesFor, MentionCandidate, nextHi } from '../logic/mention';
 import { Pencil, Plus, Sparkles, UserRound, X } from 'lucide-react';
+import { WAKE_PREFIX } from '@taskboard/core/types';
 
 const fmtWhen = fmtWhenLocal;
 import { Select } from './Select';
@@ -18,8 +19,9 @@ const humanSize = (bytes: number): string =>
     : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB`
       : `${bytes} B`;
 
-// 评论提及候选：与 watch 侧车默认唤醒前缀保持一致（taskboard watch --on 可改）。
-const MENTION_CANDIDATES: MentionCandidate[] = [{ value: '@agent', label: '唤醒 agent 干活（主进程忙时排队：收尾当前任务后接手 · Enter 选择）' }];
+// 评论提及候选：前缀取自 core 的 WAKE_PREFIX（与 Store 重开规则、watch 投递
+// 规则同源；taskboard watch --on 可改运行时前缀，此处只反映默认值）。
+const MENTION_CANDIDATES: MentionCandidate[] = [{ value: WAKE_PREFIX, label: '唤醒 agent 干活（主进程忙时排队：收尾当前任务后接手 · Enter 选择）' }];
 
 export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToast, onOpenIssue, issues }: {
   issueId: string;
@@ -224,15 +226,37 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
             }}>归档</button>
           )}
-        {/* v0.4: 一键唤醒 —— UI 代发 @agent 评论（web 来源，人工触发），
-            watch 捕获后把编排请求送达 agent 的 TUI 输入框。done 任务无编排意义。 */}
+        {/* v0.4: 一键唤醒 —— UI 代发唤醒评论（web 来源，人工触发）。路由由
+            watch 决定：已绑定 sessionId → prompt_async 续原会话；未绑定 →
+            项目 wakeChannel/TUI → headless 新会话。done 任务无编排意义。 */}
         {detail.status !== 'done' && (
-          <button className="btn tiny" style={{ color: 'var(--accent)' }} title="唤醒 agent 编排此任务（评论 @agent，经 watch 送达 TUI；主进程忙碌时会在当前任务收尾后接手）"
+          <button className="btn tiny" style={{ color: 'var(--accent)' }}
+            title={detail.sessionId
+              ? `唤醒 agent 编排此任务（评论 ${WAKE_PREFIX}）：watch 直达已绑定会话 ${detail.sessionId}；主进程忙时收尾后接手`
+              : `唤醒 agent 编排此任务（评论 ${WAKE_PREFIX}）：任务未绑定会话，watch 走项目唤醒通道/TUI，兜底新建 headless 会话`}
             onClick={async () => {
               try {
-                await api_.addComment(detail.id, 'web', '@agent 认领此任务并编排（拆解子任务、排依赖）');
-                onToast('已唤醒 agent——watch 送达 TUI；若主进程正在干活，收尾后接手本条');
+                const created = await api_.addComment(detail.id, 'web', `${WAKE_PREFIX} 认领此任务并编排（拆解子任务、排依赖）`);
+                onToast(detail.sessionId
+                  ? `已入队——watch 将投递到绑定会话 ${detail.sessionId}`
+                  : '已入队——任务未绑定会话，watch 将按项目路由送达或新建 headless 会话');
                 onChanged();
+                // 送达确认：评论一直 pending 说明 watch 没跑或任务没有可用路由。
+                void (async () => {
+                  for (let i = 0; i < 5; i++) {
+                    await new Promise(r => setTimeout(r, 1000));
+                    try {
+                      const fresh = await api_.showIssue(issueId);
+                      const st = fresh.comments.find(c => c.id === created.id)?.status;
+                      if (st && st !== 'pending') {
+                        onToast(st === 'processed' ? '✓ agent 已处理本条唤醒' : '✓ 已送达，agent 处理中');
+                        onChanged();
+                        return;
+                      }
+                    } catch { return; }
+                  }
+                  onToast('⚠ 未确认送达：唤醒评论仍为 pending（watch 未运行或任务无可用路由）');
+                })();
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
             }}><Sparkles size={14} /> 唤醒</button>
         )}
