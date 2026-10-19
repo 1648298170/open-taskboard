@@ -54,7 +54,7 @@ async function seedProject(app: FastifyInstance): Promise<string> {
 
 describe('project default Session workspace validation', () => {
   it('rejects a Session whose actual directory differs from the project workspace', async () => {
-    const { app, cleanup, store } = await makeApp();
+    const { app, cleanup } = await makeApp();
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => new Response(JSON.stringify([
       { id: 'ses_expected', title: 'Expected', directory: 'D:/workspace/project-a', time: { updated: 10 } },
@@ -69,7 +69,8 @@ describe('project default Session workspace validation', () => {
         }
       });
       assert.equal(mismatch.statusCode, 400);
-      assert.equal(store.getProject('p-mismatch'), null);
+      const afterMismatch = await app.inject({ method: 'GET', url: '/api/projects' });
+      assert.ok(!afterMismatch.json<{ id: string }[]>().some(project => project.id === 'p-mismatch'));
 
       const matching = await app.inject({
         method: 'POST', url: '/api/projects', headers: json,
