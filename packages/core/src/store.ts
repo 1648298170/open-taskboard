@@ -107,6 +107,18 @@ export class Store {
     ).get()!.rev as number;
   }
 
+  // ---- application settings ----
+  getAppSettings(): { defaultWorkspacePath: string } {
+    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = 'default_workspace_path'").get() as { value: string } | undefined;
+    return { defaultWorkspacePath: row?.value ?? '' };
+  }
+
+  updateAppSettings(patch: { defaultWorkspacePath: string }): { defaultWorkspacePath: string } {
+    this.db.prepare("INSERT INTO app_settings (key, value) VALUES ('default_workspace_path', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(patch.defaultWorkspacePath.trim());
+    return this.getAppSettings();
+  }
+
   // ---- workspace directories ----
   createDirectory(input: DirectoryCreateInput): WorkspaceDirectory {
     const id = this.directories.create(input);
