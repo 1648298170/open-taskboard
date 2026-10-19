@@ -534,7 +534,7 @@ export default function App() {
             <button className="side-btn" onClick={() => { setDirectoryName(''); setDirectoryCreateOpen(true); }}><Plus size={14} /> 新建目录</button>
             <button className="side-btn" disabled={!directories.length} onClick={() => {
               const current = projects.find(project => project.id === projectId);
-              const directoryId = current?.directoryId ?? directories[0]?.id ?? '';
+              const directoryId = current?.directoryId ?? (directories.some(directory => directory.id === projectDirectoryId) ? projectDirectoryId : directories[0]?.id) ?? '';
               const existing = projects.find(project => project.directoryId === directoryId);
               setProjName(''); setProjId(''); setProjLabels('');
               setProjWorkspacePath(existing?.workspacePath ?? '');
@@ -765,7 +765,7 @@ export default function App() {
             <div className="row">
               <label>项目 ID（可选）<input value={projId} placeholder="留空自动生成" onChange={e => setProjId(e.target.value)} /></label>
               <label>目录
-                <Select value={projectDirectoryId} onChange={value => { setProjectDirectoryId(value); setProjDefaultSessionId(''); setProjSessions([]); }}
+                <Select value={projectDirectoryId} onChange={value => { const existing = projects.find(project => project.directoryId === value); setProjectDirectoryId(value); setProjWorkspacePath(existing?.workspacePath ?? ''); setProjServerUrl(existing?.wakeChannel ?? ''); setProjDefaultSessionId(''); setProjSessions([]); }}
                   options={directories.map(directory => ({ value: directory.id, label: directory.name }))} placeholder="选择目录" />
               </label>
             </div>
