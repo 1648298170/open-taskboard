@@ -20,6 +20,11 @@ export const PRIORITIES = ['urgent', 'high', 'medium', 'low'] as const;
 export type Status = (typeof STATUSES)[number];
 export type Priority = (typeof PRIORITIES)[number];
 
+export interface AppSettings {
+  /** Default workspace path prefilled for newly created directories. */
+  defaultWorkspacePath: string;
+}
+
 export interface WorkspaceDirectory {
   id: string;
   name: string;
