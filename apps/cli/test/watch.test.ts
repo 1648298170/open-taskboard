@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor, type IssueDetailLike } from '../src/commands/watch.js';
+import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor, isIgnoredAuthor, type IssueDetailLike } from '../src/commands/watch.js';
 
 describe('makeSseParser', () => {
   it('reassembles events from split chunks', () => {
@@ -37,6 +37,9 @@ describe('shouldWake', () => {
   it('wakes on fresh comments starting with the prefix', () => {
     assert.equal(shouldWake({ type: 'comment.created', payload: { body: '@agent 做下一个任务' } }, P), true);
   });
+  it('tolerates leading whitespace, matching the Store re-open rule', () => {
+    assert.equal(shouldWake({ type: 'comment.created', payload: { body: '\n  @agent 做下一个任务' } }, P), true);
+  });
   it('ignores plain comments, other events, and malformed payloads', () => {
     assert.equal(shouldWake({ type: 'comment.created', payload: { body: '普通评论' } }, P), false);
     assert.equal(shouldWake({ type: 'issue.updated', payload: { body: '@agent' } }, P), false);
@@ -58,7 +61,7 @@ describe('buildWakePrompt', () => {
   it('carries issue ref and instruction', () => {
     assert.equal(
       buildWakePrompt('abc123', '标题', '做这个'),
-      `#abc123 标题\n[看板唤醒] 主进程忙时先收尾手头任务，再处理本条；勿中断进行中的工作。\n指令：做这个`,
+      `#abc123 标题\n[看板唤醒] 主进程忙时先收尾手头任务，再处理本条；勿中断进行中的工作。\n收尾：处理完把本次唤醒评论置为 processed（MCP update_comment status=processed），否则面板会一直显示「唤醒中」。\n指令：做这个`,
     );
   });
 });
@@ -126,8 +129,48 @@ describe('missedWakes', () => {
 
   it('dedupes keys already processed by the live stream', () => {
     const issues: IssueDetailLike[] = [{ id: 'i1', title: 'T', comments: [comment('@agent 一条', 1_000, 'cx')] }];
-    const seen = new Set([wakeKey('i1', '@agent 一条')]);
+    const seen = new Set([wakeKey('i1', 'cx')]);
     assert.equal(missedWakes(issues, 0, '@agent', seen).length, 0);
+  });
+
+  it('keeps identical bodies apart — the key is the comment id, not the text', () => {
+    const issues: IssueDetailLike[] = [{
+      id: 'i1', title: 'T', comments: [
+        comment('@agent 同一句', 2_000, 'c1'),
+        comment('@agent 同一句', 1_000, 'c2'),
+      ],
+    }];
+    const seen = new Set([wakeKey('i1', 'c1')]);
+    const missed = missedWakes(issues, 0, '@agent', seen);
+    assert.equal(missed.length, 1);
+    assert.equal(missed[0].commentId, 'c2');
+  });
+
+  it('tolerates leading whitespace when extracting the instruction', () => {
+    const issues: IssueDetailLike[] = [{ id: 'i1', title: 'T', comments: [comment('\n  @agent 带前导空白', 1_000, 'cw')] }];
+    const missed = missedWakes(issues, 0, '@agent', new Set());
+    assert.equal(missed.length, 1);
+    assert.equal(missed[0].instruction, '带前导空白');
+  });
+});
+
+describe('isIgnoredAuthor（自我唤醒防护）', () => {
+  it('matches case-insensitively, trims, and tolerates undefined', () => {
+    const ignore = new Set(['sisyphus']);
+    assert.equal(isIgnoredAuthor('Sisyphus', ignore), true);
+    assert.equal(isIgnoredAuthor('  sisyphus ', ignore), true);
+    assert.equal(isIgnoredAuthor('web', ignore), false);
+    assert.equal(isIgnoredAuthor(undefined, ignore), false);
+  });
+
+  it('drops backfill wakes authored by an ignored actor (default keeps them)', () => {
+    const issues: IssueDetailLike[] = [{
+      id: 'i1', title: 'T', comments: [
+        { id: 'c1', body: '@agent 自己写的', createdAt: new Date().toISOString(), author: 'Sisyphus' },
+      ],
+    }];
+    assert.equal(missedWakes(issues, 0, '@agent', new Set(), new Set(['sisyphus'])).length, 0);
+    assert.equal(missedWakes(issues, 0, '@agent', new Set()).length, 1);
   });
 });
 

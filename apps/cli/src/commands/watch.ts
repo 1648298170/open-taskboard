@@ -14,6 +14,10 @@ import * as path from 'node:path';
 // registry.js (registry imports this file for the command table) and crash
 // with a TDZ error when a test/entry imports watch.js first.
 import type { Command } from './registry.js';
+// Domain-layer predicate shared with the Store (which re-opens settled tasks on
+// the same rule). Imported from the '/types' subpath so watch never pulls the
+// sqlite-backed Store into its process.
+import { isWakeComment } from '@taskboard/core/types';
 
 export interface SseEvent { name: string; data: string }
 
@@ -50,7 +54,7 @@ export function shouldWake(evt: WakePayload, prefix: string): boolean {
   if (evt.type !== 'comment.created' && evt.type !== 'comment.updated') return false;
   const { status, body } = evt.payload ?? {};
   if (status !== undefined && status !== 'pending') return false;
-  return typeof body === 'string' && body.startsWith(prefix);
+  return typeof body === 'string' && isWakeComment(body, prefix);
 }
 
 /**
@@ -71,15 +75,32 @@ export function wantsProject(filter: string | undefined, projectId: string | nul
   return !filter || projectId === filter;
 }
 
+/**
+ * Self-wake guard: an agent that writes an `@agent`-prefixed comment must not
+ * re-wake itself in a loop. Actor names are compared case-insensitively; the
+ * sidecar's own actor is always implicit, extra names come from
+ * `--ignore-author a,b`.
+ */
+export function isIgnoredAuthor(author: string | undefined, ignore: ReadonlySet<string>): boolean {
+  return typeof author === 'string' && ignore.has(author.trim().toLowerCase());
+}
+
 export function buildWakePrompt(issueId: string, issueTitle: string, instruction: string): string {
   return `#${issueId} ${issueTitle}\n`
     + '[看板唤醒] 主进程忙时先收尾手头任务，再处理本条；勿中断进行中的工作。\n'
+    + '收尾：处理完把本次唤醒评论置为 processed（MCP update_comment status=processed），否则面板会一直显示「唤醒中」。\n'
     + `指令：${instruction}`;
 }
 
-/** SSE 实时流与断线补拉共用同一键防重复注入。 */
-export function wakeKey(issueId: string, body: string): string {
-  return `${issueId}:${body}`;
+/**
+ * SSE 实时流与断线补拉共用同一键防重复注入。
+ *
+ * Keyed by comment id, not body: two different wake comments can carry the
+ * exact same instruction text, and keying on the body silently swallowed the
+ * second one (it looked "already processed").
+ */
+export function wakeKey(issueId: string, commentId: string): string {
+  return `${issueId}:${commentId}`;
 }
 
 function pidAlive(pid: number): boolean {
@@ -114,7 +135,7 @@ export function acquireWatchLock(lockPath: string): { ok: true; release: () => v
   }
 }
 
-interface CommentLike { id: string; body: string; status?: string; createdAt: string }
+interface CommentLike { id: string; body: string; status?: string; createdAt: string; author?: string }
 interface IssueDetailLike { id: string; title: string; comments: CommentLike[] }
 
 /**
@@ -126,16 +147,18 @@ export function missedWakes(
   sinceMs: number,
   prefix: string,
   seen: ReadonlySet<string>,
+  ignore: ReadonlySet<string> = new Set(),
 ): Array<{ issueId: string; commentId: string; issueTitle: string; instruction: string; key: string }> {
   const out: { issueId: string; commentId: string; issueTitle: string; instruction: string; key: string }[] = [];
   for (const it of issues) {
     for (const c of it.comments) {
       if (Date.parse(c.createdAt) <= sinceMs) continue;
       if (c.status !== undefined && c.status !== 'pending') continue;
-      if (!c.body.startsWith(prefix)) continue;
-      const key = wakeKey(it.id, c.body);
+      if (isIgnoredAuthor(c.author, ignore)) continue;
+      if (!isWakeComment(c.body, prefix)) continue;
+      const key = wakeKey(it.id, c.id);
       if (seen.has(key)) continue;
-      out.push({ issueId: it.id, commentId: c.id, issueTitle: it.title, instruction: c.body.slice(prefix.length).trim(), key });
+      out.push({ issueId: it.id, commentId: c.id, issueTitle: it.title, instruction: c.body.trimStart().slice(prefix.length).trim(), key });
     }
   }
   return out;
@@ -152,7 +175,7 @@ export function decideWake(sessionId: string | null | undefined, opencodeBase: s
 
 export const watchCommand: Command = {
   summary: 'Wake an agent when a comment starts with @agent',
-  usage:               'watch [--on PREFIX] [--tui-url URL] [--opencode URL] [--exec CMD] [--model M] [--project ID]',
+  usage:               'watch [--on PREFIX] [--tui-url URL] [--opencode URL] [--exec CMD] [--model M] [--project ID] [--ignore-author A,B]',
   bare: true,
   async run(ctx) {
     const { base, token, flags } = ctx;
@@ -162,6 +185,13 @@ export const watchCommand: Command = {
     // minimax-m2.5-free 被移除导致 ProviderModelNotFoundError），钉死可靠 id。
     const model = String(flags.model ?? process.env.OPENCODE_MODEL ?? '');
     const modelArgs = model ? ['-m', model] : [];
+    // v1 prompt_async 也接受显式 model 覆盖。已绑定的会话会一直沿用创建时的模型，
+    // 而那个模型可能额度耗尽或已下线（实测 zai-coding-plan 周额度用尽直接失败）。
+    // 只有 `provider/model` 形式的 id 才能拆成 v1 的 {providerID, modelID}。
+    const [modelProvider, ...modelRest] = model.split('/');
+    const modelRef = modelRest.length > 0
+      ? { providerID: modelProvider!, modelID: modelRest.join('/') }
+      : undefined;
     // opencode server base — when set, tasks bound to a session wake via
     // prompt injection instead of a headless spawn.
     const opencodeBase = String(flags.opencode ?? process.env.OPENCODE_SERVER_URL ?? '').replace(/\/+$/, '') || undefined;
@@ -170,6 +200,13 @@ export const watchCommand: Command = {
     // reviews and presses enter: same session, full context, TUI-visible.
     const tuiBase = String(flags['tui-url'] ?? process.env.OPENCODE_TUI_URL ?? '').replace(/\/+$/, '') || undefined;
     const projectFilter = String(flags.project ?? '') || undefined;
+    // 自我唤醒防护：agent 自己写 `@agent` 开头的评论不应再把自己叫醒（循环）。
+    // 'watch' 是侧车自己的 actor，永远忽略；agent 名由部署方用
+    // --ignore-author 显式列出（默认不过滤，避免误伤 agent 间协作）。
+    const ignoreAuthors = new Set(
+      ['watch', ...String(flags['ignore-author'] ?? '').split(',')]
+        .map(s => s.trim().toLowerCase()).filter(s => s.length > 0)
+    );
     const channels = [
       opencodeBase ? `bound-session(${opencodeBase})` : null,
       tuiBase ? `tui-for-unbound(${tuiBase})` : null,
@@ -237,7 +274,7 @@ export const watchCommand: Command = {
             const dr = await fetch(`${base()}/api/issues/${encodeURIComponent(it.id)}`, { headers });
             if (!dr.ok) continue;
             const detail = (await dr.json()) as IssueDetailLike;
-            for (const w of missedWakes([detail], since, prefix, processed)) {
+            for (const w of missedWakes([detail], since, prefix, processed, ignoreAuthors)) {
               processed.add(w.key);
               found++;
               console.log(`watch: 补拉唤醒 #${w.issueId}: ${w.instruction}`);
@@ -294,8 +331,14 @@ export const watchCommand: Command = {
         // Prefer the explicit session server, then use the project's configured
         // OpenCode endpoint. /prompt_async is the OpenCode v1 API that queues
         // execution in the EXISTING session and returns without waiting for it.
-        const sessionBase = projectChannel?.trim() || opencodeBase || tuiUrl;
-        if (!sessionBase) {
+        // 显式配置（--opencode / OPENCODE_SERVER_URL）必须优先于项目里存的值：
+        // 看板可能跑在 Docker 里，项目 wakeChannel 得写 host.docker.internal 才能从
+        // 容器访问宿主机；而 watch 跑在宿主机上，只有 127.0.0.1 才通。
+        const sessionBase = opencodeBase || projectChannel?.trim() || tuiUrl;
+        // decideWake owns the routing decision (bound + reachable server →
+        // prompt). A bound task that fails it must refuse: falling through to
+        // TUI/headless would inject into the WRONG session.
+        if (decideWake(sessionId, sessionBase) !== 'prompt') {
           console.error(`watch: task ${issueId} is bound to ${sessionId}, but no OpenCode server URL is configured; refusing to start a new session`);
           return false;
         }
@@ -303,7 +346,10 @@ export const watchCommand: Command = {
           const res = await fetch(`${sessionBase}/session/${encodeURIComponent(sessionId)}/prompt_async`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ parts: [{ type: 'text', text: prompt }] })
+            body: JSON.stringify({
+              parts: [{ type: 'text', text: prompt }],
+              ...(modelRef ? { model: modelRef } : {})
+            })
           });
           if (!res.ok) {
             console.error(`watch: bound session ${sessionId} rejected prompt (HTTP ${res.status}); no fallback session will be created`);
@@ -378,6 +424,7 @@ export const watchCommand: Command = {
             if (typeof evt.type === 'string' && evt.type.startsWith('project.')) { channelCache.clear(); return; }
             if (!shouldWake(evt, prefix)) return;
             const p = evt.payload ?? {};
+            if (isIgnoredAuthor(typeof p.author === 'string' ? p.author : undefined, ignoreAuthors)) return;
             const issueId = String(p.issueId ?? '');
             const projectId = await resolveProject(issueId);
             if (projectFilter && !wantsProject(projectFilter, projectId)) return;
@@ -385,8 +432,8 @@ export const watchCommand: Command = {
             const tuiUrl = channelFor(projectChannel, tuiBase);
             const issueTitle = String(p.issueTitle ?? '');
             const commentId = String(p.id ?? '');
-            const stripped = String(p.body ?? '').slice(prefix.length).trim();
-            const key = wakeKey(issueId, String(p.body ?? ''));
+            const stripped = String(p.body ?? '').trimStart().slice(prefix.length).trim();
+            const key = wakeKey(issueId, commentId);
             // 补拉路径可能已先行入队同一条评论——两路径对称查重，杜绝双注入。
             if (processed.has(key)) return;
             processed.add(key);
