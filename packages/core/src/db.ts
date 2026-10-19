@@ -162,7 +162,7 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       CREATE TABLE directories (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        path TEXT NOT NULL,
+        path TEXT NOT NULL DEFAULT '',
         server_url TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL
       );
