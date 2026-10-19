@@ -72,10 +72,28 @@ export async function listOpenCodeSessions(serverUrl: string, directory = ''): P
   });
 }
 
+function normalizeDirectoryPath(value: string): string {
+  const trimmed = value.trim().replace(/\\/g, '/').replace(/\\/+$/, '');
+  return /^[a-zA-Z]:\\//.test(trimmed) ? trimmed.toLowerCase() : trimmed;
+}
+
 /** Create a session in an explicit workspace directory (OpenCode v1 POST /session). */
 export async function createOpenCodeSession(serverUrl: string, directory: string, title: string): Promise<OpenCodeSessionOption> {
   if (!directory.trim()) throw new Error('Workspace directory is required to create a session');
   const base = normalizeOpenCodeBase(serverUrl);
+
+  // OpenCode's POST /session does not accept a directory in its JSON body.
+  // The server resolves request context from ?directory=... (or the header).
+  // Verify that the server honors that context before creating anything, so an
+  // older/incompatible server cannot silently create a session in its startup cwd.
+  const pathContext = await requestOpenCodeJson(`${base}/path`, directory);
+  if (!isRecord(pathContext) || typeof pathContext.directory !== 'string') {
+    throw new Error('OpenCode server did not report its active workspace directory; refusing to create a session');
+  }
+  if (normalizeDirectoryPath(pathContext.directory) !== normalizeDirectoryPath(directory)) {
+    throw new Error(`OpenCode server is using "${pathContext.directory}" instead of the requested workspace "${directory}"; no session was created`);
+  }
+
   const payload = await requestOpenCodeJson(`${base}/session`, directory, 'POST', { title: title.trim() });
   if (!isRecord(payload) || typeof payload.id !== 'string' || !payload.id) {
     throw new Error('OpenCode POST /session returned an unexpected response');
