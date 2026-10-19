@@ -65,7 +65,7 @@ export default function App() {
   // T5-27: 泳道分组。
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
   // T5-28: 主题（localStorage 持久化，默认暗色）。
-  const [theme, setTheme] = useState<Theme>(() => localStorage.getItem('taskboard-theme') === 'light' ? 'light' : 'dark');
+  const [theme, setTheme] = useState<Theme>(() => localStorage.getItem('taskboard-theme') === 'dark' ? 'dark' : 'light');
   // T6-35: 桌面通知开关（存储 '1' 且权限已授予才算开）。
   const [notify, setNotify] = useState(() =>
     localStorage.getItem('taskboard-notify') === '1' && 'Notification' in window && Notification.permission === 'granted');
@@ -611,6 +611,10 @@ export default function App() {
         </aside>
         <div className="main-col">
           <header className="topbar">
+            <div className="topbar-context">
+              <strong>{projects.find(project => project.id === projectId)?.name ?? '选择项目'}</strong>
+              <span>{projects.find(project => project.id === projectId)?.workspacePath ?? '从左侧选择一个项目开始工作'}</span>
+            </div>
             <div className="controls">
               <div className="progress" title="weighted: 父任务等权统计">
                 <div className="progress-fill" style={{ width: `${pct}%` }} />
