@@ -108,6 +108,7 @@ export default function App() {
     if (!projCreateOpen || !projectDirectoryId) {
       setProjSessions([]);
       setProjDefaultSessionId('');
+      setProjSessionsLoading(false);
       setProjSessionsError(null);
       return;
     }
