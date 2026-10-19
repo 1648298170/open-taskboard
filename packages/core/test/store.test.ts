@@ -1402,6 +1402,21 @@ describe('project wake_channel', () => {
     assert.throws(() => store.updateProject('nope', { wakeChannel: 'x' }), /not found/);
   });
 
+  it('clears task session bindings when project path or server changes', () => {
+    const { store } = fresh();
+    const project = store.createProject({
+      id: 'p-session', name: 'P', workspacePath: '/workspace/a',
+      wakeChannel: 'http://127.0.0.1:4096', defaultSessionId: 'ses_default'
+    });
+    const issue = store.createIssue({ projectId: project.id, title: 'Bound task', sessionId: 'ses_task' });
+    const updated = store.updateProject(project.id, {
+      workspacePath: '/workspace/b', wakeChannel: 'http://127.0.0.1:4097'
+    });
+    assert.equal(updated.defaultSessionId, null);
+    assert.equal(store.getIssue(issue.id)?.sessionId, null);
+    assert.ok(store.listActivities(issue.id).some(activity => activity.action === 'session-unbound'));
+  });
+
   it('emits project.updated whose payload has no issueId (activity stream is issue-scoped)', () => {
     const { store, events } = fresh();
     store.createProject({ id: 'p1', name: 'P' });
