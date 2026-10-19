@@ -1,5 +1,6 @@
 ﻿import type { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isWakeComment, STATUSES, activeClaim } from './types.js';
 import type {
@@ -623,6 +624,46 @@ export class Store {
     });
     this.emit('issue.updated', { id: issueId });
     return attachment;
+  }
+
+  /**
+   * Persist an uploaded attachment as one logical operation. The body is first
+   * written to a temporary file; the metadata row and final atomic rename then
+   * happen inside the SQLite transaction. If any step fails, remove temporary
+   * or final files so the database never advertises a body that was not saved.
+   */
+  addAttachmentWithBody(issueId: string, filename: string, body: Uint8Array, actor = ''): Attachment {
+    if (!this.issues.get(issueId)) throw new NotFoundError(`issue not found: ${issueId}`);
+    const existing = this.attachments.listByIssue(issueId);
+    if (existing.length >= MAX_ISSUE_ATTACHMENTS) {
+      throw new ValidationError(`attachment quota exceeded: ${issueId} already holds ${existing.length}/${MAX_ISSUE_ATTACHMENTS} files`);
+    }
+    const usedBytes = existing.reduce((sum, attachment) => sum + attachment.size, 0);
+    if (usedBytes + body.byteLength > MAX_ISSUE_ATTACHMENT_BYTES) {
+      throw new ValidationError(`attachment quota exceeded: ${existing.length} files / ${usedBytes} bytes used of ${MAX_ISSUE_ATTACHMENT_BYTES} byte quota — ${filename} (${body.byteLength} bytes) does not fit`);
+    }
+
+    const directory = this.attachmentDirFor(issueId);
+    const temporaryPath = join(directory, `.upload-${randomUUID()}.tmp`);
+    let finalPath = '';
+    try {
+      writeFileSync(temporaryPath, body, { flag: 'wx' });
+      const attachment = inTransaction(this.db, () => {
+        const row = this.attachments.record(issueId, filename, body.byteLength, actor);
+        finalPath = this.attachmentPathFor(issueId, row.id, filename);
+        renameSync(temporaryPath, finalPath);
+        this.logActivity(issueId, actor, 'attachment', filename);
+        return row;
+      });
+      this.emit('issue.updated', { id: issueId });
+      return attachment;
+    } catch (error) {
+      for (const path of [temporaryPath, finalPath]) {
+        if (!path || !existsSync(path)) continue;
+        try { unlinkSync(path); } catch { /* best-effort rollback cleanup */ }
+      }
+      throw error;
+    }
   }
 
   listAttachments(issueId: string): Attachment[] {
