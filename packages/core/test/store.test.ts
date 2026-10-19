@@ -459,11 +459,11 @@ describe('Store.revision', () => {
 // --- (j) migrations ---------------------------------------------------------------
 
 describe('migrations', () => {
-  it('sets user_version to 12 on a fresh store (base schema + all migrations)', () => {
+  it('sets user_version to 13 on a fresh store (base schema + all migrations)', () => {
     const db = new DatabaseSync(':memory:');
     new Store('.unused', db); // configureDatabase runs schema + migrations
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(row.user_version, 12);
+    assert.equal(row.user_version, 13);
   });
 
   it('is idempotent: re-configuring an already-migrated db is a no-op', () => {
@@ -1409,6 +1409,36 @@ describe('project wake_channel', () => {
     const upd = events.find(e => e.type === 'project.updated');
     assert.ok(upd);
     assert.deepEqual(upd!.payload.fields, ['wakeChannel']);
+  });
+});
+
+describe('workspace directories', () => {
+  it('groups projects by directory and inherits its path and OpenCode server', () => {
+    const store = new Store(':memory:', new DatabaseSync(':memory:'));
+    const directory = store.createDirectory({
+      id: 'work-a', name: 'Workspace A', path: 'D:\\workspace\\project-a', serverUrl: 'http://127.0.0.1:4096'
+    });
+    const project = store.createProject({ id: 'p-a', name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a' });
+    assert.equal(project.directoryId, directory.id);
+    assert.equal(project.workspacePath, directory.path);
+    assert.equal(project.wakeChannel, directory.serverUrl);
+    assert.equal(project.defaultSessionId, 'ses_a');
+    assert.deepEqual(store.listDirectories().map(item => item.id), ['work-a']);
+  });
+
+  it('legacy project creation automatically creates or reuses a matching directory', () => {
+    const store = new Store(':memory:', new DatabaseSync(':memory:'));
+    const first = store.createProject({ id: 'legacy-a', name: 'Legacy A', workspacePath: '/workspace/a', wakeChannel: 'http://127.0.0.1:4096' });
+    const second = store.createProject({ id: 'legacy-b', name: 'Legacy B', workspacePath: '/workspace/a', wakeChannel: 'http://127.0.0.1:4096' });
+    assert.equal(first.directoryId, second.directoryId);
+    assert.equal(store.listDirectories().length, 1);
+  });
+
+  it('does not delete a directory while projects still belong to it', () => {
+    const store = new Store(':memory:', new DatabaseSync(':memory:'));
+    const directory = store.createDirectory({ name: 'Workspace', path: '/workspace', serverUrl: '' });
+    store.createProject({ id: 'p1', name: 'P1', directoryId: directory.id });
+    assert.throws(() => store.deleteDirectory(directory.id), /not empty/);
   });
 });
 
