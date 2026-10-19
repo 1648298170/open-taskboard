@@ -564,7 +564,7 @@ export default function App() {
                   {progress ? `${progress.weightedDone}/${progress.weightedTotal} · ${pct}%` : '–'}
                 </span>
               </div>
-              <button className="btn primary" onClick={() => setDialogOpen(true)}>
+              <button className="btn primary" disabled={!projectId} onClick={() => setDialogOpen(true)}>
                 <Plus size={14} /> 新任务</button>
               {/* T5-28 主题切换：图标显示将切换到的目标主题。 */}
               <button className="icon-btn" aria-label="切换主题" title="切换主题"
@@ -629,7 +629,20 @@ export default function App() {
 
       {/* T7-37: 时间线激活时替代看板主体（纯前端视图，数据同 visibleIssues，
           过滤/排序工具栏照常生效）。 */}
-      {timelineOpen
+      {!projectId ? (
+        <div className="empty-state project-empty-state">
+          <p>先在左侧目录下创建或选择一个项目。</p>
+          <button className="btn primary" disabled={!directories.length} onClick={() => {
+            const directoryId = directories[0]?.id ?? '';
+            setProjectDirectoryId(directoryId);
+            setProjName(''); setProjId(''); setProjLabels('');
+            setProjWorkspacePath(''); setProjServerUrl('');
+            setProjDefaultSessionId(''); setProjSessions([]);
+            setProjCreateOpen(true);
+            setExpandedDirectories(prev => new Set(prev).add(directoryId));
+          }}>在目录下创建项目</button>
+        </div>
+      ) : timelineOpen
         ? <Timeline issues={visibleIssues} onOpen={openIssue} />
         : <Board issues={visibleIssues} onOpen={openIssue} blockedByMap={blockedByMap} onDrop={async (id, status) => {
           const issue = issues.find(i => i.id === id);
@@ -688,6 +701,7 @@ export default function App() {
       )}
 
       <NewIssueDialog open={dialogOpen} projectId={projectId!}
+        defaultSessionId={projects.find(project => project.id === projectId)?.defaultSessionId}
         onClose={() => setDialogOpen(false)}
         onCreated={id => { void refresh(); if (id) openIssue(id); }}
         onError={msg => showToast(`✗ ${msg}`)} />
