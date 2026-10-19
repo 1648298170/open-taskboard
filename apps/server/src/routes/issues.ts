@@ -102,7 +102,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       && String(req.headers['x-taskboard-actor'] ?? '') !== 'web'
       && !parsed.data.sessionId && !store.getIssue(req.params.id)?.sessionId) {
       return reply.code(403).send({
-        error: 'starting a task requires binding: claim/PATCH with sessionId and branch, ; confirm:true is not an approval credential (TASKBOARD_REQUIRE_SESSION)'
+        error: 'starting a task requires binding: claim/PATCH with sessionId and branch; confirm:true is not an approval credential (TASKBOARD_REQUIRE_SESSION)'
       });
     }
     if (config.reviewComment && parsed.data.status === 'in_review' &&
@@ -124,7 +124,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
         String(req.headers['x-taskboard-actor'] ?? '') !== 'web') {
       return reply.code(403).send({ error: 'done requires human confirmation' });
     }
-    // confirm 是门禁逃生舱字段——从 patch 剥离，不透传 Store
+    // 兼容旧客户端的 confirm 字段不作为审批凭证，且不透传 Store
     const { version, confirm, ...patch } = parsed.data;
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
     return store.updateIssue(req.params.id, patch, version, actor);
