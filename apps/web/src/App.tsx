@@ -575,7 +575,7 @@ export default function App() {
             {!directories.length && <div className="side-empty">还没有目录</div>}
           </nav>
           <div className="side-actions">
-            <button className="side-btn" onClick={() => { setDirectoryName(''); setDirectoryCreateOpen(true); }}><Plus size={14} /> 新建目录</button>
+            <button className="side-btn" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryCreateOpen(true); }}><Plus size={14} /> 新建目录</button>
             <button className="side-btn" disabled={!directories.length} onClick={() => {
               const current = projects.find(project => project.id === projectId);
               const directoryId = current?.directoryId ?? (directories.some(directory => directory.id === projectDirectoryId) ? projectDirectoryId : directories[0]?.id) ?? '';
@@ -761,28 +761,6 @@ export default function App() {
         onCreated={id => { void refresh(); if (id) openIssue(id); }}
         onError={msg => showToast(`✗ ${msg}`)} />
 
-      {settingsOpen && (
-        <dialog open className="new-dialog">
-          <form onSubmit={async e => {
-            e.preventDefault();
-            try {
-              const settings = await api_.updateSettings({ defaultWorkspacePath: settingsPathInput.trim() });
-              setDefaultWorkspacePath(settings.defaultWorkspacePath);
-              if (directoryCreateOpen && !directoryWorkspacePath.trim()) setDirectoryWorkspacePath(settings.defaultWorkspacePath);
-              setSettingsOpen(false);
-              showToast(settings.defaultWorkspacePath ? '已保存全局默认工作目录' : '已清空全局默认工作目录');
-            } catch (err) { showToast('✗ 保存全局设置失败：' + (err as Error).message); }
-          }}>
-            <h2>全局设置</h2>
-            <label>默认工作目录地址
-              <input autoFocus value={settingsPathInput} placeholder="例如：D:\\workspace\\projects" onChange={e => setSettingsPathInput(e.target.value)} />
-            </label>
-            <p className="dialog-note">新建目录时会默认填入此路径。留空不会影响已有目录或项目；新建目录时必须手动填写工作目录。修改此设置不会自动修改已创建的目录和项目。</p>
-            <menu><button type="button" className="btn" onClick={() => setSettingsOpen(false)}>取消</button><button type="submit" className="btn primary">保存设置</button></menu>
-          </form>
-        </dialog>
-      )}
-
       {directoryCreateOpen && (
         <dialog open className="new-dialog">
           <form onSubmit={async e => {
@@ -806,6 +784,28 @@ export default function App() {
             <label>默认工作目录地址<input value={directoryWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app" onChange={e => setDirectoryWorkspacePath(e.target.value)} /></label>
             <p className="dialog-note">新建项目时会自动继承此工作目录地址。需要时仍可在项目中单独修改；OpenCode Server 和 Session 由项目配置。若留空，将使用全局默认工作目录。</p>
             <menu><button type="button" className="btn" onClick={() => setDirectoryCreateOpen(false)}>取消</button><button type="submit" className="btn primary">创建目录</button></menu>
+          </form>
+        </dialog>
+      )}
+
+      {settingsOpen && (
+        <dialog open className="new-dialog">
+          <form onSubmit={async e => {
+            e.preventDefault();
+            try {
+              const settings = await api_.updateSettings({ defaultWorkspacePath: settingsPathInput.trim() });
+              setDefaultWorkspacePath(settings.defaultWorkspacePath);
+              if (directoryCreateOpen && !directoryWorkspacePath.trim()) setDirectoryWorkspacePath(settings.defaultWorkspacePath);
+              setSettingsOpen(false);
+              showToast(settings.defaultWorkspacePath ? '已保存全局默认工作目录' : '已清空全局默认工作目录');
+            } catch (err) { showToast('✗ 保存全局设置失败：' + (err as Error).message); }
+          }}>
+            <h2>全局设置</h2>
+            <label>默认工作目录地址
+              <input autoFocus value={settingsPathInput} placeholder="例如：D:\\workspace\\projects" onChange={e => setSettingsPathInput(e.target.value)} />
+            </label>
+            <p className="dialog-note">新建目录时会默认填入此路径。留空不会影响已有目录或项目；新建目录时必须手动填写工作目录。修改此设置不会自动修改已创建的目录和项目。</p>
+            <menu><button type="button" className="btn" onClick={() => setSettingsOpen(false)}>取消</button><button type="submit" className="btn primary">保存设置</button></menu>
           </form>
         </dialog>
       )}
