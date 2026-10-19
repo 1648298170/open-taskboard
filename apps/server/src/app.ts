@@ -10,6 +10,7 @@ import type { StoreEvent, TaskboardServerConfig, TaskboardEnv } from '@taskboard
 import { registerErrorHandler } from './error-handler.js';
 import eventsRoutes from './routes/events.js';
 import projectsRoutes from './routes/projects.js';
+import directoriesRoutes from './routes/directories.js';
 import issuesRoutes from './routes/issues.js';
 import commentsRoutes from './routes/comments.js';
 import dependencyRoutes from './routes/dependencies.js';
@@ -139,6 +140,7 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   app.get('/api/meta', async () => ({ statuses: STATUSES, priorities: PRIORITIES }));
 
   await app.register(eventsRoutes, { store });
+  await app.register(directoriesRoutes, { store });
   await app.register(projectsRoutes, { store });
   await app.register(issuesRoutes, { store, config });
   await app.register(commentsRoutes, { store });
