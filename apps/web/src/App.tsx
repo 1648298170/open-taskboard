@@ -222,7 +222,7 @@ export default function App() {
   }, []);
 
   useEffect(() => { if (projectId) { localStorage.setItem('project', projectId); void refresh(projectId); } }, [projectId, refresh]);
-  useEffect(() => connectSSE(() => void refresh()), [refresh]);
+  useEffect(() => connectSSE(() => { void loadProjects(); void refresh(); }), [loadProjects, refresh]);
   // T6-31: 面板打开（或切换项目）时立即拉取一次；开着期间的更新走 refresh 内的重取。
   useEffect(() => {
     if (!statsOpen || !projectId) return;
