@@ -742,6 +742,7 @@ export default function App() {
               setExpandedDirectories(prev => new Set(prev).add(directory.id));
               setDirectoryCreateOpen(false);
               setProjectDirectoryId(directory.id);
+              setProjWorkspacePath(directory.workspacePath);
               showToast('已创建目录：' + directory.name);
             } catch (err) { showToast('✗ ' + (err as Error).message); }
           }}>
