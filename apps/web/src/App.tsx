@@ -34,6 +34,7 @@ export default function App() {
   const [expandedDirectories, setExpandedDirectories] = useState<Set<string>>(new Set());
   const [directoryCreateOpen, setDirectoryCreateOpen] = useState(false);
   const [directoryName, setDirectoryName] = useState('');
+  const [directoryWorkspacePath, setDirectoryWorkspacePath] = useState('');
   const [projectDirectoryId, setProjectDirectoryId] = useState('');
   const [projDefaultSessionId, setProjDefaultSessionId] = useState('');
   const [projSessions, setProjSessions] = useState<import('./api').OpenCodeSessionOption[]>([]);
@@ -478,7 +479,7 @@ export default function App() {
           </div>
           <div className="sidebar-heading">
             <span>目录</span>
-            <button className="icon-btn" title="新建目录" onClick={() => { setDirectoryName(''); setDirectoryCreateOpen(true); }}><Plus size={15} /></button>
+            <button className="icon-btn" title="新建目录" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(''); setDirectoryCreateOpen(true); }}><Plus size={15} /></button>
           </div>
           <nav className="side-projects" aria-label="目录与项目">
             {directories.map(directory => {
@@ -499,11 +500,20 @@ export default function App() {
                     <button className="icon-btn" title="在此目录下新建项目" onClick={() => {
                       const existing = children[0];
                       setProjName(''); setProjId(''); setProjLabels('');
-                      setProjWorkspacePath(existing?.workspacePath ?? '');
+                      setProjWorkspacePath(directory.workspacePath || existing?.workspacePath || '');
                       setProjServerUrl(existing?.wakeChannel ?? '');
                       setProjectDirectoryId(directory.id); setProjCreateOpen(true);
                       setExpandedDirectories(prev => new Set(prev).add(directory.id));
                     }}><Plus size={14} /></button>
+                    <button className="icon-btn" title="配置目录工作目录" onClick={async () => {
+                      const workspacePath = await promptDialog({ title: '配置目录工作目录', lines: ['新建项目时会默认继承此路径；已创建项目的路径不会自动改变。'], placeholder: '例如：D:\\workspace\\projects', value: directory.workspacePath });
+                      if (workspacePath === null) return;
+                      try {
+                        const updated = await api_.updateDirectory(directory.id, { workspacePath: workspacePath.trim() });
+                        setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
+                        showToast('已更新目录工作目录');
+                      } catch (err) { showToast('✗ ' + (err as Error).message); }
+                    }}><Folder size={14} /></button>
                     <button className="icon-btn" title="重命名目录" onClick={async () => {
                       const name = await promptDialog({ title: '重命名目录', lines: ['目录用于在左侧分组管理项目。'], placeholder: '目录名称', value: directory.name });
                       if (name === null) return;
@@ -649,7 +659,7 @@ export default function App() {
             const directoryId = directories[0]?.id ?? '';
             setProjectDirectoryId(directoryId);
             setProjName(''); setProjId(''); setProjLabels('');
-            setProjWorkspacePath(''); setProjServerUrl('');
+            setProjWorkspacePath(directories[0]?.workspacePath ?? ''); setProjServerUrl('');
             setProjDefaultSessionId(''); setProjSessions([]);
             setProjCreateOpen(true);
             setExpandedDirectories(prev => new Set(prev).add(directoryId));
@@ -724,9 +734,10 @@ export default function App() {
           <form onSubmit={async e => {
             e.preventDefault();
             const name = directoryName.trim();
+            const workspacePath = directoryWorkspacePath.trim();
             if (!name) { showToast('✗ 目录名称不能为空'); return; }
             try {
-              const directory = await api_.createDirectory({ name });
+              const directory = await api_.createDirectory({ name, workspacePath });
               setDirectories(prev => [...prev, directory]);
               setExpandedDirectories(prev => new Set(prev).add(directory.id));
               setDirectoryCreateOpen(false);
@@ -736,7 +747,8 @@ export default function App() {
           }}>
             <h2>新建目录</h2>
             <label>目录名称<input required autoFocus value={directoryName} placeholder="例如：前端项目" onChange={e => setDirectoryName(e.target.value)} /></label>
-            <p className="dialog-note">目录用于分组管理项目。每个项目分别绑定自己的工作目录、OpenCode Server 和默认 Session。</p>
+            <label>默认工作目录地址<input value={directoryWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app" onChange={e => setDirectoryWorkspacePath(e.target.value)} /></label>
+            <p className="dialog-note">新建项目时会自动继承此工作目录地址。需要时仍可在项目中单独修改；OpenCode Server 和 Session 由项目配置。</p>
             <menu><button type="button" className="btn" onClick={() => setDirectoryCreateOpen(false)}>取消</button><button type="submit" className="btn primary">创建目录</button></menu>
           </form>
         </dialog>
@@ -768,7 +780,7 @@ export default function App() {
             <div className="row">
               <label>项目 ID（可选）<input value={projId} placeholder="留空自动生成" onChange={e => setProjId(e.target.value)} /></label>
               <label>目录
-                <Select value={projectDirectoryId} onChange={value => { const existing = projects.find(project => project.directoryId === value); setProjectDirectoryId(value); setProjWorkspacePath(existing?.workspacePath ?? ''); setProjServerUrl(existing?.wakeChannel ?? ''); setProjDefaultSessionId(''); setProjSessions([]); }}
+                <Select value={projectDirectoryId} onChange={value => { const existing = projects.find(project => project.directoryId === value); setProjectDirectoryId(value); setProjWorkspacePath(directory.workspacePath || existing?.workspacePath || ''); setProjServerUrl(existing?.wakeChannel ?? ''); setProjDefaultSessionId(''); setProjSessions([]); }}
                   options={directories.map(directory => ({ value: directory.id, label: directory.name }))} placeholder="选择目录" />
               </label>
             </div>
@@ -793,7 +805,7 @@ export default function App() {
             </label>
             {projSessionsError && <p className="form-error">{projSessionsError}</p>}
             <label>标签（可选）<input value={projLabels} placeholder="标签,逗号分隔" onChange={e => setProjLabels(e.target.value)} /></label>
-            <p className="dialog-note">项目保存自己的 Session ID、工作目录和 OpenCode Server。新建任务时会默认预选该 Session。</p>
+            <p className="dialog-note">工作目录默认继承所选目录；项目允许单独覆盖。新建任务时会自动继承项目的工作目录和默认 Session，无需重复填写。</p>
             <menu><button type="button" className="btn" onClick={() => { setProjCreateOpen(false); setSessionCreateOpen(false); }}>取消</button><button type="submit" className="btn primary" disabled={projSessionsLoading || !projSessions.some(session => session.id === projDefaultSessionId)}>创建项目</button></menu>
           </form>
         </dialog>
