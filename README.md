@@ -140,7 +140,7 @@ todo → in_progress → in_review → done
 
 ```bash
 taskboard watch --tui-url http://127.0.0.1:4096   # ① 可选：指令进 opencode TUI 输入框（opencode 专属增强）
-taskboard watch --opencode http://127.0.0.1:4096  # ② 可选：注入任务绑定的 opencode 会话（opencode 专属增强）
+taskboard watch --opencode http://127.0.0.1:4096  # ② 建议：绑定任务通过 OpenCode v1 prompt_async 续原会话
 taskboard watch                                   # ③ 默认兜底：headless 全新会话，适配所有 agent CLI
 ```
 
@@ -155,7 +155,7 @@ taskboard watch                                        # opencode run（默认�
 
 > 模型注意：`--model` 走 opencode 的 `-m` 约定；Claude/Codex 用自家 `--model` 参数时直接写进 `--exec`（如 `--exec "claude --model sonnet -p"`），不要混用 `--model`。
 
-**绑定即路由（推荐）**：面板「新建项目」时填「唤醒端口」，`@agent` 评论就自动送达该端口的 opencode 输入框——绑定存在项目数据里，改绑定即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时留空即可。
+**绑定即路由（推荐）**：面板新建项目时配置 OpenCode 服务地址和工作区路径；已有项目可点「配置 OpenCode」。新建任务时必须选择该服务里的已有会话；工作区路径已配置时仅显示目录匹配的会话。`@agent` 评论对已绑定任务直接发往该 session 的 `prompt_async`，未绑定任务才注入 TUI。项目路由存在数据里，改绑即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时留空即可。
 
 ### 先把 opencode 终端跑起来（watch 的目的地）
 
