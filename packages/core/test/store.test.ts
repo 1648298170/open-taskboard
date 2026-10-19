@@ -474,7 +474,7 @@ describe('migrations', () => {
     // Second Store over the same db replays configureDatabase (idempotent path).
     new Store('.unused', db);
     const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(row.user_version, 12);
+    assert.equal(row.user_version, 13);
     assert.ok(store.getIssue(issue.id));
   });
 });
