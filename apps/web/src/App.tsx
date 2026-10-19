@@ -17,6 +17,14 @@ function issueIdFromHash(): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+/** Legacy projects are migrated into groups named after their old workspace path.
+ * Show only the final path segment in the sidebar until the user renames it. */
+function directoryLabel(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed.includes('/') && !trimmed.includes('\\')) return trimmed;
+  return trimmed.split(/[\\/]/).filter(Boolean).at(-1) || trimmed;
+}
+
 type SortBy = 'priority' | 'created';
 type Theme = 'dark' | 'light';
 
@@ -483,7 +491,7 @@ export default function App() {
                     })}>
                       {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       {expanded ? <FolderOpen size={15} /> : <Folder size={15} />}
-                      <span className="side-directory-name">{directory.name}</span>
+                      <span className="side-directory-name">{directoryLabel(directory.name)}</span>
                     </button>
                     <button className="icon-btn" title="在此目录下新建项目" onClick={() => {
                       const existing = children[0];
