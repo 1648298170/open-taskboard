@@ -553,7 +553,7 @@ export default function App() {
               try {
                 const updated = await api_.updateProject(project.id, { workspacePath: path.trim(), wakeChannel: serverUrl.trim(), defaultSessionId: null });
                 setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
-                showToast('项目配置已更新。默认 Session 已清空；请为新任务重新选择会话，已有任务的绑定请逐项检查。');
+                showToast('项目配置已更新；为避免误唤醒，原默认 Session 与现有任务的会话绑定已清除，请重新选择会话。');
               } catch (err) { showToast('✗ ' + (err as Error).message); }
             }}>配置当前项目</button>
             <button className="side-btn danger" disabled={!projectId} title="删除当前项目（输入 id 确认）" onClick={async () => {
