@@ -247,8 +247,13 @@ describe('directory OpenCode session routes', () => {
     const originalFetch = globalThis.fetch;
     const requestedPath = 'D:\\workspace\\project-a';
     let requestedUrl = '';
+    const requestedUrls: string[] = [];
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       requestedUrl = String(input);
+      requestedUrls.push(requestedUrl);
+      if ((init?.method ?? 'GET') === 'GET') {
+        return new Response(JSON.stringify({ directory: requestedPath }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
       assert.equal(init?.method, 'POST');
       return new Response(JSON.stringify({
         id: 'ses_new',
@@ -265,7 +270,11 @@ describe('directory OpenCode session routes', () => {
         payload: { title: 'New Session', workspacePath: requestedPath, serverUrl: 'http://127.0.0.1:4096' }
       });
       assert.equal(response.statusCode, 201);
-      assert.equal(new URL(requestedUrl).searchParams.get('directory'), requestedPath);
+      assert.equal(requestedUrls.length, 2, 'verify workspace before creating a session');
+      assert.equal(new URL(requestedUrls[0]).pathname, '/path');
+      assert.equal(new URL(requestedUrls[0]).searchParams.get('directory'), requestedPath);
+      assert.equal(new URL(requestedUrls[1]).pathname, '/session');
+      assert.equal(new URL(requestedUrls[1]).searchParams.get('directory'), requestedPath);
       assert.equal(response.json<{ session: { id: string; directory: string } }>().session.directory, requestedPath);
     } finally {
       globalThis.fetch = originalFetch;
@@ -294,7 +303,7 @@ describe('directory OpenCode session routes', () => {
         payload: { title: 'New Session', workspacePath: 'D:\\workspace\\project-a', serverUrl: 'http://127.0.0.1:4096' }
       });
       assert.equal(response.statusCode, 502);
-      assert.match(response.json<{ error: string }>().error, /目录与目标工作目录不一致/);
+      assert.match(response.json<{ error: string }>().error, /no session was created/);
     } finally {
       globalThis.fetch = originalFetch;
       cleanup();
