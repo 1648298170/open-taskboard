@@ -1413,7 +1413,7 @@ describe('project wake_channel', () => {
 });
 
 describe('workspace directories', () => {
-  it('groups projects by directory and inherits its path and OpenCode server', () => {
+  it('groups projects while keeping path and OpenCode Server on each project', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
     const directory = store.createDirectory({ id: 'work-a', name: 'Workspace A' });
     const project = store.createProject({
