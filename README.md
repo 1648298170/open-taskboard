@@ -132,11 +132,11 @@ todo → in_progress → in_review → done
 - 时间线视图 📅（甘特 lite）、统计面板 📊（周吞吐/平均周期/贡献榜）
 - 快捷键：`/` 搜索 · `n` 新建 · `j/k` 上下移动 · `Enter` 打开 · `?` 全部帮助
 - 附件上传下载（每任务 ≤20 个/总量 ≤50MB）、桌面通知、暗/亮主题
-- 任务绑定 opencode 会话（抽屉里填 `ses_…`）→ 面板唤醒直达该会话上下文
+- 新建任务必须从项目绑定的 OpenCode 服务中选择已有会话；保存时写入 `sessionId`，后续唤醒直达同一会话上下文
 
 ## 评论唤醒 agent（watch 侧车）
 
-面板**不绑定任何 agent 工具**：Claude Code / Codex / Cursor / opencode / 任何「命令行接 prompt」的 CLI agent 都能被醒。`taskboard watch` 常驻订阅看板事件（macOS / Windows / Linux 均可，常驻方案见下表），`@agent` 开头的评论按通道优先级唤醒 AI：
+面板**不绑定任何 agent 工具**：Claude Code / Codex / Cursor / opencode / 任何「命令行接 prompt」的 CLI agent 都能被醒。`taskboard watch` 常驻订阅看板事件（macOS / Windows / Linux 均可，常驻方案见下表）。已绑定 `sessionId` 的任务会优先通过 OpenCode v1 `POST /session/:id/prompt_async` 发送到原会话；只有未绑定任务才走 TUI 输入框或 headless 新会话：
 
 ```bash
 taskboard watch --tui-url http://127.0.0.1:4096   # ① 可选：指令进 opencode TUI 输入框（opencode 专属增强）
@@ -195,7 +195,7 @@ opencode attach http://127.0.0.1:4097        # 终端 2：接管绑定了 4097 �
 #### 细节备忘
 
 - 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47825`）；端口绑定存在**项目数据**（`wakeChannel`），`任务 → 项目 → 端口` 就完了——没有中心化的路由表
-- 通道优先级：项目 `wake_channel`（数据）→ `--tui-url`（兜底）→ 绑定会话 → headless，逐级自动降级
+- 唤醒优先级：任务已绑定 `sessionId` → 对应 OpenCode 服务的 `prompt_async`；只有未绑定任务才使用项目 `wake_channel` / `--tui-url` 注入当前 TUI，最后才 headless。绑定会话投递失败时不会静默创建新会话，唤醒评论保持 pending 以便重试
 - 同一 serve 端口被多终端 attach 时注入是**广播**（每窗都出现）——多终端请各用各的端口，绑定时不会串
 - 端口/项目/终端数量不受限：`wakeChannel` 是完整 URL（可绑局域网另一台机器），单实例锁按 server 端口 + 作用域自动命名字，headless 通道连端口都不需要
 - 唤醒评论有生命周期（`pending`→`processing`→`processed`）：watch 唤走一条评论时置「唤醒中」，headless 通道跑完（exit 0）自动置「已处理」；只有 `pending` 的评论可编辑、可被唤醒，编辑保存即重新入队（watch 会再次唤醒，无需重打指令）；已处理/唤醒中的评论锁定编辑，面板评论上直接显示徽章。人工把状态改回 `pending`（面板编辑保存 / CLI `comment edit` / MCP `update_comment`）即再次唤醒；无论新建还是重唤，只要任务停留在待验收/完成，都会自动重开为「进行中」——agent 不会在名义上已结案的看板下干活
@@ -269,6 +269,6 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 - 评论、活动流、标签、负责人、分支/worktree 绑定、起止日期（校验真实日历）、归档（归档父任务连带其未归档子任务）
 - 全文搜索（FTS5 trigram，标题/描述/评论，短查询退化 LIKE）、导出/导入 JSON（taskboard export/import）、统计面板（周吞吐/平均周期/贡献榜）、时间线视图、Mermaid 图渲染
 - 附件（元数据入库、正文落盘 `attachments/`，单文件 ≤10MB，每任务限额 20 个/总量 50MB 超限 400）、桌面通知、暗/亮主题、泳道分组、批量操作、j/k 键盘导航
-- 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE（不绑定 agent 工具，`--exec` 适配任意 agent CLI：claude / codex / cursor-agent / opencode run…），`@agent` 开头的评论按通道优先级唤醒——项目 `wake_channel` 数据绑定（面板/CLI 建项目时填唤醒端口，改绑即时生效）→ `--tui-url` 兜底 → 绑定会话 v2 prompt 注入（`--opencode`，opencode 专属）→ headless spawn（`--exec`/`--model` 兜底，全新会话）；`--on` 可改唤醒前缀；`--project` 可选作用域过滤（默认全项目）；断线重连自动补拉窗口内漏掉的 `@agent` 评论且与实时流对称去重
+- 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE（`--exec` 适配任意 agent CLI）。已绑定 `sessionId` 的任务优先调用 OpenCode v1 `POST /session/:id/prompt_async`，复用原会话上下文；未绑定任务才走项目 `wake_channel` / `--tui-url` TUI 注入，再到 headless spawn。绑定会话投递失败时不创建新会话，评论保留 pending 供重试；`--on` 可改唤醒前缀，`--project` 可选作用域过滤
 - SSE 实时刷新（Web 多端 + 跨 agent 工具共享同一块板；25s 心跳保活，断线指数退避重连 + 全量兜底拉取）
 - LAN 共享（`TASKBOARD_HOST=0.0.0.0`）、Bearer 令牌认证、只读模式、人工 done 门禁、webhook 事件转发
