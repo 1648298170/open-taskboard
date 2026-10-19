@@ -59,6 +59,7 @@ export default function App() {
   const [projId, setProjId] = useState('');
   const [projLabels, setProjLabels] = useState('');
   const [projWakePort, setProjWakePort] = useState('');
+  const [projWorkspacePath, setProjWorkspacePath] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
   // v0.4: 旧标签页检测 —— SPA 部署后旧标签页继续跑旧 bundle（多次坑用户的根源）。
   // 周期比对服务器最新 bundle 与当前运行版本，不一致则提示刷新。
@@ -432,7 +433,7 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           </nav>
           <div className="side-actions">
             {/* v0.4: 项目管理 —— 新建对话框；删除需输入项目 id 确认（防误删）。 */}
-            <button className="side-btn" onClick={() => { setProjName(''); setProjId(''); setProjLabels(''); setProjWakePort(''); setProjCreateOpen(true); }}>
+            <button className="side-btn" onClick={() => { setProjName(''); setProjId(''); setProjLabels(''); setProjWakePort(''); setProjWorkspacePath(''); setProjCreateOpen(true); }}>
               <Plus size={14} /> 新建项目</button>
             <button className="side-btn" onClick={async () => {
               const pid = projectId ?? '';
@@ -643,7 +644,8 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
             const labels = projLabels.trim();
             const wakeChannel = port ? `http://127.0.0.1:${port}` : undefined;
             try {
-              const p = await api_.createProject({ ...(id ? { id } : {}), name, ...(wakeChannel ? { wakeChannel } : {}), ...(labels ? { labels } : {}) });
+              const workspacePath = projWorkspacePath.trim();
+              const p = await api_.createProject({ ...(id ? { id } : {}), name, ...(workspacePath ? { workspacePath } : {}), ...(wakeChannel ? { wakeChannel } : {}), ...(labels ? { labels } : {}) });
               setProjCreateOpen(false);
               setProjects(prev => [...prev, p]);
               setProjectId(p.id);
@@ -671,7 +673,11 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
                   onChange={e => setProjLabels(e.target.value)} />
               </label>
             </div>
-            <p style={{ margin: '0 0 4px', fontSize: 11, color: 'var(--ink-dim)' }}>填了唤醒端口，之后在任务里 @agent 评论就能直达该端口的 opencode 输入框。</p>
+            <label>项目工作区路径（可选，建议填写）
+              <input value={projWorkspacePath} placeholder="如 D:\\workspace\\projects\\my-app"
+                onChange={e => setProjWorkspacePath(e.target.value)} />
+            </label>
+            <p style={{ margin: '0 0 4px', fontSize: 11, color: 'var(--ink-dim)' }}>配置 OpenCode 服务后可选择已有会话；填写工作区路径后，会过滤掉其他目录的会话。</p>
             <menu>
               <button type="button" className="btn" onClick={() => setProjCreateOpen(false)}>取消</button>
               <button type="submit" className="btn primary">创建</button>
