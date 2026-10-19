@@ -438,6 +438,7 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 /* 自绘下拉与 input 同满宽 + caret 贴右 —— 消除「优先级/分支」不对称。 */
 .new-dialog .row .tb-select { width: 100%; justify-content: space-between; padding: 5px 8px; font-size: 13px; }
 .new-dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 8px 0 0; }
+.new-dialog .session-hint { margin: -4px 0 10px; color: var(--ink-dim); font-size: 10px; overflow-wrap: anywhere; }
 
 .empty-state { text-align: center; color: var(--ink-dim); padding: 80px 20px; }
 .empty-state a { color: var(--accent); }
