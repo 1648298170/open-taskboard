@@ -2,6 +2,19 @@ export const STATUSES = ['todo', 'in_progress', 'in_review', 'done'] as const;
 /** Wake prefix — a comment starting with this asks the watch sidecar (or any
  *  receiver) to summon an agent; addComment re-opens settled tasks on it. */
 export const WAKE_PREFIX = '@agent';
+
+/**
+ * Single source of truth for "does this comment wake an agent?".
+ *
+ * Leading whitespace is tolerated on purpose: the Store re-opens settled tasks
+ * with the same predicate, so the web editor (where a stray leading newline is
+ * easy to paste) and the watch sidecar must agree — otherwise a comment can
+ * re-open a task without ever being delivered, or vice versa.
+ */
+export function isWakeComment(body: string, prefix: string = WAKE_PREFIX): boolean {
+  return body.trimStart().startsWith(prefix);
+}
+
 export const PRIORITIES = ['urgent', 'high', 'medium', 'low'] as const;
 
 export type Status = (typeof STATUSES)[number];

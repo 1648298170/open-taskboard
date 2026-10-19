@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Store, NotFoundError, ConflictError, ValidationError, PermissionError } from '../src/index.js';
+import { Store, NotFoundError, ConflictError, ValidationError, PermissionError, isWakeComment } from '../src/index.js';
 import { restUpdateIssueSchema } from '../src/schemas.js';
 import type { StoreEvent, Status, Priority } from '../src/index.js';
 
@@ -378,10 +378,11 @@ describe('Store.updateComment', () => {
 
   it('re-queues a wake on an edited comment: a re-reviewed task settles back to in_progress too', () => {
     const t = withComment();
-    // Handle the wake: task goes to in_review, comment processed (usual loop)
+    // The user turns the SAME comment into a wake instruction (edit path),
+    // then handles and re-queues it instead of writing a new comment.
+    t.store.updateComment(t.commentId, { body: '@agent do the thing' }, 'web');
     t.store.updateIssue(t.issueId, { status: 'in_review' });
     t.store.updateComment(t.commentId, { status: 'processed' }, 'watch');
-    // User re-wakes the SAME comment (edit path) instead of writing a new one
     t.store.updateComment(t.commentId, { status: 'pending' }, 'web');
     assert.equal(t.store.getIssue(t.issueId).status, 'in_progress');
     const acts = t.store.listActivities(t.issueId).map(a => a.detail);
@@ -1453,6 +1454,28 @@ describe('wake comment reopens settled tasks', () => {
     assert.equal(store.getIssue(is.id)!.status, 'in_progress');
   });
 
+  it('re-queueing a NON-wake comment to pending leaves a settled task alone', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const is = store.createIssue({ projectId: 'p1', title: 'T', status: 'in_review' } as never);
+    const c = store.addComment(is.id, { author: 'web', body: '普通评论，不是唤醒' });
+    assert.equal(store.getIssue(is.id)!.status, 'in_review');
+    store.updateComment(c.id, { status: 'pending' }, 'web');
+    assert.equal(store.getIssue(is.id)!.status, 'in_review');
+  });
+
+  it('re-queueing a WAKE comment to pending still reopens a done task', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const is = store.createIssue({ projectId: 'p1', title: 'T' });
+    const c = store.addComment(is.id, { author: 'web', body: '@agent 返工' });
+    store.updateComment(c.id, { status: 'processed' }, 'web');
+    store.updateIssue(is.id, { status: 'done' });
+    assert.equal(store.getIssue(is.id)!.status, 'done');
+    store.updateComment(c.id, { status: 'pending' }, 'web');
+    assert.equal(store.getIssue(is.id)!.status, 'in_progress');
+  });
+
   it('leaves todo untouched (re-open only applies to settled states); no version bump', () => {
     const { store } = fresh();
     store.createProject({ id: 'p1', name: 'P' });
@@ -1462,5 +1485,23 @@ describe('wake comment reopens settled tasks', () => {
     const after = store.getIssue(is.id)!;
     assert.equal(after.status, 'todo');
     assert.equal(after.version, v1);
+  });
+});
+
+// isWakeComment is the shared predicate: the Store re-opens on it and the
+// watch sidecar delivers on it, so both must agree about leading whitespace.
+describe('isWakeComment', () => {
+  it('matches the prefix at the start and tolerates leading whitespace', () => {
+    assert.equal(isWakeComment('@agent 干活'), true);
+    assert.equal(isWakeComment('\n  @agent 干活'), true);
+    assert.equal(isWakeComment('普通评论'), false);
+    assert.equal(isWakeComment('提到 @agent 但不在开头'), false);
+    assert.equal(isWakeComment(''), false);
+  });
+
+  it('honours a custom prefix (watch --on)', () => {
+    assert.equal(isWakeComment('!bot 干活', '!bot'), true);
+    assert.equal(isWakeComment('  !bot 干活', '!bot'), true);
+    assert.equal(isWakeComment('@agent 干活', '!bot'), false);
   });
 });

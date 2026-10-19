@@ -1,7 +1,7 @@
 ﻿import type { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { WAKE_PREFIX, STATUSES, activeClaim } from './types.js';
+import { isWakeComment, STATUSES, activeClaim } from './types.js';
 import type {
   Activity, Attachment, Comment, DependencyEdge, Issue, IssuePatch, Priority, Progress, Project, Status, Stats, StoreEvent
 } from './types.js';
@@ -407,7 +407,7 @@ export class Store {
       // A wake comment on a settled task re-opens it (agent took over work
       // again) — in_review/done → in_progress, one-way, with its own activity
       // line and issue.updated event so every client notices immediately.
-      if (input.body.trimStart().startsWith(WAKE_PREFIX)
+      if (isWakeComment(input.body)
         && (issue.status === 'in_review' || issue.status === 'done')) {
         this.issues.update(issueId, { status: 'in_progress' });
         this.logActivity(issueId, actor, 'updated', `status: ${issue.status}→in_progress (wake)`);
@@ -470,9 +470,12 @@ export class Store {
       this.logActivity(issueId, actor,
         patch.body !== undefined ? 'comment-edited' : 'comment-status',
         (patch.body ?? cur.body).slice(0, 200));
-      // Same reopen contract as addComment (a settled task must not stay
-      // closed while its wake comment is re-queued).
+      // Same reopen contract as addComment — including the same predicate: only
+      // a *wake* comment may re-open a settled task. Without the body check,
+      // re-queueing any plain comment to pending would silently drop the task
+      // back to in_progress with no wake at all.
       if (patch.status === 'pending'
+        && isWakeComment(patch.body ?? cur.body)
         && (before === 'in_review' || before === 'done')) {
         this.issues.update(issueId, { status: 'in_progress' });
         this.logActivity(issueId, actor, 'updated', `status: ${before}→in_progress (wake)`);
