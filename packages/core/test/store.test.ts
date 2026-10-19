@@ -1415,13 +1415,14 @@ describe('project wake_channel', () => {
 describe('workspace directories', () => {
   it('groups projects by directory and inherits its path and OpenCode server', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
-    const directory = store.createDirectory({
-      id: 'work-a', name: 'Workspace A', path: 'D:\\workspace\\project-a', serverUrl: 'http://127.0.0.1:4096'
+    const directory = store.createDirectory({ id: 'work-a', name: 'Workspace A' });
+    const project = store.createProject({
+      id: 'p-a', name: 'Project A', directoryId: directory.id,
+      workspacePath: 'D:\\workspace\\project-a', wakeChannel: 'http://127.0.0.1:4096', defaultSessionId: 'ses_a'
     });
-    const project = store.createProject({ id: 'p-a', name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a' });
     assert.equal(project.directoryId, directory.id);
-    assert.equal(project.workspacePath, directory.path);
-    assert.equal(project.wakeChannel, directory.serverUrl);
+    assert.equal(project.workspacePath, 'D:\\workspace\\project-a');
+    assert.equal(project.wakeChannel, 'http://127.0.0.1:4096');
     assert.equal(project.defaultSessionId, 'ses_a');
     assert.deepEqual(store.listDirectories().map(item => item.id), ['work-a']);
   });
@@ -1436,7 +1437,7 @@ describe('workspace directories', () => {
 
   it('does not delete a directory while projects still belong to it', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
-    const directory = store.createDirectory({ name: 'Workspace', path: '/workspace', serverUrl: '' });
+    const directory = store.createDirectory({ name: 'Workspace' });
     store.createProject({ id: 'p1', name: 'P1', directoryId: directory.id });
     assert.throws(() => store.deleteDirectory(directory.id), /not empty/);
   });
