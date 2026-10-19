@@ -35,8 +35,8 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
       const base = normalizeOpenCodeBase(serverUrl);
       const sessions = await listOpenCodeSessions(base, workspacePath);
       const normalizePath = (value: string): string => {
-        const trimmed = value.trim().replace(/\\\\/g, '/').replace(/\\/+$/, '');
-        return /^[a-zA-Z]:\\//.test(trimmed) ? trimmed.toLowerCase() : trimmed;
+        const trimmed = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+        return /^[a-zA-Z]:\//.test(trimmed) ? trimmed.toLowerCase() : trimmed;
       };
       const expectedPath = normalizePath(workspacePath);
       const compatible = sessions.filter(session =>
@@ -56,8 +56,8 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
     try {
       const session = await createOpenCodeSession(parsed.data.serverUrl, parsed.data.workspacePath, parsed.data.title);
       const normalizePath = (value: string): string => {
-        const trimmed = value.trim().replace(/\\\\/g, '/').replace(/\\/+$/, '');
-        return /^[a-zA-Z]:\\//.test(trimmed) ? trimmed.toLowerCase() : trimmed;
+        const trimmed = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+        return /^[a-zA-Z]:\//.test(trimmed) ? trimmed.toLowerCase() : trimmed;
       };
       if (normalizePath(session.directory) !== normalizePath(parsed.data.workspacePath)) {
         return reply.code(502).send({ error: 'OpenCode 返回的 Session 目录与目标工作目录不一致，未绑定该 Session' });
