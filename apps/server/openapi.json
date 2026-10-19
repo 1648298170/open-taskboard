@@ -1687,6 +1687,100 @@
           }
         }
       }
+    },
+    "/api/projects/{projectId}/opencode-sessions": {
+      "summary": "OpenCode sessions available for task binding",
+      "get": {
+        "operationId": "listProjectOpenCodeSessions",
+        "summary": "List sessions from the configured OpenCode v1 server",
+        "description": "Uses the project wakeChannel as the OpenCode server origin. If workspacePath is configured, only sessions with the same directory are returned.",
+        "tags": [
+          "projects"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Compatible OpenCode sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "directory": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "directory",
+                          "updatedAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "workspacePath": {
+                      "type": "string"
+                    },
+                    "serverUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sessions",
+                    "workspacePath",
+                    "serverUrl"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server is unreachable or returned an invalid response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
