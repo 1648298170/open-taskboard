@@ -539,9 +539,9 @@ export default function App() {
               const serverUrl = await promptDialog({ title: `配置「${project.name}」OpenCode Server`, lines: ['填写完整地址，例如 http://127.0.0.1:4096。'], placeholder: 'http://127.0.0.1:4096', value: project.wakeChannel });
               if (serverUrl === null) return;
               try {
-                const updated = await api_.updateProject(project.id, { workspacePath: path.trim(), wakeChannel: serverUrl.trim() });
+                const updated = await api_.updateProject(project.id, { workspacePath: path.trim(), wakeChannel: serverUrl.trim(), defaultSessionId: null });
                 setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
-                showToast('项目工作目录与 OpenCode Server 已更新');
+                showToast('项目配置已更新。默认 Session 已清空；请为新任务重新选择会话，已有任务的绑定请逐项检查。');
               } catch (err) { showToast('✗ ' + (err as Error).message); }
             }}>配置当前项目</button>
             <button className="side-btn danger" disabled={!projectId} title="删除当前项目（输入 id 确认）" onClick={async () => {
