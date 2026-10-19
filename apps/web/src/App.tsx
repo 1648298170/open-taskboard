@@ -113,15 +113,17 @@ export default function App() {
     }
     setProjSessionsLoading(true);
     setProjSessionsError(null);
-    api_.openCodeSessionsForDirectory(projectDirectoryId, projWorkspacePath.trim(), projServerUrl.trim())
-      .then(result => {
-        if (cancelled) return;
-        setProjSessions(result.sessions);
-        setProjSessionsError(result.sessions.length ? null : '该工作目录下还没有 Session，请点击右侧按钮创建。');
-      })
-      .catch(err => { if (!cancelled) setProjSessionsError((err as Error).message); })
-      .finally(() => { if (!cancelled) setProjSessionsLoading(false); });
-    return () => { cancelled = true; };
+    const timer = window.setTimeout(() => {
+      api_.openCodeSessionsForDirectory(projectDirectoryId, projWorkspacePath.trim(), projServerUrl.trim())
+        .then(result => {
+          if (cancelled) return;
+          setProjSessions(result.sessions);
+          setProjSessionsError(result.sessions.length ? null : '该工作目录下还没有 Session，请点击右侧按钮创建。');
+        })
+        .catch(err => { if (!cancelled) setProjSessionsError((err as Error).message); })
+        .finally(() => { if (!cancelled) setProjSessionsLoading(false); });
+    }, 300);
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [projCreateOpen, projectDirectoryId, projWorkspacePath, projServerUrl]);
 
 
