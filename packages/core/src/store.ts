@@ -3,13 +3,14 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { isWakeComment, STATUSES, activeClaim } from './types.js';
 import type {
-  Activity, Attachment, Comment, DependencyEdge, Issue, IssuePatch, Priority, Progress, Project, Status, Stats, StoreEvent
+  Activity, Attachment, Comment, DependencyEdge, Issue, IssuePatch, Priority, Progress, Project, Status, Stats, StoreEvent, WorkspaceDirectory
 } from './types.js';
 import { ConflictError, NotFoundError, PermissionError, ValidationError } from './errors.js';
 import { configureDatabase, createDatabase } from './db.js';
 import { EventBus } from './events.js';
 import { inTransaction } from './transactions.js';
 import { ProjectRepo } from './repos/projects.js';
+import { DirectoryRepo, type DirectoryCreateInput, type DirectoryPatchInput } from './repos/directories.js';
 import { IssueRepo } from './repos/issues.js';
 import { CommentRepo } from './repos/comments.js';
 import { ActivityRepo } from './repos/activities.js';
@@ -48,6 +49,7 @@ export class Store {
   private db: DatabaseSync;
   private events = new EventBus();
   private projects: ProjectRepo;
+  private directories: DirectoryRepo;
   private issues: IssueRepo;
   private comments: CommentRepo;
   private activities: ActivityRepo;
@@ -66,6 +68,7 @@ export class Store {
     this.db = db ?? createDatabase(dataDir);
     if (db) configureDatabase(db);
     this.projects = new ProjectRepo(this.db);
+    this.directories = new DirectoryRepo(this.db);
     this.issues = new IssueRepo(this.db);
     this.comments = new CommentRepo(this.db);
     this.activities = new ActivityRepo(this.db);
@@ -94,7 +97,7 @@ export class Store {
 
   revision(): number {
     return this.db.prepare(
-      `SELECT (SELECT COUNT(*) FROM projects) + (SELECT COUNT(*) FROM issues) * 10
+      `SELECT (SELECT COUNT(*) FROM directories) + (SELECT COUNT(*) FROM projects) * 10 + (SELECT COUNT(*) FROM issues) * 100
              + (SELECT COUNT(*) FROM comments) * 100
              + (SELECT COUNT(*) FROM issue_dependencies) * 1000
              + (SELECT COUNT(*) FROM attachments) * 10000
@@ -102,14 +105,40 @@ export class Store {
     ).get()!.rev as number;
   }
 
+  // ---- workspace directories ----
+  createDirectory(input: DirectoryCreateInput): WorkspaceDirectory {
+    const id = this.directories.create(input);
+    this.emit('directory.created', { id });
+    return this.directories.get(id)!;
+  }
+
+  updateDirectory(id: string, patch: DirectoryPatchInput): WorkspaceDirectory {
+    inTransaction(this.db, () => this.directories.update(id, patch));
+    this.emit('directory.updated', { id, fields: Object.keys(patch) });
+    return this.directories.get(id)!;
+  }
+
+  listDirectories(): WorkspaceDirectory[] {
+    return this.directories.list();
+  }
+
+  getDirectory(id: string): WorkspaceDirectory | null {
+    return this.directories.get(id);
+  }
+
+  deleteDirectory(id: string): void {
+    inTransaction(this.db, () => this.directories.delete(id));
+    this.emit('directory.deleted', { id });
+  }
+
   // ---- projects ----
-  createProject(input: { id?: string; name: string; workspacePath?: string; wakeChannel?: string; labels?: string }): Project {
+  createProject(input: { id?: string; name: string; directoryId?: string; defaultSessionId?: string | null; workspacePath?: string; wakeChannel?: string; labels?: string }): Project {
     const id = this.projects.create(input);
-    this.emit('project.created', { id });
+    this.emit('project.created', { id, directoryId: this.projects.get(id)?.directoryId ?? null });
     return this.projects.get(id)!;
   }
 
-  updateProject(id: string, patch: { name?: string; wakeChannel?: string; labels?: string }): Project {
+  updateProject(id: string, patch: { name?: string; wakeChannel?: string; labels?: string; defaultSessionId?: string | null }): Project {
     if (!this.projects.get(id)) throw new NotFoundError(`project not found: ${id}`);
     if (patch.name !== undefined && patch.name.trim() === '') throw new ValidationError('name: must not be blank');
     inTransaction(this.db, () => this.projects.update(id, patch));
