@@ -79,7 +79,7 @@ export const api_ = {
     ),
   listProjects: () => api<Project[]>('GET', '/api/projects'),
   createProject: (p: { id?: string; name: string; directoryId?: string; defaultSessionId?: string | null; workspacePath?: string; wakeChannel?: string; labels?: string }) => api<Project>('POST', '/api/projects', p),
-  updateProject: (id: string, p: { name?: string; wakeChannel?: string; defaultSessionId?: string | null }) => api<Project>('PATCH', `/api/projects/${id}`, p),
+  updateProject: (id: string, p: { name?: string; workspacePath?: string; wakeChannel?: string; defaultSessionId?: string | null }) => api<Project>('PATCH', `/api/projects/${id}`, p),
   deleteProject: (id: string) => api<void>('DELETE', `/api/projects/${id}`),
   listIssues: (projectId: string) => api<Issue[]>('GET', `/api/projects/${projectId}/issues`),
   showIssue: (id: string) => api<IssueDetail>('GET', `/api/issues/${id}`),
