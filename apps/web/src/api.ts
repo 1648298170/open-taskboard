@@ -63,6 +63,8 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 export const api_ = {
+  getSettings: () => api<{ defaultWorkspacePath: string }>('GET', '/api/settings'),
+  updateSettings: (p: { defaultWorkspacePath: string }) => api<{ defaultWorkspacePath: string }>('PUT', '/api/settings', p),
   listDirectories: () => api<WorkspaceDirectory[]>('GET', '/api/directories'),
   createDirectory: (p: { id?: string; name: string; workspacePath?: string }) =>
     api<WorkspaceDirectory>('POST', '/api/directories', p),
