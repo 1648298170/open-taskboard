@@ -23,10 +23,12 @@ const nullableDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 export const createDirectorySchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1),
+  workspacePath: z.string().optional(),
 }).strict();
 
 export const directoryPatchSchema = z.object({
   name: z.string().min(1).optional(),
+  workspacePath: z.string().optional(),
 }).strict();
 
 export const createProjectSchema = z
