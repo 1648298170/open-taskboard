@@ -64,8 +64,8 @@ taskboard project delete skill-test --yes
 ## 5 分钟上手（人类视角）
 
 1. `pnpm install && pnpm start` → 浏览器打开 `http://127.0.0.1:47824`
-2. 左侧先创建一个目录，用于分组管理相关项目
-3. 在目录下创建项目，分别填写项目工作目录与 OpenCode Server URL，再选择已有 Session 或直接新建 Session
+2. 左侧先创建一个目录，可在目录上配置默认工作目录地址
+3. 在目录下创建项目时自动继承工作目录地址，只需配置 OpenCode Server URL，再选择已有 Session 或直接新建 Session；项目仍可单独覆盖工作目录
 4. 「＋ 新任务」建任务——默认预选项目 Session，也可以选择同一项目目录下的其他会话；勾选「创建后唤醒 agent 编排」可直接召唤 AI 接手
 5. 拖卡片流转状态；拖**父任务**时会询问是否整组移动（子任务跟随）
 6. 点卡片开抽屉：改状态/负责人/分支/会话绑定、拆子任务、排依赖、传附件、写评论（输入 @ 唤醒 agent）
@@ -133,7 +133,7 @@ todo → in_progress → in_review → done
 - 时间线视图 📅（甘特 lite）、统计面板 📊（周吞吐/平均周期/贡献榜）
 - 快捷键：`/` 搜索 · `n` 新建 · `j/k` 上下移动 · `Enter` 打开 · `?` 全部帮助
 - 附件上传下载（每任务 ≤20 个/总量 ≤50MB）、桌面通知、暗/亮主题
-- 左侧目录用于分组管理项目；每个项目分别保存工作目录、OpenCode Server URL 和默认 Session。任务保存实际执行的 `sessionId`，唤醒时继续原会话上下文
+- 左侧目录用于分组管理项目，并保存新项目默认继承的工作目录地址；项目保存实际工作目录（可覆盖目录默认值）、OpenCode Server URL 和默认 Session。新建任务自动使用项目工作目录与默认 Session，不必重复填写路径；任务保存实际执行的 `sessionId`，唤醒时继续原会话上下文
 
 ## 评论唤醒 agent（watch 侧车）
 
@@ -156,7 +156,7 @@ taskboard watch                                        # opencode run（默认�
 
 > 模型注意：`--model` 走 opencode 的 `-m` 约定；Claude/Codex 用自家 `--model` 参数时直接写进 `--exec`（如 `--exec "claude --model sonnet -p"`），不要混用 `--model`。
 
-**目录分组 + 项目会话绑定**：左侧目录是项目分组；每个项目单独保存工作目录、OpenCode Server URL 和默认 Session。创建项目时可选择已有 Session，或通过「新建 Session」按钮在指定工作目录中创建。任务默认预选项目 Session，也可以选择同一工作目录下的其他会话。`@agent` 评论对已绑定任务直接发往对应 Server 的 `prompt_async`，未绑定任务才注入 TUI。项目路由存在数据里，改绑即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时留空即可。
+**目录分组 + 项目会话绑定**：左侧目录是项目分组并保存默认工作目录；项目继承该路径（可单独覆盖），并保存 OpenCode Server URL 和默认 Session。创建项目时可选择已有 Session，或通过「新建 Session」按钮在指定工作目录中创建。任务默认预选项目 Session，也可以选择同一工作目录下的其他会话。`@agent` 评论对已绑定任务直接发往对应 Server 的 `prompt_async`，未绑定任务才注入 TUI。项目路由存在数据里，改绑即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时留空即可。
 
 ### 先把 opencode 终端跑起来（watch 的目的地）
 
