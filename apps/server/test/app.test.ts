@@ -956,7 +956,7 @@ describe('task Git worktree creation', () => {
       assert.equal(created.statusCode, 201, created.body);
       const body = created.json<{ branch: string; worktree: string; worktreePath: string; alreadyBound: boolean; issue: { branch: string; worktreePath: string } }>();
       assert.equal(body.alreadyBound, false);
-      assert.match(body.branch, /^task\\//);
+      assert.ok(body.branch.startsWith('task/'));
       assert.equal(body.issue.branch, body.branch);
       assert.equal(body.issue.worktreePath, body.worktreePath);
       assert.ok(existsSync(body.worktreePath));
