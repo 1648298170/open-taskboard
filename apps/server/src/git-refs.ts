@@ -97,8 +97,10 @@ export async function createTaskWorktree(
     throw new GitWorktreeError('项目工作目录不可用或不是 Git 仓库；请检查 workspacePath 和 Git 安装', 400);
   }
 
-  const safePart = (value: string): string =>
-    value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'task';
+  const safePart = (value: string): string => {
+    const part = value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+    return !part || part === '.' || part === '..' ? 'task' : part;
+  };
   const slug = safePart(title).toLowerCase();
   const branch = `task/${safePart(issueId)}-${slug}`;
   const name = `${safePart(issueId)}-${slug}`;
