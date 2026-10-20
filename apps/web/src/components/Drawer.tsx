@@ -110,6 +110,7 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
   const [openCodeAbortLoading, setOpenCodeAbortLoading] = useState(false);
   const [openCodeEventsConnected, setOpenCodeEventsConnected] = useState(false);
   const [openCodeRuntimeError, setOpenCodeRuntimeError] = useState<string | null>(null);
+  const [openCodeRecentEvents, setOpenCodeRecentEvents] = useState<Array<{ type: string; at: string }>>([]);
   // T6-36: 最近提交预览。null = 加载中/不可用。
   const [commits, setCommits] = useState<Commit[] | null>(null);
 
@@ -142,6 +143,7 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
   useEffect(() => {
     if (!detail?.sessionId || !sessionServerUrl?.trim()) {
       setOpenCodeRuntime(null);
+      setOpenCodeRecentEvents([]);
       setOpenCodeEventsConnected(false);
       setOpenCodeRuntimeError(null);
       return;
@@ -157,8 +159,9 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
           properties?: Record<string, unknown>;
         };
         const payload = envelope.payload ?? envelope;
-        const type = payload.type ?? '';
+        const type = payload.type ?? envelope.type ?? 'event';
         const properties = payload.properties ?? {};
+        setOpenCodeRecentEvents(previous => [{ type, at: new Date().toISOString() }, ...previous].slice(0, 5));
         if (type === 'session.idle') {
           setOpenCodeRuntime(previous => previous ? {
             ...previous, busy: false, status: { type: 'idle' }, observedAt: new Date().toISOString()
@@ -589,6 +592,13 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
                 </button>
               </div>
               {openCodeRuntimeError && <small style={{ color: 'var(--danger)' }}>{openCodeRuntimeError}</small>}
+              {openCodeRecentEvents.length > 0 && (
+                <ul style={{ margin: '2px 0 0', paddingLeft: 18, color: 'var(--ink-dim)', fontSize: 11 }}>
+                  {openCodeRecentEvents.map((event, index) => (
+                    <li key={`${event.at}-${index}`}><code>{event.type}</code> · {fmtWhen(event.at)}</li>
+                  ))}
+                </ul>
+              )}
               {openCodeRuntime && !openCodeRuntime.busy && detail.status === 'in_progress' && (
                 <small style={{ color: 'var(--ink-dim)' }}>
                   Taskboard 任务仍处于「进行中」，但 OpenCode 当前未报告执行中；可重新同步，或点击「唤醒」继续任务。
