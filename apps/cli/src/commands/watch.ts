@@ -87,7 +87,12 @@ export function findCorrelatedAssistant(
     && (message.parts ?? []).some(part => part.type === 'text' && typeof part.text === 'string' && part.text.includes(marker))
   );
   if (promptIndex < 0) return { matchedPrompt: false };
-  const assistant = messages.slice(promptIndex + 1).find(message => message.info?.role === 'assistant');
+  // A later user message starts another request. Never attribute its response
+  // to this marker; inspect only the message segment belonging to this prompt.
+  const nextUserOffset = messages.slice(promptIndex + 1).findIndex(message => message.info?.role === 'user');
+  const endIndex = nextUserOffset < 0 ? messages.length : promptIndex + 1 + nextUserOffset;
+  const assistants = messages.slice(promptIndex + 1, endIndex).filter(message => message.info?.role === 'assistant');
+  const assistant = assistants.at(-1);
   return assistant ? { matchedPrompt: true, assistant } : { matchedPrompt: true };
 }
 
