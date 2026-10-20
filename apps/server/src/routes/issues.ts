@@ -213,6 +213,9 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
     const project = store.getProject(issue.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
+    if (issue.claimedBy && issue.leaseExpiresAt && Date.parse(issue.leaseExpiresAt) > Date.now()) {
+      return reply.code(409).send({ error: '任务当前有有效执行租约；请先释放租约再替换 Session 绑定' });
+    }
     const bodySchema = z.object({ title: z.string().trim().min(1).max(200).optional() }).strict();
     const parsed = bodySchema.safeParse(req.body ?? {});
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
