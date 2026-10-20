@@ -1,11 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { computePosition, flip, shift } from '@floating-ui/dom';
-import { activeClaim, api_, Commit, GitRefs, Issue, IssueDetail, PRIORITIES, STATUS_CN, Status } from '../api';
+import { activeClaim, api_, Commit, connectOpenCodeSessionEvents, GitRefs, Issue, IssueDetail, OpenCodeSessionRuntimeState, PRIORITIES, STATUS_CN, Status } from '../api';
 import { Markdown } from '../markdown';
 import { confirmDialog, promptDialog } from './dialogs';
 import { fmtHMLocal, fmtWhenLocal } from '../logic/time';
 import { applyMention, mentionCandidatesFor, MentionCandidate, nextHi } from '../logic/mention';
-import { ExternalLink, Pencil, Plus, Sparkles, UserRound, X } from 'lucide-react';
+import { Activity, ExternalLink, Pencil, Plus, RefreshCw, Sparkles, Square, UserRound, X } from 'lucide-react';
 import { WAKE_PREFIX } from '@taskboard/core/types';
 
 const fmtWhen = fmtWhenLocal;
@@ -105,6 +105,11 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
   const [refs, setRefs] = useState<GitRefs | null>(null);
   const [creatingWorktree, setCreatingWorktree] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
+  const [openCodeRuntime, setOpenCodeRuntime] = useState<OpenCodeSessionRuntimeState | null>(null);
+  const [openCodeRuntimeLoading, setOpenCodeRuntimeLoading] = useState(false);
+  const [openCodeAbortLoading, setOpenCodeAbortLoading] = useState(false);
+  const [openCodeEventsConnected, setOpenCodeEventsConnected] = useState(false);
+  const [openCodeRuntimeError, setOpenCodeRuntimeError] = useState<string | null>(null);
   // T6-36: 最近提交预览。null = 加载中/不可用。
   const [commits, setCommits] = useState<Commit[] | null>(null);
 
@@ -118,6 +123,81 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
   };
   useEffect(() => { setDetail(null); setDesc(''); setEditingDesc(false); setLoadError(null); void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [issueId]);
   useEffect(() => { if (refreshKey > 0) void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [refreshKey]);
+
+  // Attach to the task's persisted OpenCode Session. A fresh snapshot on the
+  // initial connection and every SSE reconnect recovers status missed offline.
+  const refreshOpenCodeRuntime = useCallback(async (silent = false): Promise<void> => {
+    if (!detail?.sessionId) return;
+    if (!silent) setOpenCodeRuntimeLoading(true);
+    setOpenCodeRuntimeError(null);
+    try {
+      setOpenCodeRuntime(await api_.openCodeSessionState(issueId));
+    } catch (err) {
+      setOpenCodeRuntimeError((err as Error).message);
+    } finally {
+      if (!silent) setOpenCodeRuntimeLoading(false);
+    }
+  }, [issueId, detail?.sessionId]);
+
+  useEffect(() => {
+    if (!detail?.sessionId || !sessionServerUrl?.trim()) {
+      setOpenCodeRuntime(null);
+      setOpenCodeEventsConnected(false);
+      setOpenCodeRuntimeError(null);
+      return;
+    }
+    let active = true;
+    const disconnect = connectOpenCodeSessionEvents(
+      issueId,
+      event => {
+        if (!active || typeof event !== 'object' || event === null) return;
+        const envelope = event as {
+          payload?: { type?: string; properties?: Record<string, unknown> };
+          type?: string;
+          properties?: Record<string, unknown>;
+        };
+        const payload = envelope.payload ?? envelope;
+        const type = payload.type ?? '';
+        const properties = payload.properties ?? {};
+        if (type === 'session.idle') {
+          setOpenCodeRuntime(previous => previous ? {
+            ...previous, busy: false, status: { type: 'idle' }, observedAt: new Date().toISOString()
+          } : previous);
+          void refreshOpenCodeRuntime(true);
+        } else if (type === 'session.status') {
+          const status = properties.status;
+          if (typeof status === 'object' && status !== null && 'type' in status && typeof status.type === 'string') {
+            const runtimeStatus = status as { type: string; [key: string]: unknown };
+            setOpenCodeRuntime(previous => previous ? {
+              ...previous,
+              status: runtimeStatus,
+              busy: ['busy', 'running', 'retry'].includes(runtimeStatus.type),
+              observedAt: new Date().toISOString()
+            } : previous);
+          }
+        } else if (type === 'session.error') {
+          setOpenCodeRuntimeError('OpenCode Session 返回执行错误');
+          void refreshOpenCodeRuntime(true);
+        }
+      },
+      () => {
+        if (!active) return;
+        setOpenCodeEventsConnected(true);
+        void refreshOpenCodeRuntime(true);
+      },
+      message => {
+        if (!active) return;
+        setOpenCodeEventsConnected(false);
+        setOpenCodeRuntimeError(message);
+      }
+    );
+    void refreshOpenCodeRuntime(true);
+    return () => {
+      active = false;
+      disconnect();
+      setOpenCodeEventsConnected(false);
+    };
+  }, [issueId, detail?.sessionId, sessionServerUrl, refreshOpenCodeRuntime]);
 
   // 每次抽屉打开（组件挂载）拉一次 git-refs；失败静默回退为文本输入。
   useEffect(() => {
@@ -467,6 +547,55 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
               {creatingSession ? '创建中…' : detail.worktreePath ? '在工作树中创建 Session' : '在项目目录创建 Session'}
             </button>
           </div>
+          {detail.sessionId && sessionServerUrl?.trim() && (
+            <div className="detail-context-item detail-context-wide">
+              <span>OpenCode 运行状态</span>
+              <strong>
+                {openCodeRuntimeLoading ? '同步中…'
+                  : openCodeRuntime?.busy ? '执行中'
+                    : openCodeRuntime?.status?.type === 'idle' ? '空闲'
+                      : openCodeRuntime?.status?.type ?? '未知'}
+              </strong>
+              <small style={{ color: openCodeEventsConnected ? 'var(--success, var(--accent))' : 'var(--ink-dim)' }}>
+                <Activity size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                {openCodeEventsConnected ? '实时事件已连接' : '事件连接中断或重连中'}
+                {openCodeRuntime?.observedAt ? ` · 同步于 ${fmtWhen(openCodeRuntime.observedAt)}` : ''}
+              </small>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button className="btn tiny" disabled={openCodeRuntimeLoading} onClick={() => void refreshOpenCodeRuntime()}>
+                  <RefreshCw size={12} /> 重新同步状态
+                </button>
+                <button className="btn tiny" disabled={!openCodeRuntime?.busy || openCodeAbortLoading} onClick={async () => {
+                  if (!await confirmDialog({
+                    title: `取消 OpenCode Session 执行？`,
+                    lines: [`将向 Session ${detail.sessionId} 发送真实取消请求。`, '任务状态不会自动改为完成或失败；取消后可继续通过「唤醒」恢复执行。'],
+                    danger: true,
+                    confirmText: '取消执行'
+                  })) return;
+                  setOpenCodeAbortLoading(true);
+                  try {
+                    await api_.abortOpenCodeSession(detail.id);
+                    onToast(`已向 OpenCode Session ${detail.sessionId} 发送取消请求`);
+                    await refreshOpenCodeRuntime();
+                    onChanged();
+                    await load();
+                  } catch (err) {
+                    onToast(`取消执行失败：${(err as Error).message}`);
+                  } finally {
+                    setOpenCodeAbortLoading(false);
+                  }
+                }}>
+                  <Square size={12} /> {openCodeAbortLoading ? '取消中…' : '取消执行'}
+                </button>
+              </div>
+              {openCodeRuntimeError && <small style={{ color: 'var(--danger)' }}>{openCodeRuntimeError}</small>}
+              {openCodeRuntime && !openCodeRuntime.busy && detail.status === 'in_progress' && (
+                <small style={{ color: 'var(--ink-dim)' }}>
+                  Taskboard 任务仍处于「进行中」，但 OpenCode 当前未报告执行中；可重新同步，或点击「唤醒」继续任务。
+                </small>
+              )}
+            </div>
+          )}
           <div className="detail-context-item detail-context-wide">
             <span>执行耗时</span>
             <strong>{detail.startedAt && detail.completedAt
@@ -484,7 +613,7 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
                     const separator = event.detail.indexOf('] ');
                     const outcome = event.detail.startsWith('[') && separator > 1 ? event.detail.slice(1, separator) : '记录';
                     const message = event.detail.startsWith('[') && separator > 1 ? event.detail.slice(separator + 2) : event.detail;
-                    const outcomeLabel = ({ started: '开始', queued: '已提交', running: '会话执行中', idle: '会话空闲', retrying: '重试', succeeded: '成功', failed: '失败' } as Record<string, string>)[outcome] ?? outcome;
+                    const outcomeLabel = ({ started: '开始', queued: '已提交', running: '会话执行中', idle: '会话空闲', retrying: '重试', succeeded: '成功', failed: '失败', cancelled: '已取消' } as Record<string, string>)[outcome] ?? outcome;
                     return (
                       <li key={event.id}>
                         <time>{fmtWhen(event.createdAt)}</time>
