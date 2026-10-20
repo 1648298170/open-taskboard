@@ -152,6 +152,7 @@
       "post": {
         "operationId": "createProject",
         "summary": "Create a project",
+        "description": "The web actor (x-taskboard-actor: web) must provide sessionId; a blank wakeChannel is filled by the server from the default OpenCode resolution order — explicit value → TASKBOARD_OPENCODE_URL → newest project wakeChannel → http://127.0.0.1:4096. Other actors may create projects without a wake channel or default session.",
         "tags": [
           "projects"
         ],
@@ -230,8 +231,9 @@
         }
       },
       "patch": {
-        "operationId": "patchProject",
-        "summary": "Update project name and/or wake-channel binding",
+        "operationId": "updateProject",
+        "summary": "Update a project (name / wake channel / labels / default session)",
+        "description": "All fields optional (strict body). `sessionId: \"\"` clears the project default session; a non-empty value sets it (and is inherited by newly created issues).",
         "tags": [
           "projects"
         ],
@@ -240,7 +242,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PatchProjectRequest"
+                "$ref": "#/components/schemas/UpdateProjectRequest"
               }
             }
           }
@@ -301,6 +303,206 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/opencode/sessions": {
+      "summary": "OpenCode sessions for an arbitrary server URL",
+      "get": {
+        "operationId": "listOpenCodeSessions",
+        "summary": "List sessions from an OpenCode v1 server (create-project flow)",
+        "description": "Stateless variant used before a project exists. `url` is optional: when blank the server resolves a default in this order — `TASKBOARD_OPENCODE_URL` → the newest project wakeChannel → `http://127.0.0.1:4096`. An explicit `url` wins and must be an http(s) origin. When `workspacePath` is provided, only sessions with the same directory are returned.",
+        "tags": [
+          "projects"
+        ],
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": false,
+            "description": "OpenCode server origin, e.g. http://127.0.0.1:4096; blank → default resolution order",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspacePath",
+            "in": "query",
+            "required": false,
+            "description": "Only return sessions whose directory matches this workspace",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Compatible OpenCode sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "directory": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "directory",
+                          "updatedAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "workspacePath": {
+                      "type": "string"
+                    },
+                    "serverUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sessions",
+                    "workspacePath",
+                    "serverUrl"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server is unreachable or returned an invalid response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/opencode-sessions": {
+      "summary": "OpenCode sessions available for task binding",
+      "get": {
+        "operationId": "listProjectOpenCodeSessions",
+        "summary": "List sessions from the configured OpenCode v1 server",
+        "description": "Uses the project wakeChannel as the OpenCode server origin. If workspacePath is configured, only sessions with the same directory are returned.",
+        "tags": [
+          "projects"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Compatible OpenCode sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "directory": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "directory",
+                          "updatedAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "workspacePath": {
+                      "type": "string"
+                    },
+                    "serverUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sessions",
+                    "workspacePath",
+                    "serverUrl"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server is unreachable or returned an invalid response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -536,6 +738,9 @@
           },
           {
             "$ref": "#/components/parameters/Actor"
+          },
+          {
+            "$ref": "#/components/parameters/Session"
           }
         ],
         "requestBody": {
@@ -1265,55 +1470,6 @@
             "$ref": "#/components/responses/InternalError"
           }
         }
-      },
-      "patch": {
-        "operationId": "updateComment",
-        "summary": "Update a comment (web user may edit own pending comments; agent comments immutable; status moves free, reset to pending re-queues the wake)",
-        "tags": [
-          "comments"
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/CommentId"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PatchCommentRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Updated comment",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Comment"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/ValidationError"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        }
       }
     },
     "/api/issues/{id}/dependencies": {
@@ -1687,100 +1843,6 @@
           }
         }
       }
-    },
-    "/api/projects/{projectId}/opencode-sessions": {
-      "summary": "OpenCode sessions available for task binding",
-      "get": {
-        "operationId": "listProjectOpenCodeSessions",
-        "summary": "List sessions from the configured OpenCode v1 server",
-        "description": "Uses the project wakeChannel as the OpenCode server origin. If workspacePath is configured, only sessions with the same directory are returned.",
-        "tags": [
-          "projects"
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/ProjectId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Compatible OpenCode sessions",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "sessions": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string"
-                          },
-                          "title": {
-                            "type": "string"
-                          },
-                          "directory": {
-                            "type": "string"
-                          },
-                          "updatedAt": {
-                            "type": [
-                              "integer",
-                              "null"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "title",
-                          "directory",
-                          "updatedAt"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "workspacePath": {
-                      "type": "string"
-                    },
-                    "serverUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "sessions",
-                    "workspacePath",
-                    "serverUrl"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          },
-          "502": {
-            "description": "OpenCode server is unreachable or returned an invalid response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -1835,11 +1897,15 @@
           },
           "wakeChannel": {
             "type": "string",
-            "description": "Wake channel binding (TUI URL, e.g. http://127.0.0.1:4097); empty string = unbound"
+            "description": "OpenCode/TUI wake URL for this project; empty string = unbound"
           },
           "labels": {
             "type": "string",
-            "description": "Comma-separated free-form labels"
+            "description": "Comma-separated project labels"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Default OpenCode session inherited by newly created issues; empty string = no default"
           },
           "createdAt": {
             "type": "string",
@@ -1852,6 +1918,7 @@
           "workspacePath",
           "wakeChannel",
           "labels",
+          "sessionId",
           "createdAt"
         ],
         "additionalProperties": false
@@ -2420,12 +2487,16 @@
           },
           "wakeChannel": {
             "type": "string",
-            "maxLength": 200,
-            "description": "Wake channel binding: full TUI URL (e.g. http://127.0.0.1:4097) the data-driven watch delivers this project's @agent wakes to; omit/'' = unbound (falls back to the watch default, then headless)"
+            "description": "OpenCode/TUI wake URL. Optional for the web actor (blank → server-filled from TASKBOARD_OPENCODE_URL → newest project wakeChannel → http://127.0.0.1:4096)."
           },
           "labels": {
             "type": "string",
-            "description": "Comma-separated free-form labels"
+            "description": "Comma-separated project labels"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Default OpenCode session for new issues; required for the web actor"
           }
         },
         "required": [
@@ -2433,9 +2504,9 @@
         ],
         "additionalProperties": false
       },
-      "PatchProjectRequest": {
+      "UpdateProjectRequest": {
         "type": "object",
-        "description": "PATCH /api/projects/{projectId} body (strict — unknown keys → 400)",
+        "description": "PATCH /api/projects/{projectId} body — all fields optional (strict)",
         "properties": {
           "name": {
             "type": "string",
@@ -2443,12 +2514,15 @@
           },
           "wakeChannel": {
             "type": "string",
-            "maxLength": 200,
-            "description": "Rewrite the wake binding; '' clears it (unbound)"
+            "description": "OpenCode/TUI wake URL; empty string = unbound"
           },
           "labels": {
             "type": "string",
-            "description": "Comma-separated free-form labels (rewrite; '' clears)"
+            "description": "Comma-separated project labels"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Project default OpenCode session; empty string clears it"
           }
         },
         "additionalProperties": false
@@ -2494,7 +2568,7 @@
               "string",
               "null"
             ],
-            "description": "opencode session to bind at creation"
+            "description": "opencode session to bind at creation. Precedence: explicit sessionId → x-taskboard-session header → project default session → null (unbound)."
           },
           "assignee": {
             "type": "string"
@@ -2633,7 +2707,7 @@
       },
       "ClaimRequest": {
         "type": "object",
-        "description": "POST /api/issues/{id}/claim|heartbeat|release body (strict). ttlMinutes: lease duration on claim (default 30, max 1440), a fresh duration on heartbeat, tolerated-and-ignored on release.",
+        "description": "POST /api/issues/{id}/claim|heartbeat|release body (strict). ttlMinutes: lease duration on claim (default 30, max 1440), a fresh duration on heartbeat, tolerated-and-ignored on release. sessionId (claim only): binds the claimer's opencode session when the issue is unbound; an existing binding is never overwritten (tolerated-and-ignored on heartbeat/release).",
         "properties": {
           "agent": {
             "type": "string",
@@ -2644,6 +2718,11 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 1440
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Claimer's opencode session (bind-only-if-unbound)"
           }
         },
         "required": [
@@ -2809,6 +2888,15 @@
         "in": "header",
         "required": false,
         "description": "Acting agent/user name, recorded in the issue activity log",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Session": {
+        "name": "x-taskboard-session",
+        "in": "header",
+        "required": false,
+        "description": "Caller OpenCode session id used when creating an issue without an explicit body sessionId (overrides the project default, not the body)",
         "schema": {
           "type": "string"
         }

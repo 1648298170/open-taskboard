@@ -68,7 +68,10 @@ describe('API 级 E2E：验收链路（真实 HTTP + SSE）', () => {
 
     // 建项目 + 任务（web 人工来源）。v0.4 起 web 创建必须带 sessionId
     // （issues.ts 的 create 侧门禁），否则 400 且拿不到 issue。
-    await fetch(`${baseUrl}/api/projects`, { method: 'POST', headers: json, body: JSON.stringify({ id: 'e2e', name: 'E2E' }) });
+    await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST', headers: json,
+      body: JSON.stringify({ id: 'e2e', name: 'E2E', wakeChannel: 'http://127.0.0.1:4096', sessionId: 'ses_e2e' })
+    });
     const issue = await (await fetch(`${baseUrl}/api/projects/e2e/issues`, {
       method: 'POST', headers: json, body: JSON.stringify({ title: '被唤醒的任务', sessionId: 'ses_e2e' })
     })).json<{ id: string; status: string; version: number }>();

@@ -3,7 +3,7 @@
 // options. JSON bodies are validated with the shared zod schemas — no
 // hand-rolled type assertions.
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
-import { STATUSES, Store, ValidationError } from '@taskboard/core';
+import { STATUSES, Store, ValidationError, resolveIssueSessionId } from '@taskboard/core';
 import type { Status, TaskboardServerConfig } from '@taskboard/core';
 import { claimSchema, createIssueSchema, restUpdateIssueSchema, z } from '@taskboard/core/schemas';
 
@@ -46,10 +46,18 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
   app.post('/api/projects/:projectId/issues', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
     const parsed = createIssueBodySchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
-    // Web task creation must bind an existing OpenCode session before saving.
-    // CLI/MCP can still create unbound tasks intentionally and bind them on claim.
+    const project = store.getProject(req.params.projectId);
+    if (!project) return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
-    if (actor === 'web' && !parsed.data.sessionId?.trim()) {
+    // Session precedence: explicit body → x-taskboard-session header → the
+    // project default → unbound. The store applies the same resolver; doing it
+    // here lets the web gate reject tasks that would land unbound.
+    const agentSession = String(req.headers['x-taskboard-session'] ?? '').trim() || null;
+    const resolvedSession = resolveIssueSessionId(parsed.data.sessionId, agentSession, project.sessionId);
+    // Web task creation must bind an OpenCode session before saving. A project
+    // default session satisfies this without an explicit body value.
+    // CLI/MCP can still create unbound tasks intentionally and bind them on claim.
+    if (actor === 'web' && resolvedSession === null) {
       return reply.code(400).send({ error: '创建任务前必须先选择一个 OpenCode 会话（sessionId 不能为空）' });
     }
     // T7-36 门禁的 create 侧：直接以 status:'done' 创建与 PATCH 置 done 同责，
@@ -66,7 +74,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     }
     // confirm 是门禁逃生舱字段——从 create body 剥离，不透传 Store
     const { confirm: _confirm, ...body } = parsed.data;
-    return reply.code(201).send(store.createIssue({ ...body, projectId: req.params.projectId }, actor));
+    return reply.code(201).send(store.createIssue({ ...body, projectId: req.params.projectId }, actor, agentSession));
   });
 
   app.get('/api/projects/:projectId/progress', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {

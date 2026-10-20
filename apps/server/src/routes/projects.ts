@@ -3,8 +3,7 @@ import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { Store, ValidationError } from '@taskboard/core';
 import { createProjectSchema, projectPatchSchema, z } from '@taskboard/core/schemas';
 import { listCommits, scanGitRefs } from '../git-refs.js';
-import { listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
-import { resolve } from 'node:path';
+import { filterSessionsByWorkspace, listOpenCodeSessions, normalizeOpenCodeBase, resolveOpenCodeBase } from '../opencode.js';
 
 interface ProjectParams { projectId: string }
 interface CommitsQuery { ref?: string }
@@ -14,13 +13,35 @@ interface StatsQuery { weeks?: string }
 const validationMessage = (error: z.ZodError): string =>
   error.issues.map(i => (i.path.length > 0 ? `${i.path.map(String).join('.')}: ` : '') + i.message).join('; ');
 
+// Newest-first wake channels, skipping unbound projects. `listProjects()`
+// returns oldest first (ORDER BY created_at); reversing before the stable
+// sort also puts later rows first when two projects share a timestamp.
+const recentProjectChannels = (store: Store): string[] =>
+  store.listProjects()
+    .slice()
+    .reverse()
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map(project => project.wakeChannel)
+    .filter(channel => channel.trim().length > 0);
+
 const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }) => {
   app.get('/api/projects', async () => store.listProjects());
 
   app.post('/api/projects', async (req, reply) => {
     const parsed = createProjectSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
-    return reply.code(201).send(store.createProject(parsed.data));
+    // The web UI must bind a default OpenCode session when it creates a
+    // project. The wake channel is optional: a blank one is filled from the
+    // shared default resolution (env → recent project → 127.0.0.1:4096).
+    // CLI/MCP may still create projects without a session (legacy/headless).
+    const isWeb = String(req.headers['x-taskboard-actor'] ?? '') === 'web';
+    if (isWeb && !parsed.data.sessionId?.trim()) {
+      return reply.code(400).send({ error: '新建项目必须先选择一个 OpenCode 会话（sessionId 不能为空）' });
+    }
+    const input = isWeb && !parsed.data.wakeChannel?.trim()
+      ? { ...parsed.data, wakeChannel: resolveOpenCodeBase(undefined, recentProjectChannels(store)) }
+      : parsed.data;
+    return reply.code(201).send(store.createProject(input));
   });
 
   app.get('/api/projects/:projectId', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
@@ -47,15 +68,32 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     try {
       const base = normalizeOpenCodeBase(project.wakeChannel);
       const sessions = await listOpenCodeSessions(base);
-      const normalizePath = (value: string): string => {
-        const absolute = resolve(value).replace(/\\/g, '/').replace(/\/$/, '');
-        return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
-      };
       const workspace = project.workspacePath.trim();
-      const compatible = workspace
-        ? sessions.filter(session => session.directory && normalizePath(session.directory) === normalizePath(workspace))
-        : sessions;
-      return { sessions: compatible, workspacePath: workspace, serverUrl: base };
+      return { sessions: filterSessionsByWorkspace(sessions, workspace), workspacePath: workspace, serverUrl: base };
+    } catch (err) {
+      return reply.code(502).send({ error: `无法读取 OpenCode 会话：${(err as Error).message}` });
+    }
+  });
+
+  // Stateless session discovery for the create-project flow (the project does
+  // not exist yet, so workspacePath comes from the query string). `url` is
+  // optional: blank resolves through the shared default order (env →
+  // newest project wakeChannel → 127.0.0.1:4096). Shares normalization +
+  // workspace filtering with the project-scoped endpoint.
+  app.get('/api/opencode/sessions', async (req: FastifyRequest<{ Querystring: { url?: string; workspacePath?: string } }>, reply) => {
+    const rawUrl = String(req.query.url ?? '').trim();
+
+    let base: string;
+    try {
+      base = resolveOpenCodeBase(rawUrl || undefined, recentProjectChannels(store));
+    } catch (err) {
+      return reply.code(400).send({ error: `url: ${(err as Error).message}` });
+    }
+
+    try {
+      const sessions = await listOpenCodeSessions(base);
+      const workspace = String(req.query.workspacePath ?? '').trim();
+      return { sessions: filterSessionsByWorkspace(sessions, workspace), workspacePath: workspace, serverUrl: base };
     } catch (err) {
       return reply.code(502).send({ error: `无法读取 OpenCode 会话：${(err as Error).message}` });
     }

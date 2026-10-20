@@ -202,6 +202,10 @@ export const openApiSpec: OpenApiDocument = {
       post: {
         operationId: 'createProject',
         summary: 'Create a project',
+        description:
+          'The web actor (x-taskboard-actor: web) must provide sessionId; a blank wakeChannel is filled by the server ' +
+          'from the default OpenCode resolution order — explicit value → TASKBOARD_OPENCODE_URL → newest project ' +
+          'wakeChannel → http://127.0.0.1:4096. Other actors may create projects without a wake channel or default session.',
         tags: ['projects'],
         requestBody: {
           required: true,
@@ -228,6 +232,24 @@ export const openApiSpec: OpenApiDocument = {
           ...commonResponses(false)
         }
       },
+      patch: {
+        operationId: 'updateProject',
+        summary: 'Update a project (name / wake channel / labels / default session)',
+        description:
+          'All fields optional (strict body). `sessionId: ""` clears the project default session; a non-empty value ' +
+          'sets it (and is inherited by newly created issues).',
+        tags: ['projects'],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateProjectRequest' } } }
+        },
+        responses: {
+          200: { description: 'The updated project', ...jsonResponse({ $ref: '#/components/schemas/Project' }) },
+          400: { $ref: '#/components/responses/BadRequest' },
+          404: { $ref: '#/components/responses/NotFound' },
+          ...commonResponses(true)
+        }
+      },
       delete: {
         operationId: 'deleteProject',
         summary: 'Delete a project and all its issues/comments',
@@ -236,6 +258,69 @@ export const openApiSpec: OpenApiDocument = {
           200: { description: 'Deleted', ...jsonResponse({ $ref: '#/components/schemas/Ok' }) },
           404: { $ref: '#/components/responses/NotFound' },
           ...commonResponses(true)
+        }
+      }
+    },
+    '/api/opencode/sessions': {
+      summary: 'OpenCode sessions for an arbitrary server URL',
+      get: {
+        operationId: 'listOpenCodeSessions',
+        summary: 'List sessions from an OpenCode v1 server (create-project flow)',
+        description:
+          'Stateless variant used before a project exists. `url` is optional: when blank the server resolves a default ' +
+          'in this order — `TASKBOARD_OPENCODE_URL` → the newest project wakeChannel → `http://127.0.0.1:4096`. ' +
+          'An explicit `url` wins and must be an http(s) origin. When `workspacePath` is provided, only sessions ' +
+          'with the same directory are returned.',
+        tags: ['projects'],
+        parameters: [
+          {
+            name: 'url',
+            in: 'query',
+            required: false,
+            description: 'OpenCode server origin, e.g. http://127.0.0.1:4096; blank → default resolution order',
+            schema: { type: 'string' }
+          },
+          {
+            name: 'workspacePath',
+            in: 'query',
+            required: false,
+            description: 'Only return sessions whose directory matches this workspace',
+            schema: { type: 'string' }
+          }
+        ],
+        responses: {
+          200: {
+            description: 'Compatible OpenCode sessions',
+            ...jsonResponse({
+              type: 'object',
+              properties: {
+                sessions: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      title: { type: 'string' },
+                      directory: { type: 'string' },
+                      updatedAt: { type: ['integer', 'null'] }
+                    },
+                    required: ['id', 'title', 'directory', 'updatedAt'],
+                    additionalProperties: false
+                  }
+                },
+                workspacePath: { type: 'string' },
+                serverUrl: { type: 'string' }
+              },
+              required: ['sessions', 'workspacePath', 'serverUrl'],
+              additionalProperties: false
+            })
+          },
+          400: { $ref: '#/components/responses/BadRequest' },
+          502: {
+            description: 'OpenCode server is unreachable or returned an invalid response',
+            ...jsonResponse({ $ref: '#/components/schemas/Error' })
+          },
+          ...commonResponses(false)
         }
       }
     },
@@ -410,7 +495,8 @@ export const openApiSpec: OpenApiDocument = {
         tags: ['issues'],
         parameters: [
           { $ref: '#/components/parameters/ProjectId' },
-          { $ref: '#/components/parameters/Actor' }
+          { $ref: '#/components/parameters/Actor' },
+          { $ref: '#/components/parameters/Session' }
         ],
         requestBody: {
           required: true,
@@ -911,9 +997,12 @@ export const openApiSpec: OpenApiDocument = {
           id: { type: 'string', description: 'Client-supplied id or a generated 8-char id' },
           name: { type: 'string' },
           workspacePath: { type: 'string', description: 'Bound git workspace; empty string = unbound' },
+          wakeChannel: { type: 'string', description: 'OpenCode/TUI wake URL for this project; empty string = unbound' },
+          labels: { type: 'string', description: 'Comma-separated project labels' },
+          sessionId: { type: 'string', description: 'Default OpenCode session inherited by newly created issues; empty string = no default' },
           createdAt: { type: 'string', format: 'date-time' }
         },
-        required: ['id', 'name', 'workspacePath', 'createdAt'],
+        required: ['id', 'name', 'workspacePath', 'wakeChannel', 'labels', 'sessionId', 'createdAt'],
         additionalProperties: false
       },
       Issue: {
@@ -1136,9 +1225,28 @@ export const openApiSpec: OpenApiDocument = {
         properties: {
           id: { type: 'string', description: 'Omit for a generated 8-char id; an existing id → 409' },
           name: { type: 'string', minLength: 1 },
-          workspacePath: { type: 'string' }
+          workspacePath: { type: 'string' },
+          wakeChannel: {
+            type: 'string',
+            description:
+              'OpenCode/TUI wake URL. Optional for the web actor (blank → server-filled from TASKBOARD_OPENCODE_URL → ' +
+              'newest project wakeChannel → http://127.0.0.1:4096).'
+          },
+          labels: { type: 'string', description: 'Comma-separated project labels' },
+          sessionId: { type: 'string', minLength: 1, description: 'Default OpenCode session for new issues; required for the web actor' }
         },
         required: ['name'],
+        additionalProperties: false
+      },
+      UpdateProjectRequest: {
+        type: 'object',
+        description: 'PATCH /api/projects/{projectId} body — all fields optional (strict)',
+        properties: {
+          name: { type: 'string', minLength: 1 },
+          wakeChannel: { type: 'string', description: 'OpenCode/TUI wake URL; empty string = unbound' },
+          labels: { type: 'string', description: 'Comma-separated project labels' },
+          sessionId: { type: 'string', description: 'Project default OpenCode session; empty string clears it' }
+        },
         additionalProperties: false
       },
       CreateIssueRequest: {
@@ -1153,7 +1261,10 @@ export const openApiSpec: OpenApiDocument = {
           labels: { type: 'string' },
           branch: { type: 'string' },
           worktree: { type: ['string', 'null'], description: 'null = unbound' },
-          sessionId: { type: ['string', 'null'], description: 'opencode session to bind at creation' },
+          sessionId: {
+            type: ['string', 'null'],
+            description: 'opencode session to bind at creation. Precedence: explicit sessionId → x-taskboard-session header → project default session → null (unbound).'
+          },
           assignee: { type: 'string' },
           startDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
           dueDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
@@ -1283,6 +1394,13 @@ export const openApiSpec: OpenApiDocument = {
         in: 'header',
         required: false,
         description: 'Acting agent/user name, recorded in the issue activity log',
+        schema: { type: 'string' }
+      },
+      Session: {
+        name: 'x-taskboard-session',
+        in: 'header',
+        required: false,
+        description: 'Caller OpenCode session id used when creating an issue without an explicit body sessionId (overrides the project default, not the body)',
         schema: { type: 'string' }
       }
     },
