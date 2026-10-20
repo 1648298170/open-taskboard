@@ -147,7 +147,37 @@ CLI 可用于诊断、版本检查或兼容执行，但不作为与已打开 Cod
 
 CLI 可用于安装检查、诊断、健康检查或兼容执行，不作为与已打开 DSH App 交互的默认通信协议。
 
-### 4.4 Provider、Runtime、Run 的区别
+### 4.4 事件订阅、取消与恢复
+
+事件、取消和恢复不是所有 Agent 都天然支持的同一种能力。Adapter 必须按实际验证结果声明能力，不允许仅因能打开桌面 App 就显示“可取消”或“可恢复”。
+
+#### OpenCode（第一阶段可实现）
+
+- **事件订阅**：Taskboard Server 代理 OpenCode 的 `GET /event` SSE 流，并按任务绑定的 `sessionId` 过滤。Web 端通过 `GET /api/issues/:id/opencode-events` 订阅；只转发能明确关联到该 Session 的事件。
+- **状态恢复**：`GET /api/issues/:id/opencode-state` 查询 OpenCode 的 Session 详情和 `/session/status`，作为 Taskboard 重启、浏览器断线后的权威状态快照。浏览器 EventSource 自动重连，每次收到 `ready` 后重新拉取快照。
+- **取消执行**：`POST /api/issues/:id/opencode-abort` 调用 OpenCode 的 `POST /session/:id/abort`。成功只记录 `cancel_requested`，表示取消请求已发送，不将其冒充为 Agent 已确认停止。
+- **恢复边界**：任务的 `sessionId` 已持久化，可重新附着监听并读取当前运行状态；这不等于回放断线期间的全部内部事件，也不等于自动恢复一个已退出的 OpenCode 进程。若会话已空闲而任务仍为 `in_progress`，提示用户检查状态或再次唤醒。
+- **工作目录校验**：查询、事件和取消必须使用任务实际执行目录（绑定 Worktree 优先），并验证返回的 Session 目录与任务目录一致。
+
+#### Codex App（桌面交互模式）
+
+- Skill / `taskctl` 可以主动把 `queued/running/succeeded/failed` 等任务事件回写 Taskboard；Taskboard 自己的 `GET /api/events` SSE 负责将持久化任务变化通知给 Web UI。
+- CDP + Skill + CLI 回写并不提供可靠的 Codex 内部事件订阅，也不等于可以取消正在运行的 Codex turn。不得通过单纯修改任务状态来伪造取消。
+- 要获得原生 turn 事件、取消和会话恢复，后续需单独验证 Codex App Server 的支持能力；App Server 管理的独立 Runtime 与桌面 App 已有会话必须分开标识。
+
+#### DeepSeek Harness App（DSH 桌面插件模式）
+
+- DSH 插件桥接应将官方插件 API 明确暴露的会话事件转发给 Taskboard；Agent Tool / `taskctl` 继续负责任务状态和结果回写。
+- 只有当官方插件接口明确支持时，才允许对已有 DSH Session 声明“发送消息”“订阅事件”“取消”或“恢复”。不能把 Cordis 内部事件总线或未文档化 IPC 当作稳定外部协议。
+- 如果桌面插件不能控制已有 Session，可使用 DSH SDK / ACP 启动独立 Runtime，但 UI 必须明确标记运行模式，不能声称已接管桌面 App 中的会话。
+
+#### 统一能力与状态语义
+
+Adapter 至少应按实例声明以下能力：`eventSubscription`、`cancel`、`sessionSnapshot`、`resumeExistingSession`、`openNativeConversation`。UI 按能力显示按钮；不支持的能力应禁用并解释原因。
+
+统一执行记录应区分 `cancel_requested` 与最终的 `cancelled`：发送取消请求不代表 Agent 已停止。恢复时优先读取 Agent 权威状态，再对 Taskboard 的本地记录做对账；不得仅凭任务列状态推断 Agent 是否仍在运行。
+
+### 4.5 Provider、Runtime、Run 的区别
 
 - **Provider**：Agent 产品类型，例如 `opencode`、`codex-app`、`dsh-app`。
 - **Runtime**：实际可执行实例，例如本机已打开的 Codex App、已安装 DSH 插件的桌面 App，或一个 OpenCode Server 地址。
@@ -559,12 +589,13 @@ Runner 负责：
 - [ ] 增加数据库迁移和核心 schema。
 - [ ] 定义 AgentAdapter 接口、能力模型和错误码。
 - [ ] 实现统一 Runner 与假 Agent 测试程序。
+- [ ] OpenCode：验证事件流过滤、状态快照恢复、真实 abort 请求与目录绑定校验。
 - [ ] 将现有 OpenCode 能力接入统一执行层。
 - [ ] 实现 Codex App 桌面交互适配器与 Skill/taskctl 状态回写链路。
 - [ ] 实现 DSH App 插件桥接与 Taskboard Tool/API 状态回写链路。
 - [ ] 增加 Run 启动、查询、取消和事件接口。
 - [ ] 增加 Web Agent 选择、实时日志与执行详情。
-- [ ] 完成超时、取消、断线、重启和路径权限测试。
+- [ ] 完成超时、取消请求、SSE 断线重连、Taskboard 重启后的 Session 状态恢复和路径权限测试。
 - [ ] 完成 OpenCode、Codex App、DSH App 的真实环境验收，并记录原生会话控制能力边界。
 - [ ] 再启动会话恢复与多 Agent 工作流阶段。
 
@@ -578,4 +609,4 @@ Runner 负责：
 2. 再分别实现会话恢复与持续交互。
 3. 最后实现多 Agent 编排、自动 Review 和流水线。
 
-第一阶段的成功标准不是 UI 中出现三个 Agent 选项，而是 OpenCode、Codex App 和 DSH App 都能完成明确的任务交互与状态追踪；对原生会话控制、内部事件、取消和恢复，只在公开接口已验证的范围内承诺。
+当前已补入 OpenCode 的事件订阅、真实取消请求与状态快照恢复链路；Codex App 与 DSH App 的原生事件、取消和会话恢复仍需各自桥接协议验证。第一阶段的成功标准不是 UI 中出现三个 Agent 选项，而是每个接入目标都能完成其已验证范围内的任务交互与状态追踪，对未支持的原生控制能力明确告知。
