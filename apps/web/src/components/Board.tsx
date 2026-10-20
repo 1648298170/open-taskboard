@@ -177,6 +177,13 @@ function ClaimBadge({ issue }: { issue: Issue }) {
   );
 }
 
+const PRIORITY_LABEL: Record<string, string> = {
+  urgent: '紧急',
+  high: '高',
+  medium: '普通',
+  low: '低'
+};
+
 /** 卡片纯展示（Card 与 DragOverlay 浮层共用）。 */
 function CardView({ issue, child, locked, childProgress, active, overlay,
   domRef, listeners, attributes, style, className, onClick, children }: {
@@ -195,12 +202,6 @@ function CardView({ issue, child, locked, childProgress, active, overlay,
   onClick?: () => void;
   children?: ReactNode;
 }) {
-  const priorityLabel: Record<string, string> = {
-    urgent: '紧急',
-    high: '高',
-    medium: '普通',
-    low: '低'
-  };
   return (
     <article ref={domRef}
       aria-label={`任务：${issue.title}`}
@@ -220,7 +221,14 @@ function CardView({ issue, child, locked, childProgress, active, overlay,
       <div className="card-meta">
         {locked && <span className="dep-lock" title="被未完成的依赖阻塞">阻塞</span>}
         {!overlay && <ClaimBadge issue={issue} />}
-        <span className={`badge ${issue.priority}`} title={`优先级：${priorityLabel[issue.priority] ?? issue.priority}`}>{priorityLabel[issue.priority] ?? issue.priority}</span>
+        {issue.priority !== 'medium' && (
+          <span
+            className={`badge ${issue.priority}`}
+            title={`优先级：${PRIORITY_LABEL[issue.priority] ?? issue.priority}`}
+          >
+            {PRIORITY_LABEL[issue.priority] ?? issue.priority}
+          </span>
+        )}
         {issue.dueDate && <DuePill dueDate={issue.dueDate} />}
         <span className="card-id">#{issue.id}</span>
       </div>
