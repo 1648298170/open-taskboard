@@ -23,7 +23,7 @@
 ### 1.2 非目标（第一阶段不做）
 
 - 不在第一阶段实现复杂的自主 Agent 编排或无限递归的 Agent-to-Agent 调用。
-- 不要求三个接入目标 的会话、工具调用和权限机制完全一致。
+- 不要求三个接入目标的会话、工具调用和权限机制完全一致。
 - 不自动批准高风险命令，不绕过 Agent 自身的权限确认。
 - 不把用户认证凭据明文存储到任务表、日志或前端。
 - 不要求立即实现跨机器分布式调度。
@@ -150,7 +150,7 @@ CLI 可用于安装检查、诊断、健康检查或兼容执行，不作为与�
 ### 4.4 Provider、Runtime、Run 的区别
 
 - **Provider**：Agent 产品类型，例如 `opencode`、`codex-app`、`dsh-app`。
-- **Runtime**：实际可执行实例，例如某台开发机上的 Codex CLI，或一个 OpenCode Server 地址。
+- **Runtime**：实际可执行实例，例如本机已打开的 Codex App、已安装 DSH 插件的桌面 App，或一个 OpenCode Server 地址。
 - **Run**：针对某个 Task 发起的一次具体执行。
 
 一个 Provider 可以对应多个 Runtime；一个 Task 可以对应多次 Run。不能将三者混为一个配置对象。
@@ -554,18 +554,18 @@ Runner 负责：
 
 ## 15. 建议的首批交付清单
 
-- [ ] 完成现有架构盘点和三种 Agent 的协议验证。
+- [ ] 完成现有架构盘点及 OpenCode API、Codex App、DSH App 的接入协议验证。
 - [ ] 确定 Provider、Runtime、Run、Session、Event 的领域模型。
 - [ ] 增加数据库迁移和核心 schema。
 - [ ] 定义 AgentAdapter 接口、能力模型和错误码。
 - [ ] 实现统一 Runner 与假 Agent 测试程序。
 - [ ] 将现有 OpenCode 能力接入统一执行层。
-- [ ] 实现 Codex CLI 适配器。
-- [ ] 实现 DSH App CLI 适配器。
+- [ ] 实现 Codex App 桌面交互适配器与 Skill/taskctl 状态回写链路。
+- [ ] 实现 DSH App 插件桥接与 Taskboard Tool/API 状态回写链路。
 - [ ] 增加 Run 启动、查询、取消和事件接口。
 - [ ] 增加 Web Agent 选择、实时日志与执行详情。
 - [ ] 完成超时、取消、断线、重启和路径权限测试。
-- [ ] 完成三种 Agent 的真实环境验收。
+- [ ] 完成 OpenCode、Codex App、DSH App 的真实环境验收，并记录原生会话控制能力边界。
 - [ ] 再启动会话恢复与多 Agent 工作流阶段。
 
 ## 16. 结论
