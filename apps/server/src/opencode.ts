@@ -321,3 +321,108 @@ export async function createOpenCodeSession(serverUrl: string, directory: string
     updatedAt: typeof time.updated === 'number' ? time.updated : null
   };
 }
+
+
+/** Runtime state read from OpenCode so Taskboard can reattach after a restart. */
+export interface OpenCodeSessionRuntimeState {
+  sessionId: string;
+  title: string;
+  directory: string;
+  updatedAt: number | null;
+  status: { type: string; [key: string]: unknown } | null;
+  busy: boolean;
+  observedAt: string;
+}
+
+/**
+ * Reconcile with the authoritative OpenCode server instead of assuming that a
+ * persisted Taskboard issue status reflects the current agent process.
+ */
+export async function getOpenCodeSessionRuntimeState(
+  serverUrl: string,
+  directory: string,
+  sessionId: string
+): Promise<OpenCodeSessionRuntimeState> {
+  const base = normalizeOpenCodeBase(serverUrl);
+  const id = sessionId.trim();
+  if (!id) throw new Error('OpenCode session ID is required');
+
+  const [sessionPayload, statusesPayload] = await Promise.all([
+    requestOpenCodeJson(`${base}/session/${encodeURIComponent(id)}`, directory),
+    requestOpenCodeJson(`${base}/session/status`, directory)
+  ]);
+  if (!isRecord(sessionPayload) || sessionPayload.id !== id) {
+    throw new Error('OpenCode GET /session/:id returned an unexpected session');
+  }
+  if (!isRecord(statusesPayload)) {
+    throw new Error('OpenCode GET /session/status returned an unexpected response');
+  }
+
+  const rawStatus = statusesPayload[id];
+  const status = isRecord(rawStatus) && typeof rawStatus.type === 'string'
+    ? rawStatus as { type: string; [key: string]: unknown }
+    : null;
+  const time = isRecord(sessionPayload.time) ? sessionPayload.time : {};
+  return {
+    sessionId: id,
+    title: typeof sessionPayload.title === 'string' && sessionPayload.title.trim()
+      ? sessionPayload.title : id,
+    directory: typeof sessionPayload.directory === 'string' ? sessionPayload.directory : '',
+    updatedAt: typeof time.updated === 'number' ? time.updated : null,
+    status,
+    busy: status?.type === 'busy' || status?.type === 'running' || status?.type === 'retry',
+    observedAt: new Date().toISOString()
+  };
+}
+
+/** Ask the owning OpenCode server to stop work for a session. */
+export async function abortOpenCodeSession(
+  serverUrl: string,
+  directory: string,
+  sessionId: string
+): Promise<void> {
+  const base = normalizeOpenCodeBase(serverUrl);
+  const id = sessionId.trim();
+  if (!id) throw new Error('OpenCode session ID is required');
+  const url = new URL(`${base}/session/${encodeURIComponent(id)}/abort`);
+  await assertSafeOpenCodeDestination(url);
+  if (directory) url.searchParams.set('directory', directory);
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { accept: 'application/json' },
+    redirect: 'error',
+    signal: AbortSignal.timeout(5_000)
+  });
+  if (!response.ok) {
+    throw new Error(`OpenCode abort returned HTTP ${response.status}`);
+  }
+  // Some OpenCode versions return an empty 204 body; others return JSON.
+  await response.body?.cancel().catch(() => undefined);
+}
+
+/**
+ * OpenCode's event endpoint is a long-lived SSE stream. The caller owns the
+ * AbortController and filters events to the task's bound session before
+ * forwarding them to a browser.
+ */
+export async function openOpenCodeEventStream(
+  serverUrl: string,
+  directory: string,
+  signal: AbortSignal
+): Promise<Response> {
+  const base = normalizeOpenCodeBase(serverUrl);
+  const url = new URL(`${base}/event`);
+  await assertSafeOpenCodeDestination(url);
+  if (directory) url.searchParams.set('directory', directory);
+  const response = await fetch(url, {
+    headers: { accept: 'text/event-stream' },
+    redirect: 'error',
+    signal
+  });
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`OpenCode event stream returned HTTP ${response.status}`);
+  }
+  if (!response.body) throw new Error('OpenCode event stream returned no response body');
+  return response;
+}
