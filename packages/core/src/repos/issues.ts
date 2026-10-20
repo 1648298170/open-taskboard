@@ -4,9 +4,12 @@ import { Issue, IssuePatch, PRIORITIES, Priority, STATUSES, Status } from '../ty
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
 const ISSUE_COLS = `id, project_id AS projectId, parent_id AS parentId, title, description,
-  status, priority, labels, branch, worktree, session_id AS sessionId, archived_at AS archivedAt,
+  status, priority, labels, branch, worktree, worktree_path AS worktreePath,
+  session_id AS sessionId, archived_at AS archivedAt,
   claimed_by AS claimedBy, lease_expires_at AS leaseExpiresAt, assignee, version,
   start_date AS startDate, due_date AS dueDate,
+  started_at AS startedAt, completed_at AS completedAt,
+  acceptance_criteria AS acceptanceCriteria, review_status AS reviewStatus, review_notes AS reviewNotes,
   created_at AS createdAt, updated_at AS updatedAt`;
 const now = (): string => new Date().toISOString();
 const shortId = (): string => randomUUID().slice(0, 8);
@@ -25,9 +28,10 @@ export class IssueRepo {
   create(input: {
     projectId: string; parentId: string | null; title: string;
     description?: string; status?: Status; priority?: Priority;
-    labels?: string; branch?: string; worktree?: string | null; assignee?: string;
+    labels?: string; branch?: string; worktree?: string | null; worktreePath?: string | null; assignee?: string;
     sessionId?: string | null;
     startDate?: string | null; dueDate?: string | null;
+    acceptanceCriteria?: string; reviewStatus?: 'pending' | 'approved' | 'changes_requested'; reviewNotes?: string;
   }): string {
     const status = input.status ?? 'todo';
     const priority = input.priority ?? 'medium';
@@ -36,11 +40,11 @@ export class IssueRepo {
     const id = shortId();
     const t = now();
     this.db.prepare(
-      `INSERT INTO issues (id, project_id, parent_id, title, description, status, priority, labels, branch, worktree, session_id, assignee, version, start_date, due_date, claimed_by, lease_expires_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '', NULL, ?, ?)`
+`INSERT INTO issues (id, project_id, parent_id, title, description, status, priority, labels, branch, worktree, worktree_path, session_id, assignee, version, start_date, due_date, acceptance_criteria, review_status, review_notes, claimed_by, lease_expires_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, '', NULL, ?, ?)`
     ).run(id, input.projectId, input.parentId, input.title, input.description ?? '', status, priority,
-      input.labels ?? '', input.branch ?? '', input.worktree ?? '', input.sessionId ?? null, input.assignee ?? '', input.startDate ?? null,
-      input.dueDate ?? null, t, t);
+      input.labels ?? '', input.branch ?? '', input.worktree ?? '', input.worktreePath ?? '', input.sessionId ?? null, input.assignee ?? '', input.startDate ?? null,
+      input.dueDate ?? null, input.acceptanceCriteria ?? '', input.reviewStatus ?? 'pending', input.reviewNotes ?? '', t, t);
     return id;
   }
 
@@ -80,18 +84,23 @@ export class IssueRepo {
     const colMap: [keyof IssuePatch, string][] = [
       ['title', 'title'], ['description', 'description'], ['status', 'status'],
       ['priority', 'priority'], ['labels', 'labels'], ['branch', 'branch'],
-      ['worktree', 'worktree'], ['sessionId', 'session_id'],
+      ['worktree', 'worktree'], ['worktreePath', 'worktree_path'], ['sessionId', 'session_id'],
       ['assignee', 'assignee'], ['parentId', 'parent_id'],
-      ['startDate', 'start_date'], ['dueDate', 'due_date']
+      ['startDate', 'start_date'], ['dueDate', 'due_date'],
+      ['startedAt', 'started_at'], ['completedAt', 'completed_at'],
+      ['acceptanceCriteria', 'acceptance_criteria'], ['reviewStatus', 'review_status'], ['reviewNotes', 'review_notes']
     ];
     for (const [key, col] of colMap) {
       const v = patch[key];
       if (v === undefined) continue;
       if (key === 'status') assertValidStatus(v as Status);
       if (key === 'priority') assertValidPriority(v as Priority);
+      if (key === 'reviewStatus' && !['pending', 'approved', 'changes_requested'].includes(String(v))) {
+        throw new ValidationError(`invalid reviewStatus: ${String(v)}`);
+      }
       sets.push(`${col} = ?`);
-      // worktree column is NOT NULL '' — a null patch clears to empty string.
-      args.push(key === 'worktree' && v === null ? '' : v);
+      // String binding columns are NOT NULL; null explicitly clears the binding.
+      args.push((key === 'worktree' || key === 'worktreePath') && v === null ? '' : v);
     }
     if (!sets.length) return { changed: false };
     sets.push('version = version + 1', 'updated_at = ?');
