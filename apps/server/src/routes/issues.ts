@@ -200,6 +200,14 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     }
   });
 
+  app.post('/api/issues/:id/agent-events', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const eventSchema = z.object({ outcome: z.enum(['started', 'queued', 'retrying', 'succeeded', 'failed']), detail: z.string().trim().min(1).max(2000) });
+    const parsed = eventSchema.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    const actor = String(req.headers['x-taskboard-actor'] ?? 'watch');
+    return reply.code(201).send(store.recordExecutionEvent(req.params.id, parsed.data.outcome, parsed.data.detail, actor));
+  });
+
   app.delete('/api/issues/:id', async (req: FastifyRequest<{ Params: IssueParams }>) => {
     store.deleteIssue(req.params.id);
     return { ok: true };
