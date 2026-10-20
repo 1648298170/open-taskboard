@@ -5,7 +5,7 @@ import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
 import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
-import { Bell, ChartColumn, GanttChart, Keyboard, Moon, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings } from 'lucide-react';
+import { Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings } from 'lucide-react';
 import { Drawer } from './components/Drawer';
 import { NewIssueDialog } from './components/NewIssueDialog';
 import { StatsPanel } from './components/StatsPanel';
@@ -38,6 +38,7 @@ export default function App() {
   const [directoryWorkspacePath, setDirectoryWorkspacePath] = useState('');
   const [directoryServerUrl, setDirectoryServerUrl] = useState('');
   const [directoryMenuOpen, setDirectoryMenuOpen] = useState<string | null>(null);
+  const [projectMenu, setProjectMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [defaultWorkspacePath, setDefaultWorkspacePath] = useState('');
   const [defaultOpenCodeServerUrl, setDefaultOpenCodeServerUrl] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -248,6 +249,13 @@ export default function App() {
       document.removeEventListener('click', close);
     };
   }, [directoryMenuOpen]);
+
+  useEffect(() => {
+    if (!projectMenu) return;
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setProjectMenu(null); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [projectMenu]);
 
   // v0.4: bundle 版本检测（挂载时 + 每分钟 + 回到标签页时）
   useEffect(() => {
@@ -568,7 +576,7 @@ export default function App() {
                             const updated = await api_.updateDirectory(directory.id, { name: name.trim() });
                             setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
                           } catch (err) { showToast('✗ ' + (err as Error).message); }
-                        }}>重命名目录</button>
+                        }}><Pencil size={13} /> 重命名目录</button>
                         <button role="menuitem" onClick={async () => {
                           setDirectoryMenuOpen(null);
                           const workspacePath = await promptDialog({ title: '配置目录工作目录', lines: ['新建项目时会默认继承此路径；已创建项目的路径不会自动改变。'], placeholder: '例如：D:\\workspace\\projects', value: directory.workspacePath });
@@ -578,7 +586,7 @@ export default function App() {
                             setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
                             showToast('已更新目录工作目录');
                           } catch (err) { showToast('✗ ' + (err as Error).message); }
-                        }}>修改工作目录</button>
+                        }}><Folder size={13} /> 修改工作目录</button>
                         <button role="menuitem" onClick={async () => {
                           setDirectoryMenuOpen(null);
                           const serverUrl = await promptDialog({ title: '配置目录 OpenCode Server URL', lines: ['新建项目时会默认继承此地址；已创建项目的地址不会自动改变。', '留空表示清除。'], placeholder: '例如：http://127.0.0.1:4096', value: directory.serverUrl });
@@ -588,7 +596,7 @@ export default function App() {
                             setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
                             showToast(serverUrl.trim() ? '已更新目录 OpenCode Server URL' : '已清除目录 OpenCode Server URL');
                           } catch (err) { showToast('✗ ' + (err as Error).message); }
-                        }}>修改 OpenCode Server URL</button>
+                        }}><Link size={13} /> 修改 OpenCode Server URL</button>
                         <button role="menuitem" className="danger" onClick={async () => {
                           setDirectoryMenuOpen(null);
                           const projectCount = projects.filter(project => project.directoryId === directory.id).length;
@@ -608,7 +616,7 @@ export default function App() {
                             loadProjects();
                             showToast('已移除目录及其项目');
                           } catch (err) { showToast('✗ ' + (err as Error).message); }
-                        }}>移除目录</button>
+                        }}><Trash2 size={13} /> 移除目录</button>
                       </div>
                     )}
                   </div>
@@ -618,6 +626,7 @@ export default function App() {
                       {children.map(project => (
                         <button key={project.id} className={`side-item side-project-item${project.id === projectId ? ' active' : ''}`}
                           title={`${project.name}\n${project.workspacePath}\n${project.wakeChannel}`}
+                          onContextMenu={e => { e.preventDefault(); setProjectMenu({ id: project.id, x: e.clientX, y: e.clientY }); }}
                           onClick={() => { setProjectId(project.id); closeDrawer(); }}>
                           <span className="side-name">{project.name}</span>
                           {project.labels && <span className="side-label" title={project.labels}>{project.labels}</span>}
@@ -992,6 +1001,42 @@ export default function App() {
           </form>
         </dialog>
       )}
+
+      {projectMenu && <div className="context-menu-backdrop" onClick={() => setProjectMenu(null)} />}
+      {projectMenu && (() => {
+        const project = projects.find(item => item.id === projectMenu.id);
+        if (!project) return null;
+        return (
+          <div className="project-context-menu" role="menu" style={{ left: projectMenu.x, top: projectMenu.y }}>
+            <button role="menuitem" onClick={async () => {
+              setProjectMenu(null);
+              const name = await promptDialog({ title: '修改项目名称', lines: ['名称会立即更新到看板与项目列表。'], placeholder: '项目名称', value: project.name });
+              if (name === null || !name.trim()) return;
+              try {
+                const updated = await api_.updateProject(project.id, { name: name.trim() });
+                setProjects(prev => prev.map(item => item.id === updated.id ? updated : item));
+                showToast('已修改项目名称');
+              } catch (err) { showToast('✗ ' + (err as Error).message); }
+            }}><Pencil size={13} /> 修改项目名称</button>
+            <button role="menuitem" className="danger" onClick={async () => {
+              setProjectMenu(null);
+              const ok = await confirmDialog({
+                title: `移除项目「${project.name}」？`,
+                lines: ['该项目下的全部任务、评论、依赖、活动与附件将一并删除，不可恢复。'],
+                confirmText: '移除项目',
+                danger: true
+              });
+              if (!ok) return;
+              try {
+                await api_.deleteProject(project.id);
+                setProjects(prev => prev.filter(item => item.id !== project.id));
+                if (projectId === project.id) { closeDrawer(); loadProjects(); }
+                showToast('已移除项目');
+              } catch (err) { showToast('✗ ' + (err as Error).message); }
+            }}><Trash2 size={13} /> 移除项目</button>
+          </div>
+        );
+      })()}
 
       {/* v0.4: 快捷键帮助浮层（? 呼出，Esc / 点击遮罩关闭）。 */}
       {helpOpen && (

@@ -68,11 +68,26 @@ html, body { height: 100%; overflow: hidden; }
   box-shadow: 0 10px 24px #0009;
 }
 .side-directory-menu button {
+  display: flex; align-items: center; gap: 8px;
   text-align: left; padding: 6px 8px; border: 0; border-radius: 4px;
   background: none; color: var(--ink); font: inherit; font-size: 11px; cursor: pointer;
 }
 .side-directory-menu button:hover { background: var(--bg-deep); }
 .side-directory-menu button.danger { color: var(--danger); }
+.context-menu-backdrop { position: fixed; inset: 0; z-index: 89; }
+.project-context-menu {
+  position: fixed; z-index: 90;
+  display: grid; gap: 1px; min-width: 180px; padding: 4px;
+  background: var(--bg-raised); border: 1px solid var(--line); border-radius: 6px;
+  box-shadow: 0 10px 24px #0009;
+}
+.project-context-menu button {
+  display: flex; align-items: center; gap: 8px;
+  text-align: left; padding: 6px 8px; border: 0; border-radius: 4px;
+  background: none; color: var(--ink); font: inherit; font-size: 11px; cursor: pointer;
+}
+.project-context-menu button:hover { background: var(--bg-deep); }
+.project-context-menu button.danger { color: var(--danger); }
 .side-directory-toggle { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; padding: 7px 5px; border: 0; border-radius: 3px; background: transparent; color: var(--ink); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .side-directory-toggle:hover { background: var(--bg-raised); }
 .side-directory-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
