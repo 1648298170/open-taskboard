@@ -960,7 +960,7 @@ describe('task Git worktree creation', () => {
       assert.equal(body.issue.branch, body.branch);
       assert.equal(body.issue.worktreePath, body.worktreePath);
       assert.ok(existsSync(body.worktreePath));
-      assert.equal(git(['branch', '--list', body.branch]).toString().trim(), body.branch);
+      assert.doesNotThrow(() => git(['show-ref', '--verify', `refs/heads/${body.branch}`]));
 
       const retry = await app.inject({
         method: 'POST', url: `/api/issues/${issueId}/create-worktree`,
@@ -985,6 +985,47 @@ describe('task Git worktree creation', () => {
       });
       assert.equal(response.statusCode, 400);
       assert.match(response.json<{ error: string }>().error, /工作目录/);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('Agent execution event timeline', () => {
+  it('persists queued, retry and failure events on the task detail', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      await seedProject(app);
+      const issueId = await seedIssue(app);
+      const report = async (outcome: string, detail: string) => app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/agent-events`,
+        headers: { ...json, 'x-taskboard-actor': 'watch' },
+        payload: { outcome, detail }
+      });
+      assert.equal((await report('queued', 'prompt submitted')).statusCode, 201);
+      assert.equal((await report('retrying', 'attempt 1 failed')).statusCode, 201);
+      assert.equal((await report('failed', 'all attempts failed')).statusCode, 201);
+      const detail = await app.inject({ method: 'GET', url: `/api/issues/${issueId}` });
+      const events = detail.json<{ activities: { action: string; detail: string }[] }>().activities
+        .filter(activity => activity.action === 'execution');
+      assert.equal(events.length, 3);
+      assert.match(events[0]!.detail, /\\[failed\\] all attempts failed/);
+      assert.match(events[1]!.detail, /\\[retrying\\] attempt 1 failed/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('rejects invalid outcomes and empty details', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      await seedProject(app);
+      const issueId = await seedIssue(app);
+      const response = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/agent-events`,
+        headers: json, payload: { outcome: 'maybe', detail: '' }
+      });
+      assert.equal(response.statusCode, 400);
     } finally {
       cleanup();
     }
