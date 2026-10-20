@@ -104,6 +104,57 @@ describe('Store.updateIssue optimistic lock', () => {
   });
 });
 
+// --- atomic status transition audit -------------------------------------------
+
+describe('Store.updateIssue status audit', () => {
+  function seed(store: Store): string {
+    store.createProject({ id: 'p1', name: 'P' });
+    return store.createIssue({ projectId: 'p1', title: 'audit target', status: 'todo' }).id;
+  }
+
+  it('rejects a named agent transition without a note before mutating anything', () => {
+    const { store } = fresh();
+    const id = seed(store);
+    throwsWith(
+      () => store.updateIssue(id, { status: 'in_review' }, 1, 'codex'),
+      ValidationError,
+      /statusNote/
+    );
+    assert.equal(store.getIssue(id)!.status, 'todo');
+    assert.equal(store.getIssue(id)!.version, 1);
+    assert.equal(store.listComments(id).length, 0);
+  });
+
+  it('writes status + audit comment + search index in one successful operation', () => {
+    const { store, events } = fresh();
+    const id = seed(store);
+    const note = '原因：功能完成。验证证据：测试通过。未覆盖：浏览器目验。';
+    const updated = store.updateIssue(id, { status: 'in_review' }, 1, 'codex', note);
+    const comments = store.listComments(id);
+    assert.equal(updated.status, 'in_review');
+    assert.equal(updated.version, 2);
+    assert.equal(comments.length, 1);
+    assert.equal(comments[0]!.author, 'codex');
+    assert.match(comments[0]!.body, /todo → in_review/);
+    assert.ok(comments[0]!.body.includes(note));
+    assert.deepEqual(store.search('浏览器目验').map(hit => hit.id), [id]);
+    assert.deepEqual(idsFor(events, 'issue.updated'), [id]);
+    assert.deepEqual(idsFor(events, 'comment.created'), [comments[0]!.id]);
+  });
+
+  it('does not leave a comment when optimistic locking fails', () => {
+    const { store } = fresh();
+    const id = seed(store);
+    throwsWith(
+      () => store.updateIssue(id, { status: 'in_review' }, 99, 'codex', '原因：x。验证：y。未覆盖：z。'),
+      ConflictError,
+      /version conflict/
+    );
+    assert.equal(store.getIssue(id)!.status, 'todo');
+    assert.equal(store.listComments(id).length, 0);
+  });
+});
+
 // --- (b) empty patch ---------------------------------------------------------
 
 describe('Store.updateIssue empty patch', () => {
