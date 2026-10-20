@@ -4,7 +4,7 @@
 // hand-rolled type assertions.
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { createTaskWorktree, GitWorktreeError, scanGitRefs } from '../git-refs.js';
-import { createOpenCodeSession, normalizeOpenCodeBase } from '../opencode.js';
+import { abortOpenCodeSession, createOpenCodeSession, getOpenCodeSessionRuntimeState, normalizeOpenCodeBase, openOpenCodeEventStream } from '../opencode.js';
 import { STATUSES, Store, ValidationError, resolveIssueSessionId } from '@taskboard/core';
 import type { Status, TaskboardServerConfig } from '@taskboard/core';
 import { claimSchema, createIssueSchema, restUpdateIssueSchema, z } from '@taskboard/core/schemas';
@@ -23,6 +23,33 @@ const normalizeGitPath = (value: string): string => {
   const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '');
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 };
+
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** OpenCode event envelopes differ by event type; only forward events explicitly tied to this Session. */
+function openCodeEventBelongsToSession(event: unknown, sessionId: string): boolean {
+  if (!isUnknownRecord(event)) return false;
+  const payload = isUnknownRecord(event.payload) ? event.payload : event;
+  const properties = isUnknownRecord(payload.properties) ? payload.properties : {};
+  const info = isUnknownRecord(properties.info) ? properties.info : {};
+  const part = isUnknownRecord(properties.part) ? properties.part : {};
+  const candidates = [
+    event.sessionID, event.sessionId,
+    payload.sessionID, payload.sessionId,
+    properties.sessionID, properties.sessionId,
+    info.sessionID, info.sessionId,
+    part.sessionID, part.sessionId
+  ];
+  return candidates.some(value => typeof value === 'string' && value === sessionId);
+}
+
+function normalizeOpenCodeDirectory(value: string): string {
+  const normalized = value.trim().replace(/\\/g, '/').replace(/\\/+$/, '');
+  return /^[a-zA-Z]:\\//.test(normalized) ? normalized.toLowerCase() : normalized;
+}
 
 const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerConfig }> = async (app, { store, config }) => {
   app.get('/api/projects/:projectId/issues', async (req: FastifyRequest<{ Params: ProjectParams; Querystring: { status?: Status; parentId?: string; includeDone?: string; archived?: string } }>, reply) => {
@@ -268,8 +295,128 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     return store.updateIssue(issue.id, { branch: '', worktree: null, worktreePath: null }, issue.version, actor);
   });
 
+
+  // Runtime snapshot is the recovery path after Taskboard reload/restart. The
+  // Session ID is persisted on the issue; OpenCode remains authoritative for
+  // whether its agent is busy. This endpoint does not mutate task workflow status.
+  app.get('/api/issues/:id/opencode-state', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const issue = store.getIssue(req.params.id);
+    if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    if (!issue.sessionId?.trim()) return reply.code(409).send({ error: '任务尚未绑定 OpenCode Session' });
+    const project = store.getProject(issue.projectId);
+    if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
+    if (!project.wakeChannel.trim()) return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
+    const directory = issue.worktreePath.trim() || project.workspacePath.trim();
+    if (!directory) return reply.code(400).send({ error: '任务没有可用的工作目录' });
+    try {
+      const state = await getOpenCodeSessionRuntimeState(project.wakeChannel, directory, issue.sessionId);
+      if (state.directory && normalizeOpenCodeDirectory(state.directory) !== normalizeOpenCodeDirectory(directory)) {
+        return reply.code(409).send({ error: `OpenCode Session 的实际目录与任务执行目录不一致：${state.directory}` });
+      }
+      return { ...state, issueStatus: issue.status, recoverable: true };
+    } catch (err) {
+      return reply.code(502).send({ error: `无法恢复 OpenCode Session 状态：${(err as Error).message}` });
+    }
+  });
+
+  // Cancellation reaches the owning OpenCode server; it is not merely a
+  // Taskboard status change. The task itself remains in its workflow column.
+  app.post('/api/issues/:id/opencode-abort', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const issue = store.getIssue(req.params.id);
+    if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    if (!issue.sessionId?.trim()) return reply.code(409).send({ error: '任务尚未绑定 OpenCode Session' });
+    const project = store.getProject(issue.projectId);
+    if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
+    if (!project.wakeChannel.trim()) return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
+    const directory = issue.worktreePath.trim() || project.workspacePath.trim();
+    try {
+      await abortOpenCodeSession(project.wakeChannel, directory, issue.sessionId);
+      store.recordExecutionEvent(
+        issue.id,
+        'cancelled',
+        `已向 OpenCode Session ${issue.sessionId} 发送取消请求；任务状态未自动变更`,
+        String(req.headers['x-taskboard-actor'] ?? 'web')
+      );
+      return { ok: true, sessionId: issue.sessionId, requestedAt: new Date().toISOString() };
+    } catch (err) {
+      return reply.code(502).send({ error: `取消 OpenCode 执行失败：${(err as Error).message}` });
+    }
+  });
+
+  // Proxy the upstream OpenCode SSE stream, filtering out events from other
+  // sessions. Browser EventSource reconnects automatically; clients first
+  // reload /opencode-state to reconcile events missed while disconnected.
+  app.get('/api/issues/:id/opencode-events', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const issue = store.getIssue(req.params.id);
+    if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    if (!issue.sessionId?.trim()) return reply.code(409).send({ error: '任务尚未绑定 OpenCode Session' });
+    const project = store.getProject(issue.projectId);
+    if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
+    if (!project.wakeChannel.trim()) return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
+    const directory = issue.worktreePath.trim() || project.workspacePath.trim();
+    const controller = new AbortController();
+    let upstream: Response;
+    try {
+      upstream = await openOpenCodeEventStream(project.wakeChannel, directory, controller.signal);
+    } catch (err) {
+      return reply.code(502).send({ error: `无法订阅 OpenCode 事件：${(err as Error).message}` });
+    }
+
+    const res = reply.raw;
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+    res.write(`event: ready\\ndata: ${JSON.stringify({ issueId: issue.id, sessionId: issue.sessionId, at: new Date().toISOString() })}\\n\\n`);
+
+    const stop = (): void => { if (!controller.signal.aborted) controller.abort(); };
+    res.on('close', stop);
+    res.on('error', stop);
+    let buffer = '';
+    const decoder = new TextDecoder();
+    try {
+      for await (const chunk of upstream.body!) {
+        if (controller.signal.aborted || res.destroyed) break;
+        buffer += decoder.decode(chunk, { stream: true });
+        let boundary = buffer.search(/\\r?\\n\\r?\\n/);
+        while (boundary >= 0) {
+          const frame = buffer.slice(0, boundary);
+          const delimiter = /^\\r?\\n\\r?\\n/.exec(buffer.slice(boundary))?.[0] ?? '\\n\\n';
+          buffer = buffer.slice(boundary + delimiter.length);
+          const data = frame.split(/\\r?\\n/)
+            .filter(line => line.startsWith('data:'))
+            .map(line => line.slice(5).trimStart())
+            .join('\\n');
+          if (data) {
+            try {
+              const parsed: unknown = JSON.parse(data);
+              if (openCodeEventBelongsToSession(parsed, issue.sessionId!)) {
+                res.write(`event: opencode\\ndata: ${JSON.stringify(parsed)}\\n\\n`);
+              }
+            } catch {
+              // Ignore malformed/non-JSON upstream frames; do not break the stream.
+            }
+          }
+          boundary = buffer.search(/\\r?\\n\\r?\\n/);
+        }
+      }
+    } catch (err) {
+      if (!controller.signal.aborted && !res.destroyed) {
+        res.write(`event: upstream-error\\ndata: ${JSON.stringify({ error: (err as Error).message })}\\n\\n`);
+      }
+    } finally {
+      res.off('close', stop);
+      res.off('error', stop);
+      await upstream.body?.cancel().catch(() => undefined);
+      if (!res.writableEnded) res.end();
+    }
+    return reply;
+  });
+
   app.post('/api/issues/:id/agent-events', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
-    const eventSchema = z.object({ outcome: z.enum(['started', 'queued', 'running', 'idle', 'retrying', 'succeeded', 'failed']), detail: z.string().trim().min(1).max(2000) });
+    const eventSchema = z.object({ outcome: z.enum(['started', 'queued', 'running', 'idle', 'retrying', 'succeeded', 'failed', 'cancelled']), detail: z.string().trim().min(1).max(2000) });
     const parsed = eventSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     const actor = String(req.headers['x-taskboard-actor'] ?? 'watch');
