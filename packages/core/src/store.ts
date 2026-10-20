@@ -287,6 +287,10 @@ export class Store {
       });
       this.syncFts(() => this.fts.indexIssue(issueId, input.projectId, input.title, input.description ?? ''));
       this.logActivity(issueId, actor, 'created', input.title);
+      const created = this.issues.get(issueId)!;
+      if (created.status === 'in_review' || created.status === 'done') {
+        this.flowParentOnChildrenReview(created, actor);
+      }
       return issueId;
     });
     this.emit('issue.created', { id, projectId: input.projectId });
@@ -336,6 +340,9 @@ export class Store {
         this.logActivity(id, actor, 'updated', detail);
         if (patch.status === 'in_progress' && cur.status !== 'in_progress') {
           this.flowParentOnChildStart(cur, actor);
+        }
+        if ((patch.status === 'in_review' || patch.status === 'done') && cur.status !== patch.status) {
+          this.flowParentOnChildrenReview(cur, actor);
         }
       }
       return result.changed;
@@ -419,6 +426,23 @@ export class Store {
     if (!parent || parent.status !== 'todo') return;
     this.issues.update(parent.id, { status: 'in_progress' });
     this.logActivity(parent.id, actor, 'status', 'todo → in_progress (child started)');
+  }
+
+  /**
+   * When every child is waiting for review (`in_review` or `done`), roll the
+   * parent up to `in_review` in the same transaction. This keeps the review
+   * column honest without ever auto-completing the parent: `done` stays
+   * human-decided.
+   */
+  private flowParentOnChildrenReview(child: Issue, actor: string): void {
+    if (!child.parentId) return;
+    const parent = this.issues.get(child.parentId);
+    if (!parent || (parent.status !== 'todo' && parent.status !== 'in_progress')) return;
+    const children = this.issues.list(parent.projectId, { parentId: parent.id, archived: 'all' });
+    if (children.length === 0) return;
+    if (!children.every(item => item.status === 'in_review' || item.status === 'done')) return;
+    this.issues.update(parent.id, { status: 'in_review' });
+    this.logActivity(parent.id, actor, 'status', `${parent.status} -> in_review (all children waiting for review)`);
   }
 
   /**

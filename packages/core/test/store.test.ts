@@ -900,6 +900,38 @@ describe('Store claims (T7-34)', () => {
     assert.equal(store.getIssue(p3)!.status, 'in_progress', 'manual update path also rolls up');
   });
 
+  it('rolls a parent up to in_review when every child waits for review or is done', () => {
+    const { store } = freshDb();
+    store.createProject({ id: 'p1', name: 'P' });
+    const parent = store.createIssue({ projectId: 'p1', title: 'parent' }).id;
+    const c1 = store.createIssue({ projectId: 'p1', title: 'child 1', parentId: parent }).id;
+    const c2 = store.createIssue({ projectId: 'p1', title: 'child 2', parentId: parent }).id;
+
+    store.updateIssue(c1, { status: 'in_review' }, 1);
+    assert.equal(store.getIssue(parent)!.status, 'todo', 'one child still todo keeps the parent untouched');
+
+    store.updateIssue(c2, { status: 'in_review' }, 1);
+    assert.equal(store.getIssue(parent)!.status, 'in_review', 'all children waiting for review');
+    assert.ok(store.listActivities(parent).some(a => a.detail?.includes('all children waiting for review')));
+
+    // A done child plus an in_review child also makes the parent ready for review,
+    // but never auto-completes it.
+    const p2 = store.createIssue({ projectId: 'p1', title: 'done + review' }).id;
+    const d1 = store.createIssue({ projectId: 'p1', title: 'done child', parentId: p2 }).id;
+    const r1 = store.createIssue({ projectId: 'p1', title: 'review child', parentId: p2 }).id;
+    store.updateIssue(d1, { status: 'done' }, 1);
+    store.updateIssue(r1, { status: 'in_review' }, 1);
+    assert.equal(store.getIssue(p2)!.status, 'in_review');
+    assert.notEqual(store.getIssue(p2)!.status, 'done');
+
+    const p3 = store.createIssue({ projectId: 'p1', title: 'all done' }).id;
+    const d2 = store.createIssue({ projectId: 'p1', title: 'child 5', parentId: p3 }).id;
+    const d3 = store.createIssue({ projectId: 'p1', title: 'child 6', parentId: p3 }).id;
+    store.updateIssue(d2, { status: 'done' }, 1);
+    store.updateIssue(d3, { status: 'done' }, 1);
+    assert.equal(store.getIssue(p3)!.status, 'in_review', 'all children done rolls to review, never done');
+  });
+
   it('rejects a second agent while the lease is active — exact ConflictError message', () => {
     const { store } = freshDb();
     const id = seed(store);
