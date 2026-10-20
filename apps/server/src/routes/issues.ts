@@ -4,6 +4,7 @@
 // hand-rolled type assertions.
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { createTaskWorktree, GitWorktreeError, scanGitRefs } from '../git-refs.js';
+import { createOpenCodeSession, normalizeOpenCodeBase } from '../opencode.js';
 import { STATUSES, Store, ValidationError, resolveIssueSessionId } from '@taskboard/core';
 import type { Status, TaskboardServerConfig } from '@taskboard/core';
 import { claimSchema, createIssueSchema, restUpdateIssueSchema, z } from '@taskboard/core/schemas';
@@ -202,6 +203,48 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
         return reply.code(error.statusCode).send({ error: error.message });
       }
       throw error;
+    }
+  });
+
+  // Create a Session in the task's actual execution directory. If a worktree
+  // is bound, never silently create the Session in the project's main checkout.
+  app.post('/api/issues/:id/opencode-session', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const issue = store.getIssue(req.params.id);
+    if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    const project = store.getProject(issue.projectId);
+    if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
+    const bodySchema = z.object({ title: z.string().trim().min(1).max(200).optional() }).strict();
+    const parsed = bodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    if (!project.wakeChannel.trim()) {
+      return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
+    }
+    const targetDirectory = issue.worktreePath.trim() || project.workspacePath.trim();
+    if (!targetDirectory) {
+      return reply.code(400).send({ error: '请先配置项目工作目录，或先为任务创建 Git Worktree' });
+    }
+    try {
+      const serverUrl = normalizeOpenCodeBase(project.wakeChannel);
+      const session = await createOpenCodeSession(
+        serverUrl,
+        targetDirectory,
+        parsed.data.title ?? `#${issue.id} ${issue.title}`
+      );
+      const normalizePath = (value: string): string => {
+        const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+        return /^[a-zA-Z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
+      };
+      if (normalizePath(session.directory) !== normalizePath(targetDirectory)) {
+        return reply.code(502).send({ error: `OpenCode Session 目录不匹配；新 Session 为 ${session.id}，未绑定到任务` });
+      }
+      try {
+        const updated = store.updateIssue(issue.id, { sessionId: session.id }, issue.version, String(req.headers['x-taskboard-actor'] ?? 'web'));
+        return reply.code(201).send({ issue: updated, session, serverUrl, workspacePath: targetDirectory });
+      } catch (error) {
+        return reply.code(500).send({ error: `Session ${session.id} 已创建，但任务绑定失败。请手动绑定该 Session。原因：${(error as Error).message}` });
+      }
+    } catch (error) {
+      return reply.code(502).send({ error: `无法在目标工作目录创建 OpenCode Session：${(error as Error).message}` });
     }
   });
 
