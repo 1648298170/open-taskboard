@@ -1712,3 +1712,19 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   .detail-context-wide { grid-column: auto; }
 }
 
+.worktree-action-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+.worktree-action-row > span {
+  color: var(--ink-dim);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.worktree-action-row .btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
