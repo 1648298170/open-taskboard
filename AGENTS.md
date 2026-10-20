@@ -47,6 +47,7 @@ pnpm start      # 启动服务 http://127.0.0.1:47824（0.0.0.0 时额外打印 
 - 状态流转严格遵循：`todo → in_progress → in_review → done`。**不流转不许开工**：服务端 `claim` 会把 `todo` 自动置为 `in_progress`（认领即开工）——开工必须先 claim，不存在"干着活但状态还在 todo"的合法状态。
 - `done` 必须等用户确认后才能设置；自验完成先置 `in_review` 并在评论写明验证方式；服务端可用 `TASKBOARD_HUMAN_DONE=1` 强制——届时 agent 来源改 done 将被 403 拒绝，除非用户已确认且请求带 `confirm: true`。
 - `update_issue` 必须携带 `show_issue` 返回的 `version`（乐观锁）；版本冲突说明别人改过，重读再改。认领冲突（409）同理：重读一次，条件不变才重试，**绝不抢他人的认领**。
+- **状态变更强制留痕（服务端硬门禁）**：任何 Agent 通过 PATCH/`update_issue` 实际改变状态，都必须在同一请求传 `statusNote`，说明变更原因、验证证据、未覆盖项；缺少时服务端返回 403，不改变状态。服务端会把状态更新与状态审计评论写入同一个 SQLite 事务，绝不要再拆成先 `update_issue`、随后补 `add_comment`。CLI 使用 `--status-note "原因；验证证据；未覆盖项"`。网页人工操作可不传，系统会自动生成明确注明“人工操作、未提供额外说明”的审计评论。状态更新成功后核实详情，再释放租约。
 - **多 agent 并发**：开工前先 `claim`（租约默认 30 分钟，todo 任务认领即自动流转 in_progress），长任务定期 `heartbeat` 续租，完成即 `release`；`next`/`ready` 会自动跳过他人租约中的任务。
 - **开工必绑（硬性规则）**：claim / PATCH 流转 `in_progress` 必须携带 `sessionId` 与 `branch`（认领即绑定，只绑空位不抢绑）——缺失会被 403 拒绝并附教学文案，重试补齐即可；人工 web 来源与 `confirm: true` 豁免；纯自动化看板可用 `TASKBOARD_REQUIRE_SESSION=0` 退出。**评论编辑权**：只有网页用户可编辑自己发的评论，agent 创建的评论永远不可编辑（状态推进不受限）。
 - **目录与项目绑定**：左侧目录是逻辑分组，不是文件系统路径；每个项目独立保存 `workspacePath`、`wakeChannel`（OpenCode Server URL）和可选 `defaultSessionId`。Web 新建项目时必须先选择或新建一个属于该项目工作目录的 Session；新建任务默认预选项目的 `defaultSessionId`，但任务可以选择同目录下的其他 Session。Agent 创建任务可带自己的 `sessionId`；认领未绑定任务时传 `claim --session-id` / `claim_issue sessionId`（认领即绑定，只绑空位）；**已绑他人会话不抢绑**——绑定即所有权，接管需显式解绑。
