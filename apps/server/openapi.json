@@ -2422,6 +2422,75 @@
           }
         }
       }
+    },
+    "/api/issues/{id}/agent-events": {
+      "summary": "Record Agent execution outcomes",
+      "post": {
+        "tags": [
+          "Issues"
+        ],
+        "summary": "Append an Agent execution event",
+        "description": "Used by the watch process to persist dispatch, retry, success, and failure events in the task activity timeline. A queued OpenCode prompt is not represented as completed execution.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "started",
+                      "queued",
+                      "retrying",
+                      "succeeded",
+                      "failed"
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  }
+                },
+                "required": [
+                  "outcome",
+                  "detail"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Execution event saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Activity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid event payload"
+          },
+          "404": {
+            "description": "Task not found"
+          }
+        }
+      }
     }
   },
   "components": {
