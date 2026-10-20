@@ -207,7 +207,7 @@ export const openApiSpec: OpenApiDocument = {
       get: {
         operationId: 'browseWorkspaceDirectories',
         summary: 'List child directories from the OpenCode server filesystem',
-        description: 'This endpoint browses the filesystem that belongs to the supplied OpenCode Server, not the browser host or Taskboard container. Omit path to start at the OpenCode server current directory.',
+        description: 'This endpoint browses the filesystem that belongs to the supplied OpenCode Server, not the browser host or Taskboard container. Omit path to start at the OpenCode server current directory. At Windows drive roots, drives lists accessible drive letters.',
         tags: ['directories'],
         parameters: [
           { name: 'serverUrl', in: 'query', required: true, schema: { type: 'string', format: 'uri' } },
