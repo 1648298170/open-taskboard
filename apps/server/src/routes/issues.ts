@@ -113,11 +113,18 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
         error: 'starting a task requires binding: claim/PATCH with sessionId and branch; confirm:true is not an approval credential (TASKBOARD_REQUIRE_SESSION)'
       });
     }
-    if (config.reviewComment && parsed.data.status === 'in_review' &&
-        store.getIssue(req.params.id)?.status !== 'in_review' &&
-        String(req.headers['x-taskboard-actor'] ?? '') !== 'web' &&
-        store.commentCountBy(req.params.id, String(req.headers['x-taskboard-actor'] ?? '')) === 0) {
-      return reply.code(403).send({ error: 'in_review requires a comment by this actor (先落评再交验)' });
+    const currentIssue = store.getIssue(req.params.id);
+    if (!currentIssue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    const statusChanging = parsed.data.status !== undefined && parsed.data.status !== currentIssue.status;
+    // Every agent-driven status transition must carry its audit note in the
+    // same PATCH request. Store persists the status + comment in one SQLite
+    // transaction. Web actions are exempt here; Store writes an automatic,
+    // explicitly-labelled audit comment when the UI supplies no note.
+    if (statusChanging && actor !== 'web' && !parsed.data.statusNote?.trim()) {
+      return reply.code(403).send({
+        error: 'status transition requires statusNote; include the reason, verification evidence, and any unchecked items'
+      });
     }
     // T7-36: optional human final-review gate. With TASKBOARD_HUMAN_DONE=1, only
     // the web UI (x-taskboard-actor: 'web') may set status to done — CLI/MCP
@@ -133,9 +140,8 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       return reply.code(403).send({ error: 'done requires human confirmation' });
     }
     // 兼容旧客户端的 confirm 字段不作为审批凭证，且不透传 Store
-    const { version, confirm, ...patch } = parsed.data;
-    const actor = String(req.headers['x-taskboard-actor'] ?? '');
-    return store.updateIssue(req.params.id, patch, version, actor);
+    const { version, confirm, statusNote, ...patch } = parsed.data;
+    return store.updateIssue(req.params.id, patch, version, actor, statusNote);
   });
 
   app.delete('/api/issues/:id', async (req: FastifyRequest<{ Params: IssueParams }>) => {
