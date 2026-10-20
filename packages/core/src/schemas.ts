@@ -1,6 +1,6 @@
-// Single source of truth for request input validation (REST / MCP / CLI).
+﻿// Single source of truth for request input validation (REST / MCP / CLI).
 // Enums come from ./types.js so runtime schemas and domain types never drift.
-// Consumed via the "./schemas" subpath export — never re-exported from index.ts
+// Consumed via the "./schemas" subpath export 鈥?never re-exported from index.ts
 // (the web bundle imports "./types" and must stay zod-free).
 import { z } from 'zod';
 import { PRIORITIES, STATUSES } from './types.js';
@@ -8,7 +8,7 @@ import { PRIORITIES, STATUSES } from './types.js';
 export { z };
 
 // YYYY-MM-DD that is also a real calendar day: Date.parse rolls overflow
-// dates forward ('2024-02-31' → Mar 2), so validate by round-tripping the
+// dates forward ('2024-02-31' 鈫?Mar 2), so validate by round-tripping the
 // exact y/m/d components through Date.UTC.
 const isRealCalendarDate = (v: string): boolean => {
   const [y, m, d] = v.split('-').map(Number);
@@ -36,7 +36,7 @@ export const createProjectSchema = z
     id: z.string().optional(),
     name: z.string().min(1),
     directoryId: z.string().min(1).optional(),
-    defaultSessionId: z.string().min(1).nullable().optional(),
+    defaultSessionId: z.string().trim().min(1).nullable().optional(),
     workspacePath: z.string().optional(),
     // A directory provides the default workspacePath; projects may override it.
     // v0.4 wake routing: full TUI URL (http://127.0.0.1:4097); '' = unbound.
@@ -50,7 +50,7 @@ export const createProjectSchema = z
 export const projectPatchSchema = z
   .object({
     name: z.string().min(1).optional(),
-    defaultSessionId: z.string().min(1).nullable().optional(),
+    defaultSessionId: z.string().trim().min(1).nullable().optional(),
     workspacePath: z.string().optional(),
     wakeChannel: z.string().max(200).optional(),
     labels: z.string().optional(),
@@ -71,7 +71,7 @@ export const createIssueSchema = z
     branch: z.string().optional(),
     // T2-8: null creates as unbound ('' after the repo's ?? '' normalization).
     worktree: z.string().nullable().optional(),
-    // v0.4: opencode session binding — null/absent = unbound.
+    // v0.4: opencode session binding 鈥?null/absent = unbound.
     sessionId: z.string().min(1).nullable().optional(),
     assignee: z.string().optional(),
     startDate: nullableDate,
@@ -109,7 +109,7 @@ export const restUpdateIssueSchema = issuePatchSchema.extend({
 // MCP update_issue requires version (optimistic-lock contract).
 export const mcpUpdateIssueSchema = issuePatchSchema.extend({
   version: z.number().int().positive(),
-  // T7-36 逃生舱（与 restUpdateIssueSchema 对齐）：人工确认后 agent 可传
+  // T7-36 閫冪敓鑸憋紙涓?restUpdateIssueSchema 瀵归綈锛夛細浜哄伐纭鍚?agent 鍙紶
   confirm: z.boolean().optional(),
 });
 
@@ -134,13 +134,13 @@ export const addDependencySchema = z
   .strict();
 
 // T7-34: claim/heartbeat/release bodies. heartbeat reuses the whole shape
-// (ttlMinutes renews with a fresh duration); release only needs the agent —
+// (ttlMinutes renews with a fresh duration); release only needs the agent 鈥?
 // a ttlMinutes in a release body is tolerated and ignored by the route.
 export const claimSchema = z
   .object({
     agent: z.string().min(1),
     ttlMinutes: z.number().int().positive().max(1440).optional(),
-    // 认领即绑定：绑空位不抢绑（已有绑定被忽略），语义见 store.claimIssue。
+    // 璁ら鍗崇粦瀹氾細缁戠┖浣嶄笉鎶㈢粦锛堝凡鏈夌粦瀹氳蹇界暐锛夛紝璇箟瑙?store.claimIssue銆?
     sessionId: z.string().min(1).optional(),
     branch: z.string().min(1).optional(),
     // Deprecated compatibility field. The server never treats confirm:true as approval or a binding substitute.
@@ -158,3 +158,4 @@ export type McpUpdateIssueInput = z.infer<typeof mcpUpdateIssueSchema>;
 export type AddCommentInput = z.infer<typeof addCommentSchema>;
 export type AddDependencyInput = z.infer<typeof addDependencySchema>;
 export type ClaimInput = z.infer<typeof claimSchema>;
+

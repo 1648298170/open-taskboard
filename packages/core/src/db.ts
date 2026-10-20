@@ -32,6 +32,105 @@ export function configureDatabase(db: DatabaseSync): void {
   runMigrations(db);
 }
 
+const hasTable = (db: DatabaseSync, name: string): boolean =>
+  Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+
+const hasColumn = (db: DatabaseSync, table: string, column: string): boolean =>
+  (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(c => c.name === column);
+
+/**
+ * v12 -> v13 directory grouping, written idempotently so it can also repair a
+ * database produced by the earlier project-session line. That line also
+ * stamped user_version 13, but with a different schema (projects.session_id
+ * instead of directories). Existing rows are grouped by workspace path and
+ * server URL; the backfill only runs when no directory exists yet.
+ */
+function migrateWorkspaceDirectories(db: DatabaseSync): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS directories (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);`);
+  if (!hasColumn(db, 'projects', 'directory_id')) {
+    db.exec('ALTER TABLE projects ADD COLUMN directory_id TEXT REFERENCES directories(id)');
+  }
+  if (!hasColumn(db, 'projects', 'default_session_id')) {
+    db.exec('ALTER TABLE projects ADD COLUMN default_session_id TEXT');
+  }
+  const { c } = db.prepare('SELECT COUNT(*) AS c FROM directories').get() as { c: number };
+  if (c === 0) {
+    db.exec(`
+      DROP TABLE IF EXISTS directory_migration_map;
+      CREATE TEMP TABLE directory_migration_map (
+        workspace_path TEXT NOT NULL,
+        server_url TEXT NOT NULL,
+        directory_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_path, server_url)
+      );
+      INSERT INTO directory_migration_map (workspace_path, server_url, directory_id)
+      SELECT workspace_path, wake_channel, lower(hex(randomblob(4)))
+      FROM projects
+      GROUP BY workspace_path, wake_channel;
+      INSERT INTO directories (id, name, created_at)
+      SELECT m.directory_id,
+             CASE WHEN m.workspace_path <> '' THEN m.workspace_path ELSE '默认目录' END,
+             MIN(p.created_at)
+      FROM directory_migration_map m
+      JOIN projects p ON p.workspace_path = m.workspace_path AND p.wake_channel = m.server_url
+      GROUP BY m.directory_id, m.workspace_path;
+      UPDATE projects
+      SET directory_id = (
+        SELECT m.directory_id FROM directory_migration_map m
+        WHERE m.workspace_path = projects.workspace_path AND m.server_url = projects.wake_channel
+        LIMIT 1
+      );
+      DROP TABLE directory_migration_map;
+    `);
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_projects_directory ON projects(directory_id)');
+}
+
+/**
+ * Reconcile databases whose user_version was stamped by a divergent migration
+ * line (both master and this branch once used version 13). The function is
+ * idempotent and only fills in schema that is missing; it never rewinds data.
+ */
+function ensureSchemaCompatibility(db: DatabaseSync, version: number): void {
+  if (version < 13) return;
+  if (!hasTable(db, 'directories')) {
+    migrateWorkspaceDirectories(db);
+  } else {
+    if (!hasColumn(db, 'projects', 'directory_id')) {
+      db.exec('ALTER TABLE projects ADD COLUMN directory_id TEXT REFERENCES directories(id)');
+    }
+    if (!hasColumn(db, 'projects', 'default_session_id')) {
+      db.exec('ALTER TABLE projects ADD COLUMN default_session_id TEXT');
+    }
+  }
+  if (version >= 14 && !hasColumn(db, 'directories', 'workspace_path')) {
+    db.exec("ALTER TABLE directories ADD COLUMN workspace_path TEXT NOT NULL DEFAULT ''");
+    db.exec(`
+      UPDATE directories
+      SET workspace_path = COALESCE((
+        SELECT p.workspace_path FROM projects p
+        WHERE p.directory_id = directories.id AND p.workspace_path <> ''
+        ORDER BY p.created_at LIMIT 1
+      ), '')
+    `);
+  }
+  if (version >= 15 && !hasTable(db, 'app_settings')) {
+    db.exec("CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')");
+    db.exec("INSERT INTO app_settings (key, value) VALUES ('default_workspace_path', '')");
+  }
+  // The project-session line stored the binding in projects.session_id.
+  // Preserve it when both columns exist so no binding is silently lost.
+  if (hasColumn(db, 'projects', 'session_id') && hasColumn(db, 'projects', 'default_session_id')) {
+    db.exec(`
+      UPDATE projects
+      SET default_session_id = session_id
+      WHERE (default_session_id IS NULL OR default_session_id = '')
+        AND session_id IS NOT NULL AND session_id <> ''
+    `);
+  }
+}
+
 // Ordered migrations: MIGRATIONS[i] moves a db from user_version i to i+1.
 // The base schema above always creates the v0 layout (no start/due dates, no
 // activities table, no dependencies table), so fresh databases replay every
@@ -157,42 +256,7 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
   // v12 → v13: workspace directories group projects in the sidebar. Existing
   // projects are grouped by their current workspace path + OpenCode server,
   // preserving the configuration they already use.
-  (db: DatabaseSync) => {
-    db.exec(`
-      CREATE TABLE directories (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      );
-      ALTER TABLE projects ADD COLUMN directory_id TEXT REFERENCES directories(id);
-      ALTER TABLE projects ADD COLUMN default_session_id TEXT;
-      CREATE TEMP TABLE directory_migration_map (
-        workspace_path TEXT NOT NULL,
-        server_url TEXT NOT NULL,
-        directory_id TEXT NOT NULL,
-        PRIMARY KEY (workspace_path, server_url)
-      );
-      INSERT INTO directory_migration_map (workspace_path, server_url, directory_id)
-      SELECT workspace_path, wake_channel, lower(hex(randomblob(4)))
-      FROM projects
-      GROUP BY workspace_path, wake_channel;
-      INSERT INTO directories (id, name, created_at)
-      SELECT m.directory_id,
-             CASE WHEN m.workspace_path <> '' THEN m.workspace_path ELSE '默认目录' END,
-             MIN(p.created_at)
-      FROM directory_migration_map m
-      JOIN projects p ON p.workspace_path = m.workspace_path AND p.wake_channel = m.server_url
-      GROUP BY m.directory_id, m.workspace_path;
-      UPDATE projects
-      SET directory_id = (
-        SELECT m.directory_id FROM directory_migration_map m
-        WHERE m.workspace_path = projects.workspace_path AND m.server_url = projects.wake_channel
-        LIMIT 1
-      );
-      DROP TABLE directory_migration_map;
-      CREATE INDEX idx_projects_directory ON projects(directory_id);
-    `);
-  },
+  migrateWorkspaceDirectories,
   // v13 → v14: a directory may provide a default workspace path for new projects.
   // Backfill from an existing project in each directory to preserve migrated setups.
   (db: DatabaseSync) => {
@@ -226,6 +290,12 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
 // dying on duplicate columns.
 export function runMigrations(db: DatabaseSync): void {
   const { user_version: version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
+  // Repair databases stamped by the divergent project-session migration line
+  // before the regular loop. Their version can already be >= 13 while the
+  // directory schema is missing, so the loop alone would start at v14 and fail.
+  if (version >= 13) {
+    inTransaction(db, () => ensureSchemaCompatibility(db, version));
+  }
   for (let v = version; v < MIGRATIONS.length; v++) {
     const migrate = MIGRATIONS[v];
     if (!migrate) break;

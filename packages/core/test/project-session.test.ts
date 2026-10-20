@@ -1,6 +1,6 @@
-// Project-level default opencode session (migration v13): new issues inherit
-// the project's session when the caller supplies none. Precedence:
-// explicit body sessionId → agentSessionId → project.sessionId → null.
+// Project-level default opencode session: new issues inherit the project's
+// session when the caller supplies none. Precedence:
+// explicit body sessionId -> agentSessionId -> project.defaultSessionId -> null.
 
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
@@ -13,19 +13,18 @@ function fresh(): Store {
   return new Store('.unused', new DatabaseSync(':memory:'));
 }
 
-describe('project session — migration v13', () => {
-  it('adds projects.session_id and legacy rows read as unbound', () => {
+describe('project default session — schema', () => {
+  it('adds projects.default_session_id and legacy rows read as unbound', () => {
     const db = new DatabaseSync(':memory:');
     configureDatabase(db);
 
     const version = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
     assert.equal(version, MIGRATIONS.length);
-    assert.equal(version, 13);
 
     const cols = db.prepare("SELECT name FROM pragma_table_info('projects')").all() as { name: string }[];
-    assert.ok(cols.some(c => c.name === 'session_id'), 'projects.session_id column must exist');
+    assert.ok(cols.some(c => c.name === 'default_session_id'), 'projects.default_session_id column must exist');
 
-    // Legacy row written without the column: the NOT NULL DEFAULT '' applies.
+    // Legacy row written without the column: the nullable default applies.
     db.prepare(
       "INSERT INTO projects (id, name, workspace_path, created_at) VALUES ('legacy', 'Legacy', '', '2024-01-01T00:00:00.000Z')"
     ).run();
@@ -33,40 +32,40 @@ describe('project session — migration v13', () => {
     const store = new Store('.unused', db);
     const legacy = store.getProject('legacy');
     assert.ok(legacy);
-    assert.equal(legacy.sessionId, '');
+    assert.equal(legacy.defaultSessionId, null);
   });
 });
 
-describe('project session — create/read', () => {
-  it('persists sessionId and returns it from getProject and listProjects', () => {
+describe('project default session — create/read', () => {
+  it('persists defaultSessionId and returns it from getProject and listProjects', () => {
     const store = fresh();
-    const created = store.createProject({ id: 'p1', name: 'P', sessionId: 'ses_proj' });
-    assert.equal(created.sessionId, 'ses_proj');
+    const created = store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_proj' });
+    assert.equal(created.defaultSessionId, 'ses_proj');
 
-    assert.equal(store.getProject('p1')!.sessionId, 'ses_proj');
-    assert.equal(store.listProjects().find(p => p.id === 'p1')!.sessionId, 'ses_proj');
+    assert.equal(store.getProject('p1')!.defaultSessionId, 'ses_proj');
+    assert.equal(store.listProjects().find(p => p.id === 'p1')!.defaultSessionId, 'ses_proj');
   });
 
-  it('defaults sessionId to the empty string (unbound)', () => {
+  it('defaults defaultSessionId to null (unbound)', () => {
     const store = fresh();
     const created = store.createProject({ id: 'p1', name: 'P' });
-    assert.equal(created.sessionId, '');
+    assert.equal(created.defaultSessionId, null);
   });
 });
 
-describe('project session — update', () => {
-  it('sets, replaces, and clears sessionId', () => {
+describe('project default session — update', () => {
+  it('sets, replaces, and clears defaultSessionId', () => {
     const store = fresh();
     store.createProject({ id: 'p1', name: 'P' });
 
-    const set = store.updateProject('p1', { sessionId: 'ses_1' });
-    assert.equal(set.sessionId, 'ses_1');
+    const set = store.updateProject('p1', { defaultSessionId: 'ses_1' });
+    assert.equal(set.defaultSessionId, 'ses_1');
 
-    const replaced = store.updateProject('p1', { sessionId: 'ses_2' });
-    assert.equal(replaced.sessionId, 'ses_2');
+    const replaced = store.updateProject('p1', { defaultSessionId: 'ses_2' });
+    assert.equal(replaced.defaultSessionId, 'ses_2');
 
-    const cleared = store.updateProject('p1', { sessionId: '' });
-    assert.equal(cleared.sessionId, '');
+    const cleared = store.updateProject('p1', { defaultSessionId: null });
+    assert.equal(cleared.defaultSessionId, null);
     assert.equal(store.getProject('p1')!.name, 'P', 'other fields stay intact');
   });
 
@@ -76,15 +75,15 @@ describe('project session — update', () => {
     const events: string[] = [];
     store.subscribe(e => events.push(e.type));
 
-    store.updateProject('p1', { sessionId: 'ses_1' });
+    store.updateProject('p1', { defaultSessionId: 'ses_1' });
     assert.deepEqual(events.filter(t => t === 'project.updated'), ['project.updated']);
   });
 });
 
-describe('project session — issue inheritance', () => {
+describe('project default session — issue inheritance', () => {
   it('defaults to the project session when the body sessionId is undefined', () => {
     const store = fresh();
-    store.createProject({ id: 'p1', name: 'P', sessionId: 'ses_proj' });
+    store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_proj' });
 
     const issue = store.createIssue({ projectId: 'p1', title: 'A' });
     assert.equal(issue.sessionId, 'ses_proj');
@@ -93,7 +92,7 @@ describe('project session — issue inheritance', () => {
 
   it('treats explicit null and whitespace as absent and falls through to the project session', () => {
     const store = fresh();
-    store.createProject({ id: 'p1', name: 'P', sessionId: 'ses_proj' });
+    store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_proj' });
 
     const nulled = store.createIssue({ projectId: 'p1', title: 'A', sessionId: null });
     assert.equal(nulled.sessionId, 'ses_proj');
@@ -104,7 +103,7 @@ describe('project session — issue inheritance', () => {
 
   it('prefers the explicit body sessionId over agentSessionId and the project session', () => {
     const store = fresh();
-    store.createProject({ id: 'p1', name: 'P', sessionId: 'ses_proj' });
+    store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_proj' });
 
     const issue = store.createIssue({ projectId: 'p1', title: 'A', sessionId: 'ses_body' }, '', 'ses_agent');
     assert.equal(issue.sessionId, 'ses_body');
@@ -112,13 +111,13 @@ describe('project session — issue inheritance', () => {
 
   it('prefers agentSessionId over the project session', () => {
     const store = fresh();
-    store.createProject({ id: 'p1', name: 'P', sessionId: 'ses_proj' });
+    store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_proj' });
 
     const issue = store.createIssue({ projectId: 'p1', title: 'A' }, '', 'ses_agent');
     assert.equal(issue.sessionId, 'ses_agent');
   });
 
-  it('legacy project (empty sessionId) yields null', () => {
+  it('legacy project (null default session) yields null', () => {
     const store = fresh();
     store.createProject({ id: 'p1', name: 'P' });
 
@@ -132,7 +131,7 @@ describe('project session — issue inheritance', () => {
     const issue = store.createIssue({ projectId: 'p1', title: 'A' });
     assert.equal(issue.sessionId, null);
 
-    store.updateProject('p1', { sessionId: 'ses_later' });
+    store.updateProject('p1', { defaultSessionId: 'ses_later' });
     assert.equal(store.getIssue(issue.id)!.sessionId, null);
   });
 });
@@ -150,21 +149,21 @@ describe('resolveIssueSessionId', () => {
   });
 });
 
-describe('project session — schemas', () => {
-  it('create accepts a non-empty trimmed sessionId and rejects whitespace-only', () => {
-    assert.equal(createProjectSchema.safeParse({ name: 'P', sessionId: 'ses_x' }).success, true);
-    assert.equal(createProjectSchema.safeParse({ name: 'P', sessionId: '  ' }).success, false);
+describe('project default session — schemas', () => {
+  it('create accepts a non-empty defaultSessionId and rejects whitespace-only', () => {
+    assert.equal(createProjectSchema.safeParse({ name: 'P', defaultSessionId: 'ses_x' }).success, true);
+    assert.equal(createProjectSchema.safeParse({ name: 'P', defaultSessionId: '  ' }).success, false);
     assert.equal(createProjectSchema.safeParse({ name: 'P' }).success, true);
   });
 
-  it('patch accepts a real sessionId or "" (clear) and rejects whitespace-only', () => {
-    assert.equal(projectPatchSchema.safeParse({ sessionId: 'ses_x' }).success, true);
-    assert.equal(projectPatchSchema.safeParse({ sessionId: '' }).success, true);
-    assert.equal(projectPatchSchema.safeParse({ sessionId: '   ' }).success, false);
+  it('patch accepts a real defaultSessionId or null (clear) and rejects whitespace-only', () => {
+    assert.equal(projectPatchSchema.safeParse({ defaultSessionId: 'ses_x' }).success, true);
+    assert.equal(projectPatchSchema.safeParse({ defaultSessionId: null }).success, true);
+    assert.equal(projectPatchSchema.safeParse({ defaultSessionId: '   ' }).success, false);
   });
 
   it('both schemas stay strict', () => {
     assert.equal(createProjectSchema.safeParse({ name: 'P', unknown: 1 }).success, false);
-    assert.equal(projectPatchSchema.safeParse({ sessionId: '', unknown: 1 }).success, false);
+    assert.equal(projectPatchSchema.safeParse({ defaultSessionId: null, unknown: 1 }).success, false);
   });
 });

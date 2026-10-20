@@ -44,8 +44,6 @@ export interface Project {
   /** TUI URL (e.g. http://127.0.0.1:4097) the watch delivers this project's wakes to; '' = unbound. */
   wakeChannel: string;
   labels: string;
-  /** Project default OpenCode session for new tasks; '' = unbound. */
-  sessionId: string;
   createdAt: string;
 }
 

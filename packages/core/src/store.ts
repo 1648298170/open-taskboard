@@ -244,7 +244,7 @@ export class Store {
     const project = this.projects.get(input.projectId);
     if (!project) throw new NotFoundError(`project not found: ${input.projectId}`);
     // Explicit body → caller's agent session → project default → unbound.
-    const sessionId = resolveIssueSessionId(input.sessionId, agentSessionId, project.sessionId);
+    const sessionId = resolveIssueSessionId(input.sessionId, agentSessionId, project.defaultSessionId);
     const parent = parentId ? this.issues.get(parentId) : null;
     if (parentId && !parent) throw new NotFoundError(`parent issue not found: ${parentId}`);
     if (parent && parent.parentId) throw new ValidationError('only one level of nesting is supported (parent must be a top-level issue)');
