@@ -19,6 +19,7 @@ const mk = (over: Partial<Issue> & Pick<Issue, 'id' | 'title'>): Issue => ({
   labels: '',
   branch: '',
   worktree: '',
+  worktreePath: '',
   sessionId: null,
   archivedAt: null,
   claimedBy: '',
