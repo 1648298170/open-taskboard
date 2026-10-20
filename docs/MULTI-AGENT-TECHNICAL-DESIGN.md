@@ -2,8 +2,8 @@
 
 > 文档状态：方案设计（待评审，尚不代表功能已实现）  
 > 适用项目：Open Taskboard  
-> 目标 Agent：OpenCode、OpenAI Codex、Claude Code  
-> 建议实施方式：在现有架构上增量演进，先实现统一任务执行，再扩展会话管理与多 Agent 工作流。
+> 目标 Agent：OpenCode、OpenAI Codex App、DeepSeek Harness App（DSH）  
+> 建议实施方式：在现有架构上增量演进，优先打通 OpenCode API、Codex App 和 DSH App 的任务交互，再按能力补齐原生运行时控制与多 Agent 工作流。
 
 ## 1. 背景与目标
 
@@ -11,18 +11,19 @@
 
 ### 1.1 目标
 
-- 在同一任务看板中接入 OpenCode、Codex、Claude Code。
+- 在同一任务看板中接入 OpenCode、Codex App、DeepSeek Harness App（DSH）。
+- 支持与用户已打开的 Codex App、DSH App 进行交互；优先使用受支持的桌面集成、插件、Skill/Tool 与本地 Taskboard API，不默认假设桌面 App 提供完整的外部会话控制 API。
 - 统一启动、状态查询、日志事件、取消和结果记录等通用操作。
 - 每次执行都绑定明确的项目、工作目录和可追踪的执行记录。
 - 支持 Git Worktree 隔离，降低并行 Agent 修改同一工作区的风险。
-- 通过适配器隔离各 Agent 的 CLI、HTTP API、SDK、会话协议和版本差异。
+- 通过适配器隔离各 Agent 的 HTTP API、桌面集成、Skill/Tool、SDK/ACP、会话协议和版本差异。
 - 为后续增加其他 Agent、远程 Runner、多 Agent 协作预留扩展点。
 - 保留 Agent 原始事件与错误信息，便于排障和审计。
 
 ### 1.2 非目标（第一阶段不做）
 
 - 不在第一阶段实现复杂的自主 Agent 编排或无限递归的 Agent-to-Agent 调用。
-- 不要求三种 Agent 的会话、工具调用和权限机制完全一致。
+- 不要求三个接入目标 的会话、工具调用和权限机制完全一致。
 - 不自动批准高风险命令，不绕过 Agent 自身的权限确认。
 - 不把用户认证凭据明文存储到任务表、日志或前端。
 - 不要求立即实现跨机器分布式调度。
@@ -35,7 +36,8 @@
 4. **优先隔离。** 默认每个执行任务使用独立 Worktree；复用已有目录需要明确选择。
 5. **事件驱动、状态持久化。** UI 不依赖单个长 HTTP 请求；服务重启后应能恢复或准确标记执行状态。
 6. **最小权限。** Runner 与 Agent 进程使用受控权限、超时、并发限制和网络访问策略。
-7. **渐进式交付。** 先让三种 Agent 可靠执行任务，再做会话恢复，最后实现编排与 Review 闭环。
+7. **渐进式交付。** 先打通任务派发、会话关联与状态回写，再验证原生事件/取消/恢复能力，最后实现编排与 Review 闭环。
+8. **区分 App 集成与 Runtime 集成。** 能打开桌面 App 或向对话注入任务，不代表能直接读取全部内部事件或可靠取消执行；每项能力都必须经协议验证并通过能力协商暴露。
 
 ## 3. 总体架构
 
@@ -53,8 +55,8 @@
                                │
 ┌──────────────────────────────▼──────────────────────────────┐
 │                    Agent Adapter Layer                      │
-│ OpenCodeAdapter | CodexAdapter | ClaudeCodeAdapter           │
-│ 能力检测 / 参数组装 / 协议转换 / 事件标准化 / 错误映射        │
+│ OpenCodeAdapter | CodexAppAdapter | DshAppAdapter             │
+│ 能力检测 / 任务交互 / 协议转换 / 事件标准化 / 错误映射        │
 └──────────────────────────────┬──────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────┐
@@ -65,9 +67,11 @@
                                │
              ┌─────────────────┼──────────────────┐
              ▼                 ▼                  ▼
-         OpenCode            Codex           Claude Code
-         HTTP / Session      CLI / App       CLI / Agent SDK
-                             Server
+         OpenCode API      Codex App          DSH App
+         HTTP / Session    CDP + Skill +       Plugin + Tools
+                           taskctl; optional   + Taskboard API
+                           App Server          (native session
+                                               control TBD)
              └─────────────────┼──────────────────┘
                                ▼
                  Git Worktree / Repository / Tests
@@ -78,6 +82,8 @@
 在现有仓库结构上增量增加模块，避免重写已有业务：
 
 - `apps/server/src/opencode.ts`：继续保留，作为 OpenCode 集成的基础；后续将适合通用化的类型和能力提取到适配器接口。
+- `apps/server/src/agents/codex-app/`：建议承载 Codex App 交互适配（CDP/Skill/taskctl），App Server 作为经过验证后可选的原生 Runtime。
+- `apps/server/src/agents/dsh-app/`：建议承载 DSH App 插件桥接、Taskboard Tool 和会话/事件能力探测；不将未公开的内部 IPC 当作稳定接口。
 - `apps/server/src/routes/`：增加 Agent provider、runtime、run 等 API 路由。
 - `packages/core/src/types.ts`、`schemas.ts`：增加通用 Agent 类型、运行状态和输入校验 schema。
 - `packages/core/src/db.ts`、`store.ts`、`transactions.ts`：按当前数据库迁移机制增加执行记录、事件记录等持久化结构。
@@ -101,27 +107,49 @@
 
 现有的 OpenCode 文件浏览和会话发现能力应尽量保留，避免重复实现。启动任务时必须确认会话实际目录与所选工作目录一致。
 
-### 4.2 OpenAI Codex
+### 4.2 OpenAI Codex App
 
-建议分两步：
+本项目目标优先是与用户已经打开的 Codex App 交互，而不是默认用 CLI 启动一个独立 Agent。
 
-1. **MVP：本机 Codex CLI 执行。** 检测 CLI 是否安装及可用，使用受支持的命令行参数在指定 Worktree 中执行任务，读取结构化输出（如果当前版本支持）、标准输出/错误和退出码。
-2. **增强：会话级通信。** 评估 Codex App Server 等官方支持的程序化接口，提供持续会话、状态订阅和更细粒度的控制。
+**第一阶段：借鉴桌面交互 + Skill + Taskboard API 的模式。**
 
-CLI 一次性执行和连接已有交互会话属于不同能力，必须分别建模。参数、输出格式和会话功能应以实际安装版本的官方文档为准，不要假定不同版本行为完全一致。
+- 通过经过验证的桌面集成方式，将任务上下文打开到 Codex 原生对话；CDP 等 UI 自动化方式需封装在独立模块中，并针对 Codex 版本变化做检测。
+- 通过项目 Skill 指导 Codex 使用 Taskboard CLI（例如 `taskctl`）或受控工具读取任务、回写状态、评论和执行结果。
+- 由 Taskboard API 保存任务与 Codex Thread/会话 ID 的关联；只有在可靠取得 ID 时才记录，不猜测或伪造会话标识。
+- 明确区分“打开/预填对话”“用户提交消息”“Agent 开始执行”“执行事件回写”四个阶段。
+- UI 自动化只能作为交互桥接，不能被当作完整的运行时控制 API。
 
-### 4.3 Claude Code
+**第二阶段：评估 Codex App Server。**
 
-建议分两步：
+- 验证 App Server 初始化、账号认证、thread/turn、事件流、审批请求、会话恢复和取消能力。
+- 默认优先评估官方支持的 stdio 通信方式；不把实验性或不稳定的远程传输作为默认生产方案。
+- App Server 作为可选的原生 Runtime，和已打开桌面 App 的 CDP/Skill 交互模式分开建模，不能假设两者共享同一个会话。
 
-1. **MVP：Claude Code CLI。** 使用该版本官方支持的非交互/程序化执行模式，采集流式输出、最终结果和退出状态。
-2. **增强：Agent SDK 或会话恢复。** 当需要更强的程序化控制时，再评估官方 SDK 与会话恢复能力。
+CLI 可用于诊断、版本检查或兼容执行，但不作为与已打开 Codex App 交互的唯一方案。Codex 认证与额度沿用其官方支持的账号/API 机制，不在 Taskboard 中实现绕过认证的逻辑。
 
-认证、工具权限、审批提示、会话标识及输出协议应由 Claude Code 适配器单独处理。不得把 Claude Code 简化成 OpenCode 的 URL 配置，也不能假设其权限语义与其他 Agent 一致。
+### 4.3 DeepSeek Harness App（DSH）
+
+本项目目标优先是与用户已打开的 DSH 桌面 App 交互。DSH 的桌面插件集成、独立 SDK Profile 和 ACP Profile 是不同入口，不能混为一谈。
+
+**第一阶段：官方插件桥接 + Taskboard Tool/API。**
+
+- 研究并实现 DSH 官方支持的插件扩展，在 DSH App 内提供 Taskboard 工具或入口。
+- Agent 通过 Taskboard Tool/CLI 调用 Taskboard HTTP API，领取任务、读取上下文、回写状态、评论和结果。
+- 若插件 API 允许访问当前活动 Session，可记录 DSH Session ID，并在权限允许的范围内关联任务。
+- 对会话消息发送、历史会话查询、事件订阅、审批和取消逐项做协议验证；只有确认公开 API 能力后，才在 Adapter 中声明支持。
+- 不依赖未经文档支持的内部 IPC/RPC，不假设插件事件总线就是面向第三方的稳定控制接口。
+
+**第二阶段：DSH SDK / ACP 作为可选 Runtime。**
+
+- 若桌面 App 插件无法控制已有会话，可由 Taskboard 单独启动 DSH SDK Profile 或 ACP Profile，形成独立执行实例。
+- SDK 与 ACP 的会话、事件、恢复、取消和审批能力需分别验证；一个 Profile 支持的能力不能推断另一个 Profile 也支持。
+- 在 UI 中明确区分“连接已有 DSH App”和“启动独立 DSH Runtime”。
+
+CLI 可用于安装检查、诊断、健康检查或兼容执行，不作为与已打开 DSH App 交互的默认通信协议。
 
 ### 4.4 Provider、Runtime、Run 的区别
 
-- **Provider**：Agent 产品类型，例如 `opencode`、`codex`、`claude-code`。
+- **Provider**：Agent 产品类型，例如 `opencode`、`codex-app`、`dsh-app`。
 - **Runtime**：实际可执行实例，例如某台开发机上的 Codex CLI，或一个 OpenCode Server 地址。
 - **Run**：针对某个 Task 发起的一次具体执行。
 
@@ -136,7 +164,7 @@ CLI 一次性执行和连接已有交互会话属于不同能力，必须分别�
 建议字段：
 
 - `id`
-- `type`：`opencode | codex | claude-code`
+- `type`：`opencode | codex-app | dsh-app`
 - `name`
 - `enabled`
 - `configJson`：非敏感配置
@@ -149,7 +177,7 @@ CLI 一次性执行和连接已有交互会话属于不同能力，必须分别�
 - `id`
 - `providerId`
 - `name`
-- `kind`：`local-cli | http-server | sdk`
+- `kind`：`http-server | desktop-bridge | plugin-bridge | app-server | sdk | acp | local-cli`
 - `endpoint`：仅适用于服务类 Runtime
 - `hostId`：为未来多机器 Runner 预留
 - `healthStatus`、`lastHealthCheckAt`
@@ -207,7 +235,7 @@ CLI 一次性执行和连接已有交互会话属于不同能力，必须分别�
 以下为设计示意，应结合当前 TypeScript 版本和代码规范落地：
 
 ```ts
-type AgentProviderType = 'opencode' | 'codex' | 'claude-code';
+type AgentProviderType = 'opencode' | 'codex-app' | 'dsh-app';
 
 type AgentCapability =
   | 'start-run'
@@ -216,7 +244,11 @@ type AgentCapability =
   | 'send-message'
   | 'resume-session'
   | 'approval-events'
-  | 'structured-output';
+  | 'structured-output'
+  | 'open-native-conversation'
+  | 'inject-task-context'
+  | 'subscribe-session-events'
+  | 'read-session-history';
 
 interface AgentHealth {
   available: boolean;
@@ -230,6 +262,7 @@ interface AgentRunInput {
   prompt: string;
   workspacePath: string;
   sessionId?: string;
+  interactionMode?: 'existing-app' | 'managed-runtime';
   timeoutMs?: number;
   approvalPolicy: 'require-approval' | 'provider-default';
 }
@@ -238,6 +271,7 @@ interface AgentRunHandle {
   runId: string;
   providerSessionId?: string;
   processId?: number;
+  nativeConversationUrl?: string;
 }
 
 interface AgentEvent {
@@ -278,6 +312,8 @@ interface AgentAdapter {
 - 不支持 `send-message`：不显示“向当前会话发送消息”。
 - 不支持 `resume-session`：不显示“恢复会话”。
 - 不支持 `approval-events`：展示该 Agent 自身的权限/审批提示，不伪造 Taskboard 审批闭环。
+- 不支持 `open-native-conversation`：不显示跳转原生对话入口。
+- 不支持 `subscribe-session-events`：只展示 Taskboard Tool/API 回写的状态，不声称能实时观察 Agent 内部事件。
 - 不支持可靠取消：必须说明取消限制，并尽可能通过 Runner 管理进程退出。
 
 通用接口负责稳定性，Provider 扩展字段负责表达产品差异。
@@ -398,7 +434,7 @@ Runner 负责：
 - 最终结果摘要、退出码、失败原因。
 - 测试结果、Review 状态及人工审批记录。
 
-不要把三种 Agent 的内部对话格式强行渲染成完全相同的聊天 UI。MVP 以统一时间线和日志为主，后续再为各 Provider 增加专属事件视图。
+不要把三个接入目标的内部对话格式强行渲染成完全相同的聊天 UI。MVP 以统一时间线和日志为主，后续再为各 Provider 增加专属事件视图。
 
 ## 11. 安全、权限与可靠性
 
@@ -441,7 +477,7 @@ Runner 负责：
 
 - 用假 Agent 可执行程序验证 Runner 启动、流式日志、退出码、取消和超时。
 - 对 OpenCode API 使用 Mock Server 覆盖成功、HTTP 错误、超时和会话目录不匹配。
-- 对 Codex 和 Claude Code 适配器使用可替换的进程执行层，不要求每次 CI 都依赖真实账号或在线模型。
+- 对 Codex App 与 DSH App Adapter 使用可替换的桥接/协议层，不要求每次 CI 都依赖真实账号、桌面 App 或在线模型；SDK/ACP Runtime 的进程执行层单独测试。
 - 数据库迁移测试覆盖旧数据库升级和新库初始化。
 - SSE 断连重连后可以补齐事件，不重复或遗漏关键状态。
 
@@ -464,26 +500,30 @@ Runner 负责：
 
 - 检查现有 OpenCode 路由、Session、Run/Task 类型、数据库迁移、事件推送和 Worktree 逻辑。
 - 确认当前运行环境：Windows 本机、服务器或容器；确定 Agent CLI 的安装位置和认证方式。
-- 针对安装版本验证 Codex CLI、Claude Code CLI 的调用参数、输出格式、取消方式及会话能力。
+- Codex App：验证桌面集成/打开原生对话、Skill 调用 taskctl、任务 ID 与 Thread ID 关联的可行性；单独验证 App Server 初始化、认证、事件、审批、取消和恢复能力。
+- DSH App：检查官方插件 API 与扩展点，验证插件能否识别当前 Session、向会话发送消息、订阅事件、请求取消；记录哪些能力不可用或尚无公开接口。
+- 对 DSH SDK/ACP 分别做最小协议实验，确认创建会话、事件、恢复、取消和审批的实际支持范围。
+- 明确“已有桌面 App 交互”与“Taskboard 独立启动 Runtime”是两种运行模式。
 - 产出接口差异表和具体迁移清单。
 
-**退出条件：** 三种 Agent 的 MVP 执行路径已在目标环境中通过最小实验，且认证、权限和输出协议已确认。
+**退出条件：** OpenCode API、Codex App 交互链路和 DSH App 插件链路均完成最小实验；各自已确认的能力、认证要求与限制有书面记录。App Server/SDK/ACP 作为备选路径时也需单独记录验证结果。
 
 ### Phase 1：统一执行 MVP
 
 - 新增 Provider/Runtime/Run/Event 类型及数据库迁移。
 - 定义适配器接口与注册表。
 - 复用并适配现有 OpenCode 能力。
-- 新增 Codex CLI 和 Claude Code CLI 适配器。
+- 新增 Codex App Adapter：桌面交互桥接、Skill/taskctl、会话关联和状态回写。
+- 新增 DSH App Adapter：官方插件桥接、Taskboard Tool/API 与已验证的 Session 能力。
 - 实现 Runner、日志事件、取消、超时和状态持久化。
 - Web 增加 Agent 选择和 Run 详情页。
 - 建立 Mock/假 Agent 测试，避免 CI 依赖真实模型服务。
 
-**退出条件：** 三种 Agent 均能在同一面板启动、观察、取消和追踪执行。
+**退出条件：** OpenCode、Codex App、DSH App 均能完成已验证范围内的任务派发、状态回写和任务追踪；不具备公开控制能力的功能明确显示为不支持，不承诺统一的内部事件流或取消能力。
 
 ### Phase 2：会话与可靠性
 
-- 评估并接入各 Provider 的会话恢复/持续通信机制。
+- 评估并接入 Codex App Server 的会话/事件控制能力，以及 DSH 插件、SDK、ACP 各自可用的会话恢复与持续通信机制。
 - 增加健康检查、版本检测、认证诊断。
 - 补齐断线重连、Server 重启恢复、幂等启动和清理策略。
 - 增加事件补拉、日志分页和运行历史。
@@ -503,8 +543,8 @@ Runner 负责：
 
 | 风险/决策 | 建议 |
 |---|---|
-| Agent 原生能力不一致 | 以能力协商为准，不强求完全对称 |
-| CLI 参数随版本变化 | 启动时检测版本，适配器有明确的版本兼容策略 |
+| 桌面 App 与独立 Runtime 能力不一致 | 以能力协商为准，不强求完全对称 |
+| CDP、插件 API 和 Agent 协议随版本变化 | 启动时检测版本，适配器有明确的版本兼容策略 |
 | 多 Agent 竞争写代码 | 默认独立 Worktree |
 | 长任务期间服务重启 | Run/Event 持久化，Runner 负责恢复或标记中断 |
 | CI 无法使用真实模型账号 | 用 Fake Agent 和 Mock Server 做确定性测试，真实端到端测试单独执行 |
@@ -521,7 +561,7 @@ Runner 负责：
 - [ ] 实现统一 Runner 与假 Agent 测试程序。
 - [ ] 将现有 OpenCode 能力接入统一执行层。
 - [ ] 实现 Codex CLI 适配器。
-- [ ] 实现 Claude Code CLI 适配器。
+- [ ] 实现 DSH App CLI 适配器。
 - [ ] 增加 Run 启动、查询、取消和事件接口。
 - [ ] 增加 Web Agent 选择、实时日志与执行详情。
 - [ ] 完成超时、取消、断线、重启和路径权限测试。
@@ -530,7 +570,7 @@ Runner 负责：
 
 ## 16. 结论
 
-采用“统一任务管理层 + Agent Adapter + Runner + Worktree”的架构，可以在一个 Taskboard 面板中逐步接入 OpenCode、Codex 和 Claude Code，同时保留各自原生能力。
+采用“统一任务管理层 + Agent Adapter + 桌面/插件桥接 + 可选 Runner + Worktree”的架构，可以在一个 Taskboard 面板中接入 OpenCode、Codex App 和 DSH App，同时保留各自原生交互方式。
 
 实施顺序应为：
 
@@ -538,4 +578,4 @@ Runner 负责：
 2. 再分别实现会话恢复与持续交互。
 3. 最后实现多 Agent 编排、自动 Review 和流水线。
 
-第一阶段的成功标准不是 UI 中出现三个 Agent 选项，而是三种 Agent 都能在明确的工作目录内可靠执行任务，并且运行状态、日志、取消、失败恢复与代码改动可追溯。
+第一阶段的成功标准不是 UI 中出现三个 Agent 选项，而是 OpenCode、Codex App 和 DSH App 都能完成明确的任务交互与状态追踪；对原生会话控制、内部事件、取消和恢复，只在公开接口已验证的范围内承诺。
