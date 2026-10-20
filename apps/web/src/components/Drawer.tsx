@@ -124,6 +124,7 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
   // T6-36: 绑定分支/工作树时预览最近提交（工作树优先——名字会被服务端
   // 解析成该工作树 checkout 的 HEAD）。换任务或换绑定即重取。
   const commitRef = detail ? (detail.worktree || detail.branch || '') : '';
+  const executionEvents = detail ? detail.activities.filter(a => a.action === 'execution').slice(0, 5) : [];
   useEffect(() => {
     setCommits(null);
     if (!projectId || !commitRef) return;
@@ -420,6 +421,20 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
                   return minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
                 })()
               : detail.startedAt ? '进行中' : '—'}</strong>
+          </div>
+          <div className="detail-context-wide execution-history">
+            <span className="execution-history-title">最近 Agent 执行记录</span>
+            {executionEvents.length
+              ? <ul>
+                  {executionEvents.map(event => (
+                    <li key={event.id}>
+                      <time>{fmtWhen(event.createdAt)}</time>
+                      <strong>{event.detail.match(/^\\[([^\\]]+)\\]/)?.[1] ?? '记录'}</strong>
+                      <span>{event.detail.replace(/^\\[[^\\]]+\\]\\s*/, '')}</span>
+                    </li>
+                  ))}
+                </ul>
+              : <p className="detail-empty">暂无执行记录。通过「唤醒」触发 Agent 后，这里会记录提交、重试和失败信息。</p>}
           </div>
         </div>
       </section>
