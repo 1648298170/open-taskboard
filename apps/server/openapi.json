@@ -2430,7 +2430,7 @@
           "Issues"
         ],
         "summary": "Append an Agent execution event",
-        "description": "Used by the watch process to persist dispatch, retry, success, and failure events in the task activity timeline. A queued OpenCode prompt is not represented as completed execution.",
+        "description": "Used by the watch process to persist dispatch, retry, success, and failure events. For bound OpenCode sessions, running/idle entries are observational session-level status only; prompt_async does not provide a completion receipt, so idle must not be interpreted as task success.",
         "parameters": [
           {
             "name": "id",
@@ -2453,6 +2453,8 @@
                     "enum": [
                       "started",
                       "queued",
+                      "running",
+                      "idle",
                       "retrying",
                       "succeeded",
                       "failed"
