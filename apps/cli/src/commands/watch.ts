@@ -60,6 +60,37 @@ async function firstHealthySessionBase(candidates: readonly string[]): Promise<s
 
 export interface SseEvent { name: string; data: string }
 
+export interface OpenCodeMessageLike {
+  info?: { id?: string; role?: string; sessionID?: string; time?: { created?: number; completed?: number }; error?: unknown; finish?: unknown };
+  parts?: Array<{ type?: string; text?: string }>;
+}
+
+/**
+ * Find the Assistant response that follows the exact Taskboard-injected user
+ * message. OpenCode's history may contain unrelated work in the same Session;
+ * never correlate by Session idle/busy alone.
+ */
+export function findCorrelatedAssistant(
+  input: unknown,
+  marker: string,
+): { matchedPrompt: boolean; assistant?: OpenCodeMessageLike } {
+  if (!Array.isArray(input)) return { matchedPrompt: false };
+  const messages = (input as OpenCodeMessageLike[]).map((message, index) => ({ message, index }))
+    .sort((a, b) => {
+      const at = a.message.info?.time?.created;
+      const bt = b.message.info?.time?.created;
+      return typeof at === 'number' && typeof bt === 'number' ? at - bt || a.index - b.index : a.index - b.index;
+    })
+    .map(item => item.message);
+  const promptIndex = messages.findIndex(message =>
+    message.info?.role === 'user'
+    && (message.parts ?? []).some(part => part.type === 'text' && typeof part.text === 'string' && part.text.includes(marker))
+  );
+  if (promptIndex < 0) return { matchedPrompt: false };
+  const assistant = messages.slice(promptIndex + 1).find(message => message.info?.role === 'assistant');
+  return assistant ? { matchedPrompt: true, assistant } : { matchedPrompt: true };
+}
+
 /**
  * Bound outbound HTTP waits so one stalled OpenCode/API request cannot hold the
  * serialized wake queue forever. The timeout aborts the client request; for
@@ -418,25 +449,9 @@ export const watchCommand: Command = {
             ? String((rawStatus as { type: unknown }).type)
             : '';
           const rawMessages = await messagesResponse.json() as unknown;
-          const messages = Array.isArray(rawMessages) ? rawMessages as Array<{
-            info?: { id?: string; role?: string; sessionID?: string; time?: { created?: number; completed?: number }; error?: unknown; finish?: unknown };
-            parts?: Array<{ type?: string; text?: string }>;
-          }> : [];
-          const ordered = messages.map((message, index) => ({ message, index }))
-            .sort((a, b) => {
-              const at = a.message.info?.time?.created;
-              const bt = b.message.info?.time?.created;
-              return typeof at === 'number' && typeof bt === 'number' ? at - bt || a.index - b.index : a.index - b.index;
-            })
-            .map(item => item.message);
-          const promptIndex = ordered.findIndex(message =>
-            message.info?.role === 'user'
-            && (message.parts ?? []).some(part => part.type === 'text' && typeof part.text === 'string' && part.text.includes(marker))
-          );
-          if (promptIndex >= 0) matchedPrompt = true;
-          const assistant = promptIndex >= 0
-            ? ordered.slice(promptIndex + 1).find(message => message.info?.role === 'assistant')
-            : undefined;
+          const correlation = findCorrelatedAssistant(rawMessages, marker);
+          if (correlation.matchedPrompt) matchedPrompt = true;
+          const assistant = correlation.assistant;
 
           if (status === 'busy' || status === 'retry') {
             observedBusy = true;
