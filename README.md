@@ -48,9 +48,11 @@ node apps/cli/dist/cli.js issue list --project my-project
 常用命令（`taskboard`，构建后可 `pnpm --filter @taskboard/cli link` 全局可用）：
 
 ```bash
-taskboard project create --id my-project --name "My project"
-taskboard issue create --project my-project --title "搭建登录模块" --priority high --branch feat/login
-taskboard issue create --project my-project --parent <父任务ID> --title "登录表单 UI"
+taskboard project create --id my-project --name "My project" --wake-port 4096 --session-id <会话ID>
+taskboard project set --id my-project --session-id <新会话ID>   # 传 '' 清除项目默认会话
+taskboard project list                       # 已绑定时显示 session=<id>
+taskboard issue create --project my-project --title "搭建登录模块" --priority high --branch feat/login --session-id <会话ID>
+taskboard issue create --project my-project --parent <父任务ID> --title "登录表单 UI"   # 省略 --session-id 时继承项目默认会话
 taskboard issue done <id> --expected-version 2
 taskboard next --project my-project          # 智能取任务：依赖全 done + 优先级排序
 taskboard issue claim <id> --agent codex     # 独占租约（默认 30 分钟，taskboard ready --agent 可跳过他人租约）
@@ -64,7 +66,7 @@ taskboard project delete skill-test --yes
 ## 5 分钟上手（人类视角）
 
 1. `pnpm install && pnpm start` → 浏览器打开 `http://127.0.0.1:47824`
-2. 面板上「＋项目」建第一个项目（空态页也有一键示例项目）
+2. 首次打开直接进入面板（侧栏显示「当前没有项目」）；点「＋ 新建项目」建第一个项目：只需选择一个已有会话（首个字段「OpenCode 会话（必选）」，占满整行的下拉，占位「选择会话」）；选中后自动用会话标题填入项目名称、用会话 `directory` 填入工作区路径（两者仍可改），OpenCode 服务地址由服务端解析
 3. 「＋ 新任务」建任务——勾选「创建后唤醒 agent 编排」可直接召唤 AI 接手
 4. 拖卡片流转状态；拖**父任务**时会询问是否整组移动（子任务跟随）
 5. 点卡片开抽屉：改状态/负责人/分支/会话绑定、拆子任务、排依赖、传附件、写评论（输入 @ 唤醒 agent）
@@ -132,7 +134,7 @@ todo → in_progress → in_review → done
 - 时间线视图 📅（甘特 lite）、统计面板 📊（周吞吐/平均周期/贡献榜）
 - 快捷键：`/` 搜索 · `n` 新建 · `j/k` 上下移动 · `Enter` 打开 · `?` 全部帮助
 - 附件上传下载（每任务 ≤20 个/总量 ≤50MB）、桌面通知、暗/亮主题
-- 新建任务必须从项目绑定的 OpenCode 服务中选择已有会话；保存时写入 `sessionId`，后续唤醒直达同一会话上下文
+- 新建任务仍需选择会话：项目有默认会话时自动预选；无默认会话的旧项目保持旧行为（手动从项目绑定的 OpenCode 服务选择）。保存后写入 `sessionId`，后续唤醒直达同一会话上下文
 
 ## 评论唤醒 agent（watch 侧车）
 
@@ -155,7 +157,7 @@ taskboard watch                                        # opencode run（默认�
 
 > 模型注意：`--model` 走 opencode 的 `-m` 约定；Claude/Codex 用自家 `--model` 参数时直接写进 `--exec`（如 `--exec "claude --model sonnet -p"`），不要混用 `--model`。
 
-**绑定即路由（推荐）**：面板新建项目时填写「唤醒端口」和工作区路径；已有项目可点「配置 OpenCode」设置完整服务地址。新建任务时必须选择该服务里的已有会话；工作区路径已配置时仅显示目录匹配的会话。`@agent` 评论对已绑定任务直接发往该 session 的 `prompt_async`，未绑定任务才注入 TUI。项目路由存在数据里，改绑即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时留空即可。
+**绑定即路由（推荐）**：面板新建项目只需选择一个已有会话（存为 `project.sessionId`），没有服务地址/唤醒端口输入框；服务地址由服务端按「显式 `url` query（仅 API）→ `TASKBOARD_OPENCODE_URL` → 最近创建项目的 `wakeChannel` → `http://127.0.0.1:4096`」解析，并写入新项目的 `wakeChannel`。选中会话会自动用会话标题填入项目名称、用会话 `directory` 填入工作区路径（两者均可改）。项目内的新任务默认继承该会话，创建时也可显式覆盖；工作区路径已配置时仅显示目录匹配的会话。无默认会话的旧项目仍按旧行为：新建任务时手动选择会话。`@agent` 评论对已绑定任务直接发往该 session 的 `prompt_async`，未绑定任务才注入 TUI。项目路由存在数据里，改绑即时生效，**一只 watch 覆盖所有项目**；修改项目会话只影响后续新建任务，已有任务不会追溯改绑。项目配置对话框使用无状态 `GET /api/opencode/sessions?url=<可选>&workspacePath=<可选>` 获取会话（`url` 省略时按上述默认顺序解析；返回 `{ sessions, workspacePath, serverUrl }`）；项目内配置沿用 `GET /api/projects/{id}/opencode-sessions`。CLI 等价：`taskboard project create --wake-port 4097 --session-id <会话ID>`、`taskboard project set --id demo --wake-port 4099 --session-id <新会话ID>`（`--session-id ''` 清除）；CLI 的显式 `--wake-port` 与 Web 面板的自动解析相互独立。项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时，服务地址仍需用于会话路由。
 
 ### 先把 opencode 终端跑起来（watch 的目的地）
 
@@ -165,7 +167,7 @@ TUI 注入需要「在跑的 opencode serve + 附着它的终端」，两种开�
 
 ```bash
 opencode                                   # 终端 1：交互式 TUI
-# 面板建项目时填该端口，或 project set --wake-port <端口>
+# 面板建项目不用填端口（服务端默认解析到 127.0.0.1:4096）；换端口用 project set --wake-port <端口>
 ```
 
 **B 多实例（多终端接管不同项目，推荐）**：每终端一组 serve + attach，端口互不重复。serve 是一次性部署，交给进程管理器常驻（mac/linux 用后台方式即可零依赖上手；Windows 推荐 pm2，见下方对照表），日常每终端只有一条命令：
@@ -174,7 +176,7 @@ opencode                                   # 终端 1：交互式 TUI
 # ── 一次性部署（macOS / Linux，Windows 见下表）─────────────
 opencode serve --port 4096 &                # 无界面 server，交给进程管理器常驻
 opencode serve --port 4097 &
-# 面板「新建项目」填对应唤醒端口（或 taskboard project set --wake-port …）
+# 面板「新建项目」不用填服务地址（默认 127.0.0.1:4096 或 TASKBOARD_OPENCODE_URL）；多实例换端口用 taskboard project set --wake-port …
 
 # ── 用户日常（每只终端一个 attach，全平台相同）──────────────
 opencode attach http://127.0.0.1:4096        # 终端 1：接管绑定了 4096 的项目
@@ -194,7 +196,7 @@ opencode attach http://127.0.0.1:4097        # 终端 2：接管绑定了 4097 �
 
 #### 细节备忘
 
-- 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47825`）；端口绑定存在**项目数据**（`wakeChannel`），`任务 → 项目 → 端口` 就完了——没有中心化的路由表
+- 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47825`）；服务地址与默认会话都存在**项目数据**（`wakeChannel` + `sessionId`），路由就是 `任务 → 项目 → 服务/会话`，没有中心化的路由表；Web 新建项目时无需填写地址，服务端按默认顺序解析后写入 `wakeChannel`；已有任务保留自己的 `sessionId`，不会被项目会话变更改写
 - 唤醒优先级：任务已绑定 `sessionId` → 对应 OpenCode 服务的 `prompt_async`；只有未绑定任务才使用项目 `wake_channel` / `--tui-url` 注入当前 TUI，最后才 headless。绑定会话投递失败时不会静默创建新会话，唤醒评论保持 pending 以便重试
 - 同一 serve 端口被多终端 attach 时注入是**广播**（每窗都出现）——多终端请各用各的端口，绑定时不会串
 - 端口/项目/终端数量不受限：`wakeChannel` 是完整 URL（可绑局域网另一台机器），单实例锁按 server 端口 + 作用域自动命名字，headless 通道连端口都不需要
@@ -235,7 +237,7 @@ args = ["/abs/path/open-taskboard/apps/mcp/dist/mcp.js"]
 
 建议同时在 AGENTS.md / rules 中加入：
 
-> 管理任务时使用 taskboard MCP 工具；状态流转 todo → in_progress → in_review → done，**不流转不许开工**（服务端 claim 会把 todo 自动置为 in_progress，认领即开工），done 必须等用户确认；update_issue 必须携带 show_issue 返回的 version（乐观锁）；拆解需求时先建父任务再用 parentId 建子任务；多 agent 并发先 claim 再开工，长任务定期 heartbeat 续租，完成即 release；agent 创建任务带 sessionId，认领未绑定任务用 claim sessionId 绑定自己的会话（只绑空位，不抢绑）。
+> 管理任务时使用 taskboard MCP 工具；状态流转 todo → in_progress → in_review → done，**不流转不许开工**（服务端 claim 会把 todo 自动置为 in_progress，认领即开工），done 必须等用户确认；update_issue 必须携带 show_issue 返回的 version（乐观锁）；拆解需求时先建父任务再用 parentId 建子任务；多 agent 并发先 claim 再开工，长任务定期 heartbeat 续租，完成即 release；agent 创建任务带 sessionId（省略时继承项目默认会话），认领未绑定任务用 claim sessionId 绑定自己的会话（只绑空位，不抢绑）。
 
 ### 方式二：Skill + CLI（opencode 或不支持 MCP 的工具）
 
@@ -251,6 +253,8 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 | `TASKBOARD_PORT` | `47824` | HTTP 端口 |
 | `TASKBOARD_DATA_DIR` | `.data` | SQLite 数据目录 |
 | `TASKBOARD_URL` | `http://127.0.0.1:47824` | CLI / MCP 指向的服务地址 |
+| `TASKBOARD_OPENCODE_URL` | 未设置 | Web 新建项目与无状态 `GET /api/opencode/sessions` 的默认 OpenCode 服务地址。服务端解析顺序：显式 `url` query（仅 API）→ 本环境变量 → 最近创建项目的 `wakeChannel` → `http://127.0.0.1:4096`；解析结果写入新项目的 `wakeChannel`（`未设置` 时走后面三级）。Docker Compose 示例已设为 `http://host.docker.internal:4096`，并加 `host.docker.internal:host-gateway`（Linux） |
+| `TASKBOARD_SESSION_ID` | 未设置 | CLI 每次请求自动带 `x-taskboard-session`；`--session-id` 优先于该环境变量 |
 | `TASKBOARD_WEB_DIST` | 自动探测 | 看板静态目录（默认 `apps/web/dist`，vite 构建产物） |
 | `TASKBOARD_TOKEN` | 未设置 | 设置后 API 需要 Bearer 认证（`Authorization: Bearer <token>` 或 `?token=`；SSE 支持 `?token=`） |
 | `TASKBOARD_READONLY` | 未设置 | `1` 时所有写操作（POST/PATCH/DELETE）返回 403，GET/SSE 不受影响 |

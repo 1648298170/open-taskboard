@@ -50,6 +50,7 @@ pnpm start      # 启动服务 http://127.0.0.1:47824（0.0.0.0 时额外打印 
 - **多 agent 并发**：开工前先 `claim`（租约默认 30 分钟，todo 任务认领即自动流转 in_progress），长任务定期 `heartbeat` 续租，完成即 `release`；`next`/`ready` 会自动跳过他人租约中的任务。
 - **开工必绑（硬性规则）**：claim / PATCH 流转 `in_progress` 必须携带 `sessionId` 与 `branch`（认领即绑定，只绑空位不抢绑）——缺失会被 403 拒绝并附教学文案，重试补齐即可；人工 web 来源与 `confirm: true` 豁免；纯自动化看板可用 `TASKBOARD_REQUIRE_SESSION=0` 退出。**评论编辑权**：只有网页用户可编辑自己发的评论，agent 创建的评论永远不可编辑（状态推进不受限）。
 - **会话绑定**：Web 新建任务必须先从项目配置的 OpenCode 服务选择已有会话，保存非空 `sessionId`；项目配置了 `workspacePath` 时只展示同目录会话。agent 创建任务可带自己的 `sessionId`；认领未绑定任务时传 `claim --session-id` / `claim_issue sessionId`（认领即绑定，只绑空位）；**已绑他人会话不抢绑**——绑定即所有权，接管需显式解绑。
+- **项目默认会话**：agent 创建任务优先绑定自己的 `sessionId`（CLI `--session-id` / `TASKBOARD_SESSION_ID`，MCP 记住最近声明的会话），未提供时继承项目默认会话（`project.sessionId`）；Web 新建任务仍需人工选择会话（项目有默认会话时自动预选，旧项目无默认会话则手动选）。Web 新建项目只需选择一个会话，项目名称取会话标题、工作区取会话 `directory`（均可改），服务地址由服务端默认解析并写入 `wakeChannel`。修改项目会话只影响后续新建任务，不追溯改绑已有任务。
 - **会话唤醒必须同会话**：已绑定 `sessionId` 的任务使用 OpenCode v1 `POST /session/:id/prompt_async`；不得投到当前 TUI 选中会话，也不得静默 fallback 到新 headless 会话。投递失败时保持唤醒评论 `pending`，修复服务地址后重试。未绑定任务才允许 TUI/headless fallback。
 - **唤醒收尾必推评论**：agent 被 `@agent` 评论唤醒并处理完后，把该评论置 `processed`（TUI 注入通道 watch 观测不到完工，headless 才有 exit-0 自动标）；漏推则面板任务完成后评论仍挂「唤醒中」。
 - 拆解需求：先建父任务（顶层），再用 parentId 建子任务（仅两层），一个可独立交付的子需求一个任务。子任务开工（认领或手动流转）会自动把 `todo` 父任务拉到 `in_progress`（单向）；父任务的 `in_review`/`done` 始终人工——全子 done 也不自动关闭父任务。
