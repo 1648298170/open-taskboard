@@ -342,8 +342,8 @@ export class Store {
     const effectiveNote = statusChanged
       ? suppliedNote || (actor === 'web' ? 'Taskboard 网页人工操作；操作者未提供额外说明。' : '')
       : '';
-    let auditComment: Comment | null = null;
-    const changed = inTransaction(this.db, () => {
+    const transactionResult = inTransaction(this.db, () => {
+      let auditComment: Comment | null = null;
       const result = this.issues.update(id, patch, expectedVersion);
       if (result.changed) {
         // Title/description may have moved — refresh both fts rows.
@@ -364,11 +364,11 @@ export class Store {
           this.flowParentOnChildrenReview(cur, actor);
         }
       }
-      return result.changed;
+      return { changed: result.changed, auditComment };
     });
-    if (changed) this.emit('issue.updated', { id });
-    if (changed && auditComment) {
-      const comment = auditComment;
+    if (transactionResult.changed) this.emit('issue.updated', { id });
+    if (transactionResult.changed && transactionResult.auditComment) {
+      const comment = transactionResult.auditComment;
       this.emit('comment.created', {
         id: comment.id,
         issueId: id,
