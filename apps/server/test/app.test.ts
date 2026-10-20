@@ -987,7 +987,7 @@ describe('task Git worktree creation', () => {
 
       const released = await app.inject({
         method: 'DELETE', url: `/api/issues/${issueId}/git-binding`,
-        headers: { ...json, 'x-taskboard-actor': 'web' }
+        headers: { 'x-taskboard-actor': 'web' }
       });
       assert.equal(released.statusCode, 200, released.body);
       assert.equal(released.json<{ branch: string; worktree: string; worktreePath: string }>().branch, '');
