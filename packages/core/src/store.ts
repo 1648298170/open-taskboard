@@ -672,7 +672,7 @@ export class Store {
         && (before === 'in_review' || before === 'done')) {
         this.issues.update(issueId, {
           status: 'in_progress',
-          ...(cur.startedAt === null ? { startedAt: now() } : {}),
+          ...(this.issues.get(issueId)?.startedAt == null ? { startedAt: now() } : {}),
           ...(before === 'done' ? { completedAt: null } : {})
         });
         this.logActivity(issueId, actor, 'updated', `status: ${before}→in_progress (wake)`);
