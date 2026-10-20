@@ -105,7 +105,7 @@ export const api_ = {
   showIssue: (id: string) => api<IssueDetail>('GET', `/api/issues/${id}`),
   createIssue: (projectId: string, body: Partial<Issue> & { title: string }) =>
     api<Issue>('POST', `/api/projects/${projectId}/issues`, body),
-  updateIssue: (id: string, body: { version: number } & Partial<Issue>) =>
+  updateIssue: (id: string, body: { version: number; statusNote?: string } & Partial<Issue>) =>
     api<Issue>('PATCH', `/api/issues/${id}`, body),
   deleteIssue: (id: string) => api<{ ok: true }>('DELETE', `/api/issues/${id}`),
   archiveIssue: (id: string) => api<{ ok: true }>('POST', `/api/issues/${id}/archive`, {}),
