@@ -114,7 +114,7 @@ export const restUpdateIssueSchema = issuePatchSchema.extend({
 export const mcpUpdateIssueSchema = issuePatchSchema.extend({
   version: z.number().int().positive(),
   // Must accompany every real status transition; saved as a comment in the same transaction.
-  statusNote: z.string().trim().min(1).max(10000).optional(),
+  statusNote: z.string().trim().min(1).max(10000).describe('Required for each actual agent status transition. Explain the reason, verification evidence, and unchecked items.').optional(),
   // T7-36 閫冪敓鑸憋紙涓?restUpdateIssueSchema 瀵归綈锛夛細浜哄伐纭鍚?agent 鍙紶
   confirm: z.boolean().optional(),
 });
