@@ -174,9 +174,21 @@ export class Store {
     return this.directories.get(id);
   }
 
-  deleteDirectory(id: string): void {
+  deleteDirectory(id: string, options: { cascadeProjects?: boolean } = {}): void {
+    const directory = this.directories.get(id);
+    if (!directory) throw new NotFoundError(`directory not found: ${id}`);
+    const projectIds = this.projects.list()
+      .filter(project => project.directoryId === id)
+      .map(project => project.id);
+    if (projectIds.length > 0 && !options.cascadeProjects) {
+      throw new ValidationError('directory is not empty; move or delete its projects first');
+    }
+    // deleteProject already owns the full per-project cascade (issues, comments,
+    // dependencies, FTS, activities and attachment files). Run it per project,
+    // then remove the now-empty directory.
+    for (const projectId of projectIds) this.deleteProject(projectId);
     inTransaction(this.db, () => this.directories.delete(id));
-    this.emit('directory.deleted', { id });
+    this.emit('directory.deleted', { id, projectIds });
   }
 
   // ---- projects ----

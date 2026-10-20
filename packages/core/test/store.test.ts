@@ -1467,6 +1467,21 @@ describe('workspace directories', () => {
     store.createProject({ id: 'p1', name: 'P1', directoryId: directory.id });
     assert.throws(() => store.deleteDirectory(directory.id), /not empty/);
   });
+
+  it('cascadeProjects removes the directory, its projects, tasks and comments', () => {
+    const store = new Store(':memory:', new DatabaseSync(':memory:'));
+    const directory = store.createDirectory({ name: 'Workspace' });
+    const project = store.createProject({ id: 'p1', name: 'P1', directoryId: directory.id });
+    const issue = store.createIssue({ projectId: project.id, title: 'T' });
+    store.addComment(issue.id, { author: 'web', body: 'hello' });
+
+    store.deleteDirectory(directory.id, { cascadeProjects: true });
+
+    assert.equal(store.getProject(project.id) ?? null, null);
+    assert.equal(store.getIssue(issue.id) ?? null, null);
+    assert.equal(store.listComments(issue.id).length, 0);
+    assert.equal(store.listDirectories().length, 0);
+  });
 });
 
 describe('project labels', () => {
