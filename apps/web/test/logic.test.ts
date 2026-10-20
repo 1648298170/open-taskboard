@@ -8,6 +8,7 @@ import { buildLanes, flattenCardOrder, todayStr } from '../src/logic/board';
 import { issueMatchesFilters } from '../src/logic/filters';
 import { moveWithRetry, pickMovableChildren } from '../src/logic/groupMove';
 import { mentionCandidatesFor, nextHi, applyMention } from '../src/logic/mention';
+import { filterParentCandidates, isParentCandidate, parentCandidates, parentLabel } from '../src/logic/parentTasks';
 
 const mk = (over: Partial<Issue> & Pick<Issue, 'id' | 'title'>): Issue => ({
   projectId: 'p1',
@@ -222,5 +223,76 @@ describe('mention 补全纯逻辑', () => {
     assert.equal(applyMention('@ ', '@agent'), '@agent ', '尾随空格不阻断替换');
     assert.equal(applyMention('@ag  ', '@agent'), '@agent ');
     assert.equal(applyMention('  @', '@agent'), '@agent ');
+  });
+});
+
+describe('parentTasks 父任务候选纯逻辑', () => {
+  it('keeps only top-level issues and excludes done', () => {
+    const issues = [
+      mk({ id: 'top', title: 'top' }),
+      mk({ id: 'kid', title: 'kid', parentId: 'top' }),
+      mk({ id: 'closed', title: 'closed', status: 'done' })
+    ];
+    assert.equal(isParentCandidate(issues[0]!), true);
+    assert.equal(isParentCandidate(issues[1]!), false, '子任务不能作父任务');
+    assert.equal(isParentCandidate(issues[2]!), false, '已完成任务不能作父任务');
+    assert.deepEqual(parentCandidates(issues).map(i => i.id), ['top']);
+  });
+
+  it('orders by status (todo → in_progress → in_review) then by title', () => {
+    const issues = [
+      mk({ id: 'r', title: 'r', status: 'in_review' }),
+      mk({ id: 'p-b', title: 'beta', status: 'in_progress' }),
+      mk({ id: 't-b', title: 'Beta', status: 'todo' }),
+      mk({ id: 't-a', title: 'alpha', status: 'todo' }),
+      mk({ id: 'p-a', title: 'Alpha', status: 'in_progress' })
+    ];
+    assert.deepEqual(parentCandidates(issues).map(i => i.id), ['t-a', 't-b', 'p-a', 'p-b', 'r']);
+  });
+
+  it('does not crash on unmapped statuses and labels fall back to the raw value', () => {
+    const weird = mk({ id: 'w', title: '怪状态', status: 'paused' as unknown as Issue['status'] });
+    assert.deepEqual(parentCandidates([weird]).map(i => i.id), ['w']);
+    assert.equal(parentLabel(weird), '怪状态（paused）');
+  });
+
+  it('labels with full-width parentheses and the Chinese status name', () => {
+    assert.equal(parentLabel(mk({ id: 'a', title: '优化', status: 'todo' })), '优化（待办）');
+    assert.equal(parentLabel(mk({ id: 'b', title: '优化', status: 'in_review' })), '优化（待验收）');
+  });
+
+  it('empty or whitespace query returns all candidates in order', () => {
+    const issues = [mk({ id: 'b', title: 'beta' }), mk({ id: 'a', title: 'alpha' })];
+    assert.deepEqual(filterParentCandidates(issues, '').map(i => i.id), ['a', 'b']);
+    assert.deepEqual(filterParentCandidates(issues, '   ').map(i => i.id), ['a', 'b']);
+  });
+
+  it('matches title or id case-insensitively and keeps candidate ordering', () => {
+    const issues = [
+      mk({ id: 'a1', title: 'Alpha', status: 'todo' }),
+      mk({ id: 'b1', title: 'beta', status: 'todo' }),
+      mk({ id: 'gamma', title: 'Gamma', status: 'todo' })
+    ];
+    assert.deepEqual(filterParentCandidates(issues, 'AL').map(i => i.id), ['a1']);
+    assert.deepEqual(filterParentCandidates(issues, 'GAM').map(i => i.id), ['gamma']);
+    assert.deepEqual(filterParentCandidates(issues, 'b1').map(i => i.id), ['b1'], 'id 匹配');
+  });
+
+  it('returns no candidates when nothing matches', () => {
+    const issues = [mk({ id: 'a', title: 'alpha' })];
+    assert.deepEqual(filterParentCandidates(issues, 'zzz'), []);
+  });
+
+  it('does not mutate the input array', () => {
+    const issues = [
+      mk({ id: 'b', title: 'beta', status: 'in_review' }),
+      mk({ id: 'a', title: 'alpha' })
+    ];
+    const snapshot = issues.slice();
+    const result = parentCandidates(issues);
+    assert.notEqual(result, issues);
+    assert.deepEqual(issues, snapshot);
+    filterParentCandidates(issues, 'alp');
+    assert.deepEqual(issues, snapshot);
   });
 });

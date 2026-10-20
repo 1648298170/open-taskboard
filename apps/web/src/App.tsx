@@ -787,6 +787,7 @@ export default function App() {
         workspacePath={projects.find(project => project.id === projectId)?.workspacePath}
         serverUrl={projects.find(project => project.id === projectId)?.wakeChannel}
         defaultSessionId={projects.find(project => project.id === projectId)?.defaultSessionId}
+        issues={issues}
         onClose={() => setDialogOpen(false)}
         onCreated={id => { void refresh(); if (id) openIssue(id); }}
         onError={msg => showToast(`✗ ${msg}`)} />

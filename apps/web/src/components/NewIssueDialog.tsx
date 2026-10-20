@@ -1,21 +1,26 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Select } from './Select';
-import { api_, OpenCodeSessionOption, PRIORITIES, Priority } from '../api';
+import { ParentCombobox } from './ParentCombobox';
+import { api_, Issue, OpenCodeSessionOption, PRIORITIES, Priority } from '../api';
 import { initialSessionId, mergeSessionOptions } from '../logic/session';
 import { WAKE_PREFIX } from '@taskboard/core/types';
 
-export function NewIssueDialog({ open, projectId, workspacePath, serverUrl, defaultSessionId, onClose, onCreated, onError }: {
+export function NewIssueDialog({ open, projectId, workspacePath, serverUrl, defaultSessionId, issues = [], onClose, onCreated, onError }: {
   open: boolean;
   projectId: string;
   workspacePath?: string;
   serverUrl?: string;
   defaultSessionId?: string | null;
+  issues?: Issue[];
   onClose: () => void;
   onCreated: (parentId?: string) => void;
   onError: (msg: string) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [priority, setPriority] = useState<Priority>('medium');
+  // 父任务用受控 state：组合框支持手输原始 id，也支持点选候选；提交时直接读它。
+  const [parentId, setParentId] = useState('');
+  const [parentReset, setParentReset] = useState(0);
   const [sessions, setSessions] = useState<OpenCodeSessionOption[]>([]);
   const [sessionId, setSessionId] = useState('');
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -24,7 +29,12 @@ export function NewIssueDialog({ open, projectId, workspacePath, serverUrl, defa
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      // 对话框关闭即丢弃父任务草稿，避免下次打开沿用上一次（取消）的输入。
+      setParentId('');
+      setParentReset(n => n + 1);
+      return;
+    }
     let cancelled = false;
     setSessions([]);
     setSessionId(initialSessionId(defaultSessionId));
@@ -55,7 +65,7 @@ export function NewIssueDialog({ open, projectId, workspacePath, serverUrl, defa
     e.preventDefault();
     const form = e.currentTarget;
     const f = new FormData(form);
-    const parent = String(f.get('parent') ?? '').trim();
+    const parent = parentId.trim();
     const wake = f.get('wake') === 'on';
     if (!sessionId) {
       setError('请先选择一个 OpenCode 会话，再创建任务。');
@@ -83,6 +93,8 @@ export function NewIssueDialog({ open, projectId, workspacePath, serverUrl, defa
       form.reset();
       setPriority('medium');
       setSessionId('');
+      setParentId('');
+      setParentReset(n => n + 1);
       setError(null);
       onClose();
       onCreated(parent || undefined);
@@ -104,7 +116,10 @@ export function NewIssueDialog({ open, projectId, workspacePath, serverUrl, defa
         </div>
         {workspacePath && <p className="session-hint">工作目录继承自所属项目：{workspacePath}</p>}
         <label>标题<input name="title" required autoFocus placeholder="一句话讲清楚要做什么" /></label>
-        <label>父任务 ID（可选，留空为顶层任务）<input name="parent" placeholder="填父任务 id，如 a1b2c3d4" /></label>
+        <label>父任务（可选，留空为顶层任务）
+          <ParentCombobox issues={issues} value={parentId} onChange={id => { setParentId(id); setError(null); }}
+            resetSignal={parentReset} placeholder="输入或选择父任务，如 a1b2c3d4" ariaLabel="父任务" />
+        </label>
         <label>OpenCode 会话（必选）
           <Select value={sessionId} disabled={Boolean(defaultSessionId)} onChange={value => { setSessionId(value); setError(null); }}
             options={sessions.map(session => ({

@@ -721,6 +721,19 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 .meta-row > .tb-select { flex: 1 1 130px; min-width: 0; }
 .dep-picker .tb-select { width: 100%; justify-content: space-between; }
 
+/* ---- v0.4: 父任务组合框（可输入 + 过滤下拉，视觉复用 .tb-select-*） ---- */
+.tb-combobox-input { width: 100%; }
+/* 面板宽度由 floating-ui size 中间件对齐输入框；这里只兜底一个最小宽度。 */
+.tb-combobox-panel { min-width: 180px; }
+.tb-combobox-option { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.tb-combobox-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tb-combobox-id {
+  flex: none; font-family: var(--mono); font-size: 10px;
+  letter-spacing: .02em; color: var(--ink-dim);
+}
+.tb-combobox-option.selected.hi .tb-combobox-id,
+.tb-combobox-option.hi .tb-combobox-id { color: var(--accent-ink); opacity: .72; }
+
 /* ---- v0.4: 进行中视觉强调（借鉴 dashi 琥珀脉冲）+ 子任务 ◐ 三态点阵 ---- */
 .dot.in_progress { animation: pulse-in-progress 1.6s ease-in-out infinite; }
 @keyframes pulse-in-progress {
