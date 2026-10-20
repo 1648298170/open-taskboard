@@ -104,6 +104,7 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refs, setRefs] = useState<GitRefs | null>(null);
   const [creatingWorktree, setCreatingWorktree] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
   // T6-36: 最近提交预览。null = 加载中/不可用。
   const [commits, setCommits] = useState<Commit[] | null>(null);
 
@@ -168,7 +169,7 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
     } catch (err) { onToast(`✗ ${(err as Error).message}`); }
   };
 
-  const sessionUrl = buildOpenCodeSessionUrl(sessionServerUrl, workspacePath, detail.sessionId);
+  const sessionUrl = buildOpenCodeSessionUrl(sessionServerUrl, detail.worktreePath || workspacePath, detail.sessionId);
 
   const addDep = async (dependsOnId: string): Promise<void> => {
     try {
@@ -439,6 +440,30 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
             {detail.sessionId
               ? <code title={detail.sessionId}>{detail.sessionId}</code>
               : <span className="detail-empty">未绑定会话</span>}
+            <button className="btn tiny" disabled={creatingSession || !sessionServerUrl?.trim() || !(detail.worktreePath || workspacePath)}
+              title={detail.worktreePath
+                ? '在当前绑定的 Git Worktree 目录创建 OpenCode Session，并将其绑定到任务'
+                : '在项目工作目录创建 OpenCode Session，并将其绑定到任务'}
+              onClick={async () => {
+                if (detail.sessionId && !await confirmDialog({
+                  title: '替换当前 Session 绑定？',
+                  lines: ['将创建一个新 Session 并绑定到此任务。', '原有 Session 不会被删除，但后续唤醒将使用新 Session。'],
+                  confirmText: '创建并替换'
+                })) return;
+                setCreatingSession(true);
+                try {
+                  const result = await api_.createTaskSession(detail.id);
+                  onToast(`已创建并绑定 Session ${result.session.id}（目录：${result.workspacePath}）`);
+                  onChanged();
+                  await load();
+                } catch (err) {
+                  onToast(`创建 Session 失败：${(err as Error).message}`);
+                } finally {
+                  setCreatingSession(false);
+                }
+              }}>
+              {creatingSession ? '创建中…' : detail.worktreePath ? '在工作树中创建 Session' : '在项目目录创建 Session'}
+            </button>
           </div>
           <div className="detail-context-item detail-context-wide">
             <span>执行耗时</span>
