@@ -6,8 +6,37 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor,sessionBaseCandidates, isIgnoredAuthor, fetchWithTimeout, WATCH_REQUEST_TIMEOUT_MS, type IssueDetailLike } from '../src/commands/watch.js';
+import { makeSseParser, findCorrelatedAssistant, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor,sessionBaseCandidates, isIgnoredAuthor, fetchWithTimeout, WATCH_REQUEST_TIMEOUT_MS, type IssueDetailLike } from '../src/commands/watch.js';
 
+
+describe('findCorrelatedAssistant（唤醒请求与 OpenCode 消息关联）', () => {
+  const marker = 'taskboard-wake:comment-123:123456';
+
+  it('只匹配包含本次唯一标识的用户消息及其后续 Assistant 回复', () => {
+    const result = findCorrelatedAssistant([
+      { info: { id: 'assistant-old', role: 'assistant', time: { created: 10 } }, parts: [{ type: 'text', text: '之前的工作已完成' }] },
+      { info: { id: 'user-current', role: 'user', time: { created: 20 } }, parts: [{ type: 'text', text: `请处理任务 [${marker}]` }] },
+      { info: { id: 'assistant-current', role: 'assistant', time: { created: 30 } }, parts: [{ type: 'text', text: '本次任务已处理' }] },
+    ], marker);
+    assert.equal(result.matchedPrompt, true);
+    assert.equal(result.assistant?.info?.id, 'assistant-current');
+  });
+
+  it('没有匹配到本次用户消息时，不把其他 Assistant 回复误判为完成', () => {
+    const result = findCorrelatedAssistant([
+      { info: { id: 'assistant-other', role: 'assistant', time: { created: 30 } }, parts: [{ type: 'text', text: '其他任务的回复' }] },
+      { info: { id: 'user-other', role: 'user', time: { created: 20 } }, parts: [{ type: 'text', text: '别的请求' }] },
+    ], marker);
+    assert.deepEqual(result, { matchedPrompt: false });
+  });
+
+  it('识别到本次用户消息但尚无 Assistant 回复时保持 pending', () => {
+    const result = findCorrelatedAssistant([
+      { info: { id: 'user-current', role: 'user', time: { created: 20 } }, parts: [{ type: 'text', text: marker }] },
+    ], marker);
+    assert.deepEqual(result, { matchedPrompt: true });
+  });
+});
 
 describe('makeSseParser', () => {
   it('reassembles events from split chunks', () => {
