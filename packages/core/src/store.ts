@@ -732,7 +732,7 @@ export class Store {
   /** Persist an Agent/watch dispatch outcome in the task timeline. */
   recordExecutionEvent(
     issueId: string,
-    outcome: 'started' | 'queued' | 'running' | 'idle' | 'retrying' | 'succeeded' | 'failed' | 'cancelled',
+    outcome: 'started' | 'queued' | 'running' | 'idle' | 'retrying' | 'succeeded' | 'failed' | 'cancel_requested',
     detail: string,
     actor = 'watch'
   ): Activity {
