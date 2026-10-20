@@ -165,6 +165,7 @@ export const api_ = {
     return api<{ sessions: OpenCodeSessionOption[]; workspacePath: string; serverUrl: string }>('GET', `/api/opencode/sessions${qs ? `?${qs}` : ''}`);
   },
   createTaskWorktree: (id: string) => api<{ issue: Issue; branch: string; worktree: string; worktreePath: string; alreadyBound: boolean }>('POST', `/api/issues/${encodeURIComponent(id)}/create-worktree`, {}),
+  releaseGitBinding: (id: string) => api<Issue>('DELETE', `/api/issues/${encodeURIComponent(id)}/git-binding`),
   gitRefs: (projectId: string) => api<GitRefs>('GET', `/api/projects/${projectId}/git-refs`),
   commits: (projectId: string, ref: string) =>
     api<{ commits: Commit[] }>('GET', `/api/projects/${projectId}/commits?ref=${encodeURIComponent(ref)}`)
