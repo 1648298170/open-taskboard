@@ -983,6 +983,16 @@ describe('task Git worktree creation', () => {
       });
       assert.equal(retry.statusCode, 200, retry.body);
       assert.equal(retry.json<{ alreadyBound: boolean }>().alreadyBound, true);
+
+      const released = await app.inject({
+        method: 'DELETE', url: `/api/issues/${issueId}/git-binding`,
+        headers: { ...json, 'x-taskboard-actor': 'web' }
+      });
+      assert.equal(released.statusCode, 200, released.body);
+      assert.equal(released.json<{ branch: string; worktree: string; worktreePath: string }>().branch, '');
+      assert.equal(released.json<{ branch: string; worktree: string; worktreePath: string }>().worktree, '');
+      assert.equal(released.json<{ branch: string; worktree: string; worktreePath: string }>().worktreePath, '');
+      assert.ok(existsSync(body.worktreePath), 'unbind must not delete the local worktree');
     } finally {
       cleanup();
       rmSync(root, { recursive: true, force: true });
