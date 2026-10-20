@@ -1047,14 +1047,18 @@ describe('Agent execution event timeline', () => {
         payload: { outcome, detail }
       });
       assert.equal((await report('queued', 'prompt submitted')).statusCode, 201);
+      assert.equal((await report('running', 'session reports busy')).statusCode, 201);
+      assert.equal((await report('idle', 'session reports idle; not task success')).statusCode, 201);
       assert.equal((await report('retrying', 'attempt 1 failed')).statusCode, 201);
       assert.equal((await report('failed', 'all attempts failed')).statusCode, 201);
       const detail = await app.inject({ method: 'GET', url: `/api/issues/${issueId}` });
       const events = detail.json<{ activities: { action: string; detail: string }[] }>().activities
         .filter(activity => activity.action === 'execution');
-      assert.equal(events.length, 3);
+      assert.equal(events.length, 5);
       assert.ok(events[0]!.detail.includes('[failed] all attempts failed'));
       assert.ok(events[1]!.detail.includes('[retrying] attempt 1 failed'));
+      assert.ok(events.some(event => event.detail.includes('[running] session reports busy')));
+      assert.ok(events.some(event => event.detail.includes('[idle] session reports idle; not task success')));
     } finally {
       cleanup();
     }
