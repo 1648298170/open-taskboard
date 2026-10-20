@@ -109,7 +109,7 @@ async function assertSafeOpenCodeDestination(url: URL): Promise<void> {
   }
 }
 
-async function requestOpenCodeJson(url: string, directory: string, method = 'GET', body?: unknown): Promise<unknown> {
+async function requestOpenCodeJson(url: string, directory: string, method = 'GET', body?: unknown, timeoutMs = 5_000): Promise<unknown> {
   const requestUrl = new URL(url);
   await assertSafeOpenCodeDestination(requestUrl);
   if (directory) requestUrl.searchParams.set('directory', directory);
@@ -120,7 +120,7 @@ async function requestOpenCodeJson(url: string, directory: string, method = 'GET
     // A configured server URL is user-controlled. Do not follow redirects to
     // a different host, and never let an unavailable local service hang the UI.
     redirect: 'error',
-    signal: AbortSignal.timeout(5_000)
+    signal: AbortSignal.timeout(timeoutMs)
   });
   if (!response.ok) {
     throw new Error(`OpenCode server returned HTTP ${response.status}`);
@@ -201,9 +201,9 @@ const windowsDriveCache = new Map<string, { expiresAt: number; drives: OpenCodeD
  * The directory query selects the filesystem context; path="" lists that
  * directory's immediate children.
  */
-async function listDirectoryAt(base: string, absolutePath: string): Promise<unknown> {
+async function listDirectoryAt(base: string, absolutePath: string, timeoutMs = 5_000): Promise<unknown> {
   const query = new URLSearchParams({ path: '' });
-  return requestOpenCodeJson(base + '/file?' + query.toString(), absolutePath);
+  return requestOpenCodeJson(base + '/file?' + query.toString(), absolutePath, 'GET', undefined, timeoutMs);
 }
 
 /**
@@ -228,7 +228,7 @@ async function listWindowsDriveRoots(base: string): Promise<OpenCodeDirectoryEnt
       if (!letter) continue;
       const root = letter + ':\\';
       try {
-        const payload = await listDirectoryAt(base, root);
+        const payload = await listDirectoryAt(base, root, 1_200);
         if (Array.isArray(payload)) results[index] = { name: letter + ':', path: root };
       } catch {
         // Missing, unavailable, or inaccessible drives are omitted. The path
