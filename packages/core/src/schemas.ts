@@ -104,6 +104,8 @@ export const issuePatchSchema = z
 // REST PATCH keeps version optional (today's REST contract).
 export const restUpdateIssueSchema = issuePatchSchema.extend({
   version: z.number().int().positive().optional(),
+  // Required by the server for every real agent status transition; committed atomically with the status.
+  statusNote: z.string().trim().min(1).max(10000).optional(),
   // Deprecated compatibility field. A client-supplied boolean is not proof of human approval.
   confirm: z.boolean().optional(),
 });
@@ -111,6 +113,8 @@ export const restUpdateIssueSchema = issuePatchSchema.extend({
 // MCP update_issue requires version (optimistic-lock contract).
 export const mcpUpdateIssueSchema = issuePatchSchema.extend({
   version: z.number().int().positive(),
+  // Must accompany every real status transition; saved as a comment in the same transaction.
+  statusNote: z.string().trim().min(1).max(10000).optional(),
   // T7-36 閫冪敓鑸憋紙涓?restUpdateIssueSchema 瀵归綈锛夛細浜哄伐纭鍚?agent 鍙紶
   confirm: z.boolean().optional(),
 });
