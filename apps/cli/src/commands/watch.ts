@@ -387,6 +387,47 @@ export const watchCommand: Command = {
       }
     };
 
+    // OpenCode's prompt_async only acknowledges queueing. Observe the Session-level
+    // status separately, and deliberately never translate "idle" into task success:
+    // status is per Session and may include work queued by other clients.
+    const monitoredSessions = new Set<string>();
+    const monitorOpenCodeSession = async (issueId: string, sessionId: string, serverUrl: string): Promise<void> => {
+      if (monitoredSessions.has(sessionId)) return;
+      monitoredSessions.add(sessionId);
+      let observedBusy = false;
+      let reportedRunning = false;
+      const deadline = Date.now() + 10 * 60_000;
+      try {
+        while (Date.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, 2_000));
+          const response = await fetchWithTimeout(`${serverUrl}/session/status`);
+          if (!response.ok) throw new Error(`OpenCode status returned HTTP ${response.status}`);
+          const payload = await response.json() as Record<string, unknown>;
+          const rawStatus = payload && typeof payload === 'object' ? payload[sessionId] : undefined;
+          const status = rawStatus && typeof rawStatus === 'object' && 'type' in rawStatus
+            ? String((rawStatus as { type: unknown }).type)
+            : '';
+          if (status === 'busy' || status === 'retry') {
+            observedBusy = true;
+            if (!reportedRunning) {
+              reportedRunning = true;
+              await reportExecution(issueId, 'running',
+                `OpenCode Session ${sessionId} 当前处于执行状态；这是会话级状态，不代表该任务独占执行`);
+            }
+          } else if (status === 'idle' && observedBusy) {
+            await reportExecution(issueId, 'idle',
+              `OpenCode Session ${sessionId} 当前已空闲。OpenCode 未提供与本次唤醒关联的完成回执，因此不能仅凭空闲状态判定任务成功`);
+            return;
+          }
+        }
+        console.log(`watch: stopped status observation for session ${sessionId} after 10 minutes`);
+      } catch (err) {
+        console.error(`watch: session status observation failed for ${sessionId}: ${(err as Error).message}`);
+      } finally {
+        monitoredSessions.delete(sessionId);
+      }
+    };
+
     const executeWake = async (issueId: string, prompt: string, tuiUrl?: string, commentId = '', projectChannel?: string | null): Promise<boolean> => {
       // Session binding is authoritative. Never inject a bound task into the
       // currently selected TUI session, and never silently spawn a new session.
@@ -473,6 +514,7 @@ export const watchCommand: Command = {
           console.log(`watch: queued prompt in bound session ${sessionId}`);
           await markStatus(commentId, 'processing');
           await reportExecution(issueId, 'queued', `提示词已提交到绑定的 OpenCode Session ${sessionId}；该状态表示已排队，不代表 Agent 已完成`);
+          void monitorOpenCodeSession(issueId, sessionId, sessionBase);
           return true;
         } catch (err) {
           console.error(`watch: bound session ${sessionId} failed (${(err as Error).message}); no fallback session will be created`);
