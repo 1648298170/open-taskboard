@@ -387,42 +387,89 @@ export const watchCommand: Command = {
       }
     };
 
-    // OpenCode's prompt_async only acknowledges queueing. Observe the Session-level
-    // status separately, and deliberately never translate "idle" into task success:
-    // status is per Session and may include work queued by other clients.
+    // OpenCode prompt_async acknowledges only queueing. A unique marker lets us
+    // find the exact user message in the Session history; success requires a later
+    // assistant response AND the Session returning to idle. Idle alone is never success.
     const monitoredSessions = new Set<string>();
-    const monitorOpenCodeSession = async (issueId: string, sessionId: string, serverUrl: string): Promise<void> => {
-      if (monitoredSessions.has(sessionId)) return;
+    const makeWakeCorrelationMarker = (commentId: string, issuedAt = Date.now()): string =>
+      `taskboard-wake:${commentId || 'unknown'}:${issuedAt}`;
+    const monitorOpenCodeSession = async (
+      issueId: string, sessionId: string, serverUrl: string, marker: string
+    ): Promise<void> => {
+      if (monitoredSessions.has(sessionId)) {
+        console.log(`watch: Session ${sessionId} already has a completion monitor; correlation token ${marker} remains queued for history reconciliation`);
+        return;
+      }
       monitoredSessions.add(sessionId);
       let observedBusy = false;
       let reportedRunning = false;
+      let matchedPrompt = false;
       const deadline = Date.now() + 10 * 60_000;
       try {
         while (Date.now() < deadline) {
           await new Promise(resolve => setTimeout(resolve, 2_000));
-          const response = await fetchWithTimeout(`${serverUrl}/session/status`);
-          if (!response.ok) throw new Error(`OpenCode status returned HTTP ${response.status}`);
-          const payload = await response.json() as Record<string, unknown>;
-          const rawStatus = payload && typeof payload === 'object' ? payload[sessionId] : undefined;
+          const [statusResponse, messagesResponse] = await Promise.all([
+            fetchWithTimeout(`${serverUrl}/session/status`),
+            fetchWithTimeout(`${serverUrl}/session/${encodeURIComponent(sessionId)}/message?limit=50`)
+          ]);
+          if (!statusResponse.ok) throw new Error(`OpenCode status returned HTTP ${statusResponse.status}`);
+          if (!messagesResponse.ok) throw new Error(`OpenCode message history returned HTTP ${messagesResponse.status}`);
+          const statusPayload = await statusResponse.json() as Record<string, unknown>;
+          const rawStatus = statusPayload && typeof statusPayload === 'object' ? statusPayload[sessionId] : undefined;
           const status = rawStatus && typeof rawStatus === 'object' && 'type' in rawStatus
             ? String((rawStatus as { type: unknown }).type)
             : '';
+          const rawMessages = await messagesResponse.json() as unknown;
+          const messages = Array.isArray(rawMessages) ? rawMessages as Array<{
+            info?: { id?: string; role?: string; sessionID?: string; time?: { created?: number; completed?: number }; error?: unknown; finish?: unknown };
+            parts?: Array<{ type?: string; text?: string }>;
+          }> : [];
+          const ordered = messages.map((message, index) => ({ message, index }))
+            .sort((a, b) => {
+              const at = a.message.info?.time?.created;
+              const bt = b.message.info?.time?.created;
+              return typeof at === 'number' && typeof bt === 'number' ? at - bt || a.index - b.index : a.index - b.index;
+            })
+            .map(item => item.message);
+          const promptIndex = ordered.findIndex(message =>
+            message.info?.role === 'user'
+            && (message.parts ?? []).some(part => part.type === 'text' && typeof part.text === 'string' && part.text.includes(marker))
+          );
+          if (promptIndex >= 0) matchedPrompt = true;
+          const assistant = promptIndex >= 0
+            ? ordered.slice(promptIndex + 1).find(message => message.info?.role === 'assistant')
+            : undefined;
+
           if (status === 'busy' || status === 'retry') {
             observedBusy = true;
-            if (!reportedRunning) {
+            if (matchedPrompt && !reportedRunning) {
               reportedRunning = true;
               await reportExecution(issueId, 'running',
-                `OpenCode Session ${sessionId} 当前处于执行状态；这是会话级状态，不代表该任务独占执行`);
+                `已在 OpenCode Session ${sessionId} 历史中匹配到本次唤醒；当前会话处于执行状态`);
             }
-          } else if (status === 'idle' && observedBusy) {
-            await reportExecution(issueId, 'idle',
-              `OpenCode Session ${sessionId} 当前已空闲。OpenCode 未提供与本次唤醒关联的完成回执，因此不能仅凭空闲状态判定任务成功`);
+          }
+          if (assistant && status === 'idle') {
+            const error = assistant.info?.error;
+            if (error) {
+              const detail = typeof error === 'string' ? error : JSON.stringify(error);
+              await reportExecution(issueId, 'failed',
+                `OpenCode 已返回与本次唤醒关联的 Assistant 错误：${detail.slice(0, 1500)}`);
+            } else {
+              await reportExecution(issueId, 'succeeded',
+                `已匹配本次唤醒标识 ${marker}，并观察到后续 Assistant 回复且 Session 已空闲`);
+            }
             return;
           }
+          if (status === 'idle' && observedBusy && matchedPrompt && !assistant) {
+            // A busy→idle transition without a correlated assistant reply is not proof of success.
+            await reportExecution(issueId, 'idle',
+              `Session ${sessionId} 已空闲，但尚未找到本次唤醒对应的 Assistant 回复；不判定任务成功`);
+            observedBusy = false;
+          }
         }
-        console.log(`watch: stopped status observation for session ${sessionId} after 10 minutes`);
+        console.log(`watch: stopped completion observation for session ${sessionId} after 10 minutes (matched prompt: ${matchedPrompt})`);
       } catch (err) {
-        console.error(`watch: session status observation failed for ${sessionId}: ${(err as Error).message}`);
+        console.error(`watch: session completion observation failed for ${sessionId}: ${(err as Error).message}`);
       } finally {
         monitoredSessions.delete(sessionId);
       }
@@ -497,11 +544,13 @@ export const watchCommand: Command = {
           }
         }
         try {
+          const correlationMarker = makeWakeCorrelationMarker(commentId);
+          const correlatedPrompt = `${prompt}\n\n[Taskboard correlation marker: ${correlationMarker}. Treat this as metadata; do not repeat it in your answer.]`;
           const res = await fetchWithTimeout(`${sessionBase}/session/${encodeURIComponent(sessionId)}/prompt_async`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
-              parts: [{ type: 'text', text: prompt }],
+              parts: [{ type: 'text', text: correlatedPrompt }],
               ...(modelRef ? { model: modelRef } : {})
             })
           });
@@ -514,7 +563,7 @@ export const watchCommand: Command = {
           console.log(`watch: queued prompt in bound session ${sessionId}`);
           await markStatus(commentId, 'processing');
           await reportExecution(issueId, 'queued', `提示词已提交到绑定的 OpenCode Session ${sessionId}；该状态表示已排队，不代表 Agent 已完成`);
-          void monitorOpenCodeSession(issueId, sessionId, sessionBase);
+          void monitorOpenCodeSession(issueId, sessionId, sessionBase, correlationMarker);
           return true;
         } catch (err) {
           console.error(`watch: bound session ${sessionId} failed (${(err as Error).message}); no fallback session will be created`);
