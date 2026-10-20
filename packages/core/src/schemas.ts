@@ -105,7 +105,7 @@ export const issuePatchSchema = z
 export const restUpdateIssueSchema = issuePatchSchema.extend({
   version: z.number().int().positive().optional(),
   // Required by the server for every real agent status transition; committed atomically with the status.
-  statusNote: z.string().trim().min(1).max(10000).optional(),
+  statusNote: z.string().trim().min(1).max(10000).describe('Required for each actual agent status transition. Explain the reason, verification evidence, and unchecked items.').optional(),
   // Deprecated compatibility field. A client-supplied boolean is not proof of human approval.
   confirm: z.boolean().optional(),
 });
