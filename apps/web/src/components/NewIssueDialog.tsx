@@ -4,10 +4,11 @@ import { api_, OpenCodeSessionOption, PRIORITIES, Priority } from '../api';
 import { initialSessionId, mergeSessionOptions } from '../logic/session';
 import { WAKE_PREFIX } from '@taskboard/core/types';
 
-export function NewIssueDialog({ open, projectId, workspacePath, defaultSessionId, onClose, onCreated, onError }: {
+export function NewIssueDialog({ open, projectId, workspacePath, serverUrl, defaultSessionId, onClose, onCreated, onError }: {
   open: boolean;
   projectId: string;
   workspacePath?: string;
+  serverUrl?: string;
   defaultSessionId?: string | null;
   onClose: () => void;
   onCreated: (parentId?: string) => void;
@@ -105,7 +106,7 @@ export function NewIssueDialog({ open, projectId, workspacePath, defaultSessionI
         <label>标题<input name="title" required autoFocus placeholder="一句话讲清楚要做什么" /></label>
         <label>父任务 ID（可选，留空为顶层任务）<input name="parent" placeholder="填父任务 id，如 a1b2c3d4" /></label>
         <label>OpenCode 会话（必选）
-          <Select value={sessionId} onChange={value => { setSessionId(value); setError(null); }}
+          <Select value={sessionId} disabled={Boolean(defaultSessionId)} onChange={value => { setSessionId(value); setError(null); }}
             options={sessions.map(session => ({
               value: session.id,
               label: session.title + ' · ' + session.id.slice(0, 12)
@@ -113,6 +114,11 @@ export function NewIssueDialog({ open, projectId, workspacePath, defaultSessionI
             placeholder={sessionsLoading ? '正在读取会话…' : '选择已有会话'}
             emptyText={sessionsLoading ? '正在读取会话…' : '当前没有OpenCode 会话，请先前往OpenCode创建会话'} />
         </label>
+        {defaultSessionId && (
+          <p className="session-hint">
+            会话、工作目录{serverUrl ? ` 与 OpenCode Server（${serverUrl}）` : ''} 继承自所属项目，不可修改。
+          </p>
+        )}
         {sessionId && sessions.find(session => session.id === sessionId) && (
           <p className="session-hint">
             会话目录：{sessions.find(session => session.id === sessionId)?.directory || '未提供'}

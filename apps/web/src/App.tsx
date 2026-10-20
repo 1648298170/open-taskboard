@@ -36,10 +36,14 @@ export default function App() {
   const [directoryCreateOpen, setDirectoryCreateOpen] = useState(false);
   const [directoryName, setDirectoryName] = useState('');
   const [directoryWorkspacePath, setDirectoryWorkspacePath] = useState('');
+  const [directoryServerUrl, setDirectoryServerUrl] = useState('');
   const [defaultWorkspacePath, setDefaultWorkspacePath] = useState('');
+  const [defaultOpenCodeServerUrl, setDefaultOpenCodeServerUrl] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPathInput, setSettingsPathInput] = useState('');
+  const [settingsServerInput, setSettingsServerInput] = useState('');
   const [projectDirectoryId, setProjectDirectoryId] = useState('');
+  const [projInheritLocked, setProjInheritLocked] = useState(false);
   const [projDefaultSessionId, setProjDefaultSessionId] = useState('');
   const [projSessions, setProjSessions] = useState<import('./api').OpenCodeSessionOption[]>([]);
   const [projSessionsLoading, setProjSessionsLoading] = useState(false);
@@ -224,6 +228,8 @@ export default function App() {
     api_.getSettings().then(settings => {
       setDefaultWorkspacePath(settings.defaultWorkspacePath);
       setSettingsPathInput(settings.defaultWorkspacePath);
+      setDefaultOpenCodeServerUrl(settings.defaultOpenCodeServerUrl);
+      setSettingsServerInput(settings.defaultOpenCodeServerUrl);
     }).catch(err => {
       if (isUnauthorized(err)) setNeedToken(true);
       else showToast('✗ 读取全局设置失败：' + (err as Error).message);
@@ -511,7 +517,7 @@ export default function App() {
           <div className="sidebar-heading">
             <span>目录</span>
             <button className="icon-btn" title="全局设置" aria-label="全局设置" onClick={() => { setSettingsPathInput(defaultWorkspacePath); setSettingsOpen(true); }}><Settings size={15} /></button>
-            <button className="icon-btn" title="新建目录" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryCreateOpen(true); }}><Plus size={15} /></button>
+            <button className="icon-btn" title="新建目录" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryServerUrl(defaultOpenCodeServerUrl); setDirectoryCreateOpen(true); }}><Plus size={15} /></button>
           </div>
           <nav className="side-projects" aria-label="目录与项目">
             {directories.map(directory => {
@@ -533,7 +539,8 @@ export default function App() {
                       const existing = children[0];
                       setProjName(''); setProjId(''); setProjLabels('');
                       setProjWorkspacePath(directory.workspacePath || existing?.workspacePath || '');
-                      setProjServerUrl(existing?.wakeChannel ?? '');
+                      setProjServerUrl(directory.serverUrl || existing?.wakeChannel || defaultOpenCodeServerUrl);
+                      setProjInheritLocked(true);
                       setProjectDirectoryId(directory.id); setProjCreateOpen(true);
                       setExpandedDirectories(prev => new Set(prev).add(directory.id));
                     }}><Plus size={14} /></button>
@@ -576,14 +583,15 @@ export default function App() {
             {!directories.length && <div className="side-empty">还没有目录</div>}
           </nav>
           <div className="side-actions">
-            <button className="side-btn" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryCreateOpen(true); }}><Plus size={14} /> 新建目录</button>
+            <button className="side-btn" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryServerUrl(defaultOpenCodeServerUrl); setDirectoryCreateOpen(true); }}><Plus size={14} /> 新建目录</button>
             <button className="side-btn" disabled={!directories.length} onClick={() => {
               const current = projects.find(project => project.id === projectId);
               const directoryId = current?.directoryId ?? (directories.some(directory => directory.id === projectDirectoryId) ? projectDirectoryId : directories[0]?.id) ?? '';
               const existing = projects.find(project => project.directoryId === directoryId);
               setProjName(''); setProjId(''); setProjLabels('');
-              setProjWorkspacePath(existing?.workspacePath ?? '');
-              setProjServerUrl(existing?.wakeChannel ?? '');
+              setProjWorkspacePath(existing?.workspacePath ?? directories.find(d => d.id === directoryId)?.workspacePath ?? '');
+              setProjServerUrl(existing?.wakeChannel ?? directories.find(d => d.id === directoryId)?.serverUrl ?? defaultOpenCodeServerUrl);
+              setProjInheritLocked(false);
               setProjectDirectoryId(directoryId); setProjCreateOpen(true);
             }}><Plus size={14} /> 新建项目</button>
             <button className="side-btn" disabled={!projectId} onClick={async () => {
@@ -704,8 +712,10 @@ export default function App() {
             const directoryId = directories[0]?.id ?? '';
             setProjectDirectoryId(directoryId);
             setProjName(''); setProjId(''); setProjLabels('');
-            setProjWorkspacePath(directories[0]?.workspacePath ?? ''); setProjServerUrl('');
+            setProjWorkspacePath(directories[0]?.workspacePath ?? '');
+            setProjServerUrl(directories[0]?.serverUrl || defaultOpenCodeServerUrl);
             setProjDefaultSessionId(''); setProjSessions([]);
+            setProjInheritLocked(false);
             setProjCreateOpen(true);
             setExpandedDirectories(prev => new Set(prev).add(directoryId));
           }}>在目录下创建项目</button>
@@ -770,6 +780,7 @@ export default function App() {
 
       <NewIssueDialog open={dialogOpen} projectId={projectId!}
         workspacePath={projects.find(project => project.id === projectId)?.workspacePath}
+        serverUrl={projects.find(project => project.id === projectId)?.wakeChannel}
         defaultSessionId={projects.find(project => project.id === projectId)?.defaultSessionId}
         onClose={() => setDialogOpen(false)}
         onCreated={id => { void refresh(); if (id) openIssue(id); }}
@@ -781,10 +792,12 @@ export default function App() {
             e.preventDefault();
             const name = directoryName.trim();
             const workspacePath = directoryWorkspacePath.trim() || defaultWorkspacePath.trim();
+            const serverUrl = directoryServerUrl.trim() || defaultOpenCodeServerUrl.trim();
             if (!name) { showToast('✗ 目录名称不能为空'); return; }
             if (!workspacePath) { showToast('请先填写当前目录的工作目录，或在全局设置中配置默认工作目录。'); setSettingsPathInput(defaultWorkspacePath); setSettingsOpen(true); return; }
+            if (!serverUrl) { showToast('请先填写当前目录的 OpenCode Server URL，或在全局设置中配置默认 Server URL。'); setSettingsServerInput(defaultOpenCodeServerUrl); setSettingsOpen(true); return; }
             try {
-              const directory = await api_.createDirectory({ name, workspacePath });
+              const directory = await api_.createDirectory({ name, workspacePath, serverUrl });
               setDirectories(prev => [...prev, directory]);
               setExpandedDirectories(prev => new Set(prev).add(directory.id));
               setDirectoryCreateOpen(false);
@@ -796,7 +809,8 @@ export default function App() {
             <h2>新建目录</h2>
             <label>目录名称<input required autoFocus value={directoryName} placeholder="例如：前端项目" onChange={e => setDirectoryName(e.target.value)} /></label>
             <label>默认工作目录地址<input value={directoryWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app" onChange={e => setDirectoryWorkspacePath(e.target.value)} /></label>
-            <p className="dialog-note">新建项目时会自动继承此工作目录地址。需要时仍可在项目中单独修改；OpenCode Server 和 Session 由项目配置。若留空，将使用全局默认工作目录。</p>
+            <label>OpenCode Server URL<input value={directoryServerUrl} placeholder="例如：http://127.0.0.1:4096" onChange={e => setDirectoryServerUrl(e.target.value)} /></label>
+            <p className="dialog-note">新建项目时会自动继承此工作目录与 OpenCode Server URL，且项目内不可修改；Session 在项目中绑定。全局设置可提供默认值。</p>
             <menu><button type="button" className="btn" onClick={() => setDirectoryCreateOpen(false)}>取消</button><button type="submit" className="btn primary">创建目录</button></menu>
           </form>
         </dialog>
@@ -807,18 +821,26 @@ export default function App() {
           <form onSubmit={async e => {
             e.preventDefault();
             try {
-              const settings = await api_.updateSettings({ defaultWorkspacePath: settingsPathInput.trim() });
+              const settings = await api_.updateSettings({
+                defaultWorkspacePath: settingsPathInput.trim(),
+                defaultOpenCodeServerUrl: settingsServerInput.trim()
+              });
               setDefaultWorkspacePath(settings.defaultWorkspacePath);
+              setDefaultOpenCodeServerUrl(settings.defaultOpenCodeServerUrl);
               if (directoryCreateOpen && !directoryWorkspacePath.trim()) setDirectoryWorkspacePath(settings.defaultWorkspacePath);
+              if (directoryCreateOpen && !directoryServerUrl.trim()) setDirectoryServerUrl(settings.defaultOpenCodeServerUrl);
               setSettingsOpen(false);
-              showToast(settings.defaultWorkspacePath ? '已保存全局默认工作目录' : '已清空全局默认工作目录');
+              showToast(settings.defaultWorkspacePath || settings.defaultOpenCodeServerUrl ? '已保存全局默认配置' : '已清空全局默认配置');
             } catch (err) { showToast('✗ 保存全局设置失败：' + (err as Error).message); }
           }}>
             <h2>全局设置</h2>
             <label>默认工作目录地址
               <input autoFocus value={settingsPathInput} placeholder="例如：D:\\workspace\\projects" onChange={e => setSettingsPathInput(e.target.value)} />
             </label>
-            <p className="dialog-note">新建目录时会默认填入此路径。留空不会影响已有目录或项目；新建目录时必须手动填写工作目录。修改此设置不会自动修改已创建的目录和项目。</p>
+            <label>默认 OpenCode Server URL
+              <input value={settingsServerInput} placeholder="例如：http://127.0.0.1:4096" onChange={e => setSettingsServerInput(e.target.value)} />
+            </label>
+            <p className="dialog-note">新建目录时会默认填入这两个值；目录创建后，其工作目录与 Server URL 会锁定到项目。修改此设置不会自动修改已创建的目录和项目。</p>
             <menu><button type="button" className="btn" onClick={() => setSettingsOpen(false)}>取消</button><button type="submit" className="btn primary">保存设置</button></menu>
           </form>
         </dialog>
@@ -850,18 +872,19 @@ export default function App() {
             <div className="row">
               <label>项目 ID（可选）<input value={projId} placeholder="留空自动生成" onChange={e => setProjId(e.target.value)} /></label>
               <label>目录
-                <Select value={projectDirectoryId} onChange={value => { const existing = projects.find(project => project.directoryId === value); setProjectDirectoryId(value); setProjWorkspacePath(directories.find(directory => directory.id === value)?.workspacePath || existing?.workspacePath || ''); setProjServerUrl(existing?.wakeChannel ?? ''); setProjDefaultSessionId(''); setProjSessions([]); }}
+                <Select value={projectDirectoryId} disabled={projInheritLocked} onChange={value => { const existing = projects.find(project => project.directoryId === value); const directory = directories.find(d => d.id === value); setProjectDirectoryId(value); setProjWorkspacePath(directory?.workspacePath || existing?.workspacePath || ''); setProjServerUrl(existing?.wakeChannel || directory?.serverUrl || defaultOpenCodeServerUrl); setProjDefaultSessionId(''); setProjSessions([]); }}
                   options={directories.map(directory => ({ value: directory.id, label: directory.name }))} placeholder="选择目录" />
               </label>
             </div>
             <label>项目工作目录绝对路径
-              <input required value={projWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app"
+              <input required disabled={projInheritLocked} value={projWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app"
                 onChange={e => { setProjWorkspacePath(e.target.value); setProjDefaultSessionId(''); }} />
             </label>
             <label>OpenCode Server URL
-              <input required value={projServerUrl} placeholder="例如：http://127.0.0.1:4096"
+              <input required disabled={projInheritLocked} value={projServerUrl} placeholder="例如：http://127.0.0.1:4096"
                 onChange={e => { setProjServerUrl(e.target.value); setProjDefaultSessionId(''); }} />
             </label>
+            {projInheritLocked && <p className="session-hint">工作目录与 OpenCode Server URL 继承自目录，不可修改。</p>}
             <label>默认 OpenCode Session（必选）
               <div className="session-select-row">
                 <div className="session-select-control">
@@ -873,7 +896,7 @@ export default function App() {
                     const pickedName = sessionProjectName(picked);
                     if (pickedName) setProjName(pickedName);
                     const pickedWorkspace = sessionWorkspacePath(picked);
-                    if (pickedWorkspace) setProjWorkspacePath(pickedWorkspace);
+                    if (!projInheritLocked && pickedWorkspace) setProjWorkspacePath(pickedWorkspace);
                   }}
                     options={projSessions.map(session => ({ value: session.id, label: session.title + ' · ' + session.id.slice(0, 12) }))}
                     placeholder="选择会话"

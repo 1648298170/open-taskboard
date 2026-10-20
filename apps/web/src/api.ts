@@ -2,7 +2,7 @@
 // one definition shared by server / cli / mcp / web. Imported via the
 // './types' subpath so the Node-only SQLite Store stays out of the bundle.
 import type {
-  Activity, Attachment, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Stats, Status, WorkspaceDirectory
+  Activity, AppSettings, Attachment, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Stats, Status, WorkspaceDirectory
 } from '@taskboard/core/types';
 
 export type {
@@ -63,12 +63,12 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 export const api_ = {
-  getSettings: () => api<{ defaultWorkspacePath: string }>('GET', '/api/settings'),
-  updateSettings: (p: { defaultWorkspacePath: string }) => api<{ defaultWorkspacePath: string }>('PUT', '/api/settings', p),
+  getSettings: () => api<AppSettings>('GET', '/api/settings'),
+  updateSettings: (p: Partial<AppSettings>) => api<AppSettings>('PUT', '/api/settings', p),
   listDirectories: () => api<WorkspaceDirectory[]>('GET', '/api/directories'),
-  createDirectory: (p: { id?: string; name: string; workspacePath?: string }) =>
+  createDirectory: (p: { id?: string; name: string; workspacePath?: string; serverUrl?: string }) =>
     api<WorkspaceDirectory>('POST', '/api/directories', p),
-  updateDirectory: (id: string, p: { name?: string; workspacePath?: string }) =>
+  updateDirectory: (id: string, p: { name?: string; workspacePath?: string; serverUrl?: string }) =>
     api<WorkspaceDirectory>('PATCH', `/api/directories/${encodeURIComponent(id)}`, p),
   deleteDirectory: (id: string) => api<{ ok: true }>('DELETE', `/api/directories/${encodeURIComponent(id)}`),
   openCodeSessionsForDirectory: (id: string, workspacePath: string, serverUrl: string) =>

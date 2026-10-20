@@ -9,7 +9,7 @@ export interface SelectOption {
   label: string;
 }
 
-export function Select({ value, options, onChange, placeholder, title, ariaLabel, emptyText }: {
+export function Select({ value, options, onChange, placeholder, title, ariaLabel, emptyText, disabled }: {
   value: string;
   options: SelectOption[];
   onChange: (value: string) => void;
@@ -19,6 +19,8 @@ export function Select({ value, options, onChange, placeholder, title, ariaLabel
   ariaLabel?: string;
   /** 无选项且面板展开时显示的提示（如「当前没有会话」）。 */
   emptyText?: string;
+  /** 只读模式：触发器不可点击，键盘也不展开面板。 */
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
@@ -68,6 +70,7 @@ export function Select({ value, options, onChange, placeholder, title, ariaLabel
   }, [open, hi]);
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
+    if (disabled) return;
     if (!open) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
@@ -90,8 +93,8 @@ export function Select({ value, options, onChange, placeholder, title, ariaLabel
   return (
     <>
       <button ref={btnRef} type="button" className="tb-select" title={title} aria-label={ariaLabel}
-        aria-haspopup="listbox" aria-expanded={open}
-        onClick={() => (open ? setOpen(false) : openPanel())}
+        aria-haspopup="listbox" aria-expanded={open} disabled={disabled}
+        onClick={() => { if (disabled) return; open ? setOpen(false) : openPanel(); }}
         onKeyDown={onKeyDown}>
         <span className="tb-select-value">{label}</span>
         <span className="tb-select-caret">▾</span>
