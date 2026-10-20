@@ -87,7 +87,9 @@ export function findCorrelatedAssistant(
     && (message.parts ?? []).some(part => part.type === 'text' && typeof part.text === 'string' && part.text.includes(marker))
   );
   if (promptIndex < 0) return { matchedPrompt: false };
-  const promptId = messages[promptIndex].info?.id;
+  const promptMessage = messages[promptIndex];
+  if (!promptMessage) return { matchedPrompt: false };
+  const promptId = promptMessage.info?.id;
   // Prefer OpenCode's explicit parent relationship. This remains correct even
   // when several prompts are queued before the first Assistant response arrives.
   const linkedAssistant = promptId
