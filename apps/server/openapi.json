@@ -2359,7 +2359,7 @@
           "Issues"
         ],
         "summary": "Create task branch and worktree",
-        "description": "Creates a dedicated task/<issue-id>-<title> branch and a sibling worktree under .taskboard-worktrees. Existing branches and paths are never overwritten. Repeating the request for an already bound, valid worktree is idempotent.",
+        "description": "Creates a dedicated branch and worktree for the task. Rejects conflicts and active task leases. Clears any prior Session binding because a Session rooted in the project's main checkout must not be reused from the new worktree; create a new Session in the bound worktree.",
         "parameters": [
           {
             "name": "id",
