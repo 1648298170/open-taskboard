@@ -52,9 +52,9 @@ pnpm start      # 启动服务 http://127.0.0.1:47824（0.0.0.0 时额外打印 
 - **目录与项目绑定**：左侧目录是逻辑分组，不是文件系统路径；每个项目独立保存 `workspacePath`、`wakeChannel`（OpenCode Server URL）和可选 `defaultSessionId`。Web 新建项目时必须先选择或新建一个属于该项目工作目录的 Session；新建任务默认预选项目的 `defaultSessionId`，但任务可以选择同目录下的其他 Session。Agent 创建任务可带自己的 `sessionId`；认领未绑定任务时传 `claim --session-id` / `claim_issue sessionId`（认领即绑定，只绑空位）；**已绑他人会话不抢绑**——绑定即所有权，接管需显式解绑。
 - **会话唤醒必须同会话**：已绑定 `sessionId` 的任务使用 OpenCode v1 `POST /session/:id/prompt_async`；不得投到当前 TUI 选中会话，也不得静默 fallback 到新 headless 会话。投递失败时保持唤醒评论 `pending`，修复服务地址后重试。未绑定任务才允许 TUI/headless fallback。
 - **唤醒收尾必推评论**：agent 被 `@agent` 评论唤醒并处理完后，把该评论置 `processed`（TUI 注入通道 watch 观测不到完工，headless 才有 exit-0 自动标）；漏推则面板任务完成后评论仍挂「唤醒中」。
-- 拆解需求：先建父任务（顶层），再用 parentId 建子任务（仅两层），一个可独立交付的子需求一个任务。子任务开工（认领或手动流转）会自动把 `todo` 父任务拉到 `in_progress`（单向）；父任务的 `in_review`/`done` 始终人工——全子 done 也不自动关闭父任务。
+- 拆解需求：先建父任务（顶层），再用 parentId 建子任务（仅两层），一个可独立交付的子需求一个任务。子任务开工（认领或手动流转）会自动把 `todo` 父任务拉到 `in_progress`；当所有子任务都进入 `in_review` 或 `done` 时，父任务自动进入 `in_review`（待验收）；父任务的 `done` 始终人工，全子 done 也不自动关闭父任务。
 - 进展与重要结论写入评论（`add_comment`），不要只留在对话里；有依赖关系用 dep-add 标注，不要靠对话约定。
-- 顶层父任务在所有子任务 done 后才算完成，不要提前关闭父任务。
+- 顶层父任务在所有子任务 done 后进入待验收，最终 done 仍需人工确认，不要提前关闭父任务。
 
 常用命令：`taskboard next|ready`（智能取任务）、`search "关键词"`（全文搜索）、`export`（导出 JSON/MD）、`stats`（统计）。
 

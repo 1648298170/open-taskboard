@@ -80,7 +80,7 @@ todo → in_progress → in_review → done
 
 - **认领即开工**：AI `claim` 一个 todo 任务，状态自动变「进行中」，并把任务绑定到它的会话——卡片上的 👤 徽章告诉你谁在做
 - **验收在你手里**：AI 做完只会到「待验收」（in_review）；done 由你在面板点，AI 想跳过验收会被服务器直接拒绝（403 门禁，默认开启）
-- **子任务开工，父任务自动亮起**：任一子任务开工，父任务自动从待办进入进行中（单向；父任务的验收与关闭永远人工）
+- **子任务开工，父任务自动流转**：任一子任务开工，父任务自动从待办进入进行中；所有子任务进入待验收或完成后，父任务自动进入待验收（in_review）；父任务的最终 done 始终人工
 - **删除都有二次确认**：小操作（评论/依赖边）原位两步确认，大操作（任务/批量）应用内弹窗，整个项目要手输 id
 - **每个 AI 干活都留痕**：活动流记录谁在何时做了什么；乐观锁保证多 AI 并发互不覆盖
 - **开工必绑（默认开启）**：agent 认领/流转任务必须带 `sessionId` 与当前分支名——缺了会被 403 挡住并给出补齐方法（`TASKBOARD_REQUIRE_SESSION=0` 退出）
@@ -266,7 +266,7 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 
 ## 功能
 
-- 父子两层任务拆解、四列状态流转（todo → in_progress → in_review → done）；子任务开工自动把 `todo` 父任务拉到 `in_progress`（单向），父任务 `in_review`/`done` 始终人工
+- 父子两层任务拆解、四列状态流转（todo → in_progress → in_review → done）；子任务开工自动把 `todo` 父任务拉到 `in_progress`；所有子任务进入 `in_review`/`done` 时父任务自动进入 `in_review`，最终 `done` 始终人工
 - 乐观锁版本（`version` / `--expected-version` / MCP `update_issue` 必填）防并发覆盖
 - 独占租约：claim / heartbeat / release，多 agent 并发防碰撞；`next`/`ready` 自动跳过他人租约中的任务
 - 依赖阻塞：blocked-by 边 + 循环检测 + 同项目约束；`ready`/`next` 只返回依赖全 done 的任务

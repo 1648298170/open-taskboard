@@ -63,7 +63,7 @@ taskboard progress --project my-project
 2. 子任务标题用动词开头、可验证的粒度（一次会话能完成）。
 3. 每个子任务尽量绑定分支（`--branch`）。
 4. 拆解后向用户展示任务清单（`issue list`）确认。
-5. 子任务开工（认领或手动流转）会自动把 `todo` 父任务拉到 `in_progress`（单向）；父任务的 `in_review`/`done` 始终人工——全子 done 也不自动关闭父任务。
+5. 子任务开工（认领或手动流转）会自动把 `todo` 父任务拉到 `in_progress`；所有子任务进入 `in_review` 或 `done` 时父任务自动进入 `in_review`；父任务的最终 `done` 始终人工，全子 done 也不自动关闭父任务。
 
 ## 跟踪任务的规则
 
@@ -71,4 +71,4 @@ taskboard progress --project my-project
 2. 遇到阻塞或重要结论：写 `comment add`，而不是只留在对话里。
 3. 完成并自验后：任务 `--status in_review` + 评论写明验证方式，并把本次唤醒你的待处理评论置 `processed`（见上「收尾必推唤醒评论」），请用户验收。
 4. 用户确认后才 `issue done`。
-5. 顶层父任务在所有子任务 done 后才算完成，不要提前关闭父任务。
+5. 顶层父任务在所有子任务 done 后进入待验收，最终 done 仍需人工确认，不要提前关闭父任务。
