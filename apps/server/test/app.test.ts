@@ -952,7 +952,7 @@ describe('task Git worktree creation', () => {
       git(['branch', conflictBranch]);
       const conflict = await app.inject({
         method: 'POST', url: `/api/issues/${conflictId}/create-worktree`,
-        headers: { ...json, 'x-taskboard-actor': 'web' }, payload: {}
+        headers: { 'x-taskboard-actor': 'web' }
       });
       assert.equal(conflict.statusCode, 409);
       assert.match(conflict.json<{ error: string }>().error, /分支已存在/);
@@ -966,7 +966,7 @@ describe('task Git worktree creation', () => {
 
       const created = await app.inject({
         method: 'POST', url: `/api/issues/${issueId}/create-worktree`,
-        headers: { ...json, 'x-taskboard-actor': 'web' }, payload: {}
+        headers: { 'x-taskboard-actor': 'web' }
       });
       assert.equal(created.statusCode, 201, created.body);
       const body = created.json<{ branch: string; worktree: string; worktreePath: string; alreadyBound: boolean; issue: { branch: string; worktreePath: string } }>();
@@ -980,7 +980,7 @@ describe('task Git worktree creation', () => {
 
       const retry = await app.inject({
         method: 'POST', url: `/api/issues/${issueId}/create-worktree`,
-        headers: { ...json, 'x-taskboard-actor': 'web' }, payload: {}
+        headers: { 'x-taskboard-actor': 'web' }
       });
       assert.equal(retry.statusCode, 200, retry.body);
       assert.equal(retry.json<{ alreadyBound: boolean }>().alreadyBound, true);
@@ -1025,7 +1025,7 @@ describe('task OpenCode Session binding', () => {
       const issueId = await seedIssue(app);
       const response = await app.inject({
         method: 'POST', url: `/api/issues/${issueId}/opencode-session`,
-        headers: { ...json, 'x-taskboard-actor': 'web' }, payload: {}
+        headers: { 'x-taskboard-actor': 'web' }
       });
       assert.equal(response.statusCode, 400);
       assert.match(response.json<{ error: string }>().error, /OpenCode Server URL/);
