@@ -333,7 +333,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       await abortOpenCodeSession(project.wakeChannel, directory, issue.sessionId);
       store.recordExecutionEvent(
         issue.id,
-        'cancelled',
+        'cancel_requested',
         `已向 OpenCode Session ${issue.sessionId} 发送取消请求；任务状态未自动变更`,
         String(req.headers['x-taskboard-actor'] ?? 'web')
       );
@@ -416,7 +416,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
   });
 
   app.post('/api/issues/:id/agent-events', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
-    const eventSchema = z.object({ outcome: z.enum(['started', 'queued', 'running', 'idle', 'retrying', 'succeeded', 'failed', 'cancelled']), detail: z.string().trim().min(1).max(2000) });
+    const eventSchema = z.object({ outcome: z.enum(['started', 'queued', 'running', 'idle', 'retrying', 'succeeded', 'failed', 'cancel_requested']), detail: z.string().trim().min(1).max(2000) });
     const parsed = eventSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     const actor = String(req.headers['x-taskboard-actor'] ?? 'watch');
