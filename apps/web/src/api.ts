@@ -33,6 +33,17 @@ export interface OpenCodeSessionOption {
   updatedAt: number | null;
 }
 
+export interface WorkspaceDirectoryEntry {
+  name: string;
+  path: string;
+}
+
+export interface WorkspaceDirectoryListing {
+  path: string;
+  parentPath: string | null;
+  entries: WorkspaceDirectoryEntry[];
+}
+
 /** T2-9: API 错误，携带 HTTP status — App 据此识别 401 并弹出令牌输入。 */
 export class ApiError extends Error {
   readonly status: number;
@@ -65,6 +76,11 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 export const api_ = {
   getSettings: () => api<AppSettings>('GET', '/api/settings'),
   updateSettings: (p: Partial<AppSettings>) => api<AppSettings>('PUT', '/api/settings', p),
+  browseWorkspaceDirectories: (serverUrl: string, path?: string) => {
+    const query = new URLSearchParams({ serverUrl });
+    if (path?.trim()) query.set('path', path.trim());
+    return api<WorkspaceDirectoryListing>('GET', `/api/directories/browse?${query.toString()}`);
+  },
   listDirectories: () => api<WorkspaceDirectory[]>('GET', '/api/directories'),
   createDirectory: (p: { id?: string; name: string; workspacePath?: string; serverUrl?: string }) =>
     api<WorkspaceDirectory>('POST', '/api/directories', p),
