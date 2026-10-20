@@ -255,7 +255,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
                       }
                     } catch { return; }
                   }
-                  onToast('⚠ 未确认送达：唤醒评论仍为 pending（watch 未运行或任务无可用路由）');
+                  onToast('⚠ 5 秒内未确认送达：评论仍为 pending。请检查 watch 日志和 OpenCode 服务地址。');
                 })();
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
             }}><Sparkles size={14} /> 唤醒</button>
