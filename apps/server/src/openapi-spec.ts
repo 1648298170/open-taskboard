@@ -198,7 +198,7 @@ export const openApiSpec: OpenApiDocument = {
       },
       put: {
         operationId: 'updateAppSettings', summary: 'Update global application defaults', tags: ['settings'],
-        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { defaultWorkspacePath: { type: 'string' } }, required: ['defaultWorkspacePath'], additionalProperties: false } } } },
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { defaultWorkspacePath: { type: 'string' }, defaultOpenCodeServerUrl: { type: 'string' } }, additionalProperties: false } } } },
         responses: { 200: { description: 'Updated settings', ...jsonResponse({ $ref: '#/components/schemas/AppSettings' }) }, 400: { $ref: '#/components/responses/BadRequest' }, ...commonResponses(true) }
       }
     },
@@ -1082,8 +1082,11 @@ export const openApiSpec: OpenApiDocument = {
       },
       AppSettings: {
         type: 'object', description: 'Persistent global application defaults',
-        properties: { defaultWorkspacePath: { type: 'string', description: 'Default path prefilled when creating workspace directories' } },
-        required: ['defaultWorkspacePath'], additionalProperties: false
+        properties: {
+          defaultWorkspacePath: { type: 'string', description: 'Default path prefilled when creating workspace directories' },
+          defaultOpenCodeServerUrl: { type: 'string', description: 'Default OpenCode Server URL prefilled when creating workspace directories' }
+        },
+        required: ['defaultWorkspacePath', 'defaultOpenCodeServerUrl'], additionalProperties: false
       },
       WorkspaceDirectory: {
         type: 'object',
@@ -1092,9 +1095,10 @@ export const openApiSpec: OpenApiDocument = {
           id: { type: 'string' },
           name: { type: 'string', description: 'Sidebar grouping name; not a filesystem path' },
           workspacePath: { type: 'string', description: 'Default filesystem workspace path inherited by new projects' },
+          serverUrl: { type: 'string', description: 'Default OpenCode Server URL inherited by new projects' },
           createdAt: { type: 'string', format: 'date-time' }
         },
-        required: ['id', 'name', 'workspacePath', 'createdAt'],
+        required: ['id', 'name', 'workspacePath', 'serverUrl', 'createdAt'],
         additionalProperties: false
       },
       Project: {
@@ -1333,7 +1337,8 @@ export const openApiSpec: OpenApiDocument = {
         properties: {
           id: { type: 'string' },
           name: { type: 'string', minLength: 1 },
-          workspacePath: { type: 'string' }
+          workspacePath: { type: 'string' },
+          serverUrl: { type: 'string', maxLength: 500 }
         },
         required: ['name'],
         additionalProperties: false
@@ -1343,7 +1348,8 @@ export const openApiSpec: OpenApiDocument = {
         description: 'PATCH /api/directories/{directoryId} body (strict)',
         properties: {
           name: { type: 'string', minLength: 1 },
-          workspacePath: { type: 'string' }
+          workspacePath: { type: 'string' },
+          serverUrl: { type: 'string', maxLength: 500 }
         },
         additionalProperties: false
       },

@@ -284,3 +284,43 @@ describe('OpenAPI contract', () => {
     cleanup();
   });
 });
+
+describe('directory server inheritance', () => {
+  it('persists serverUrl and lets projects inherit it', async () => {
+    const { app, cleanup } = await makeApp();
+    const dirRes = await app.inject({
+      method: 'POST', url: '/api/directories', headers: json,
+      payload: { name: 'D', workspacePath: 'D:/ws', serverUrl: 'http://10.0.0.5:4096' }
+    });
+    assert.equal(dirRes.statusCode, 201, dirRes.body);
+    const directory = dirRes.json<{ id: string; serverUrl: string }>();
+    assert.equal(directory.serverUrl, 'http://10.0.0.5:4096');
+
+    stubSessions([{ id: 'ses_d', title: 'D', directory: 'D:/ws' }]);
+    const res = await postProject(app, {
+      name: 'P', directoryId: directory.id, defaultSessionId: 'ses_d'
+    }, 'web');
+    assert.equal(res.statusCode, 201, res.body);
+    const project = res.json<{ wakeChannel: string; workspacePath: string }>();
+    assert.equal(project.wakeChannel, 'http://10.0.0.5:4096');
+    assert.equal(project.workspacePath, 'D:/ws');
+    cleanup();
+  });
+});
+
+describe('global defaults', () => {
+  it('persists the default OpenCode Server URL', async () => {
+    const { app, cleanup } = await makeApp();
+    const put = await app.inject({
+      method: 'PUT', url: '/api/settings', headers: json,
+      payload: { defaultWorkspacePath: 'D:/ws', defaultOpenCodeServerUrl: 'http://127.0.0.1:4096' }
+    });
+    assert.equal(put.statusCode, 200, put.body);
+    const got = (await app.inject({ method: 'GET', url: '/api/settings' })).json<{
+      defaultWorkspacePath: string; defaultOpenCodeServerUrl: string;
+    }>();
+    assert.equal(got.defaultWorkspacePath, 'D:/ws');
+    assert.equal(got.defaultOpenCodeServerUrl, 'http://127.0.0.1:4096');
+    cleanup();
+  });
+});

@@ -161,11 +161,11 @@
                 "properties": {
                   "defaultWorkspacePath": {
                     "type": "string"
+                  },
+                  "defaultOpenCodeServerUrl": {
+                    "type": "string"
                   }
                 },
-                "required": [
-                  "defaultWorkspacePath"
-                ],
                 "additionalProperties": false
               }
             }
@@ -2266,10 +2266,15 @@
           "defaultWorkspacePath": {
             "type": "string",
             "description": "Default path prefilled when creating workspace directories"
+          },
+          "defaultOpenCodeServerUrl": {
+            "type": "string",
+            "description": "Default OpenCode Server URL prefilled when creating workspace directories"
           }
         },
         "required": [
-          "defaultWorkspacePath"
+          "defaultWorkspacePath",
+          "defaultOpenCodeServerUrl"
         ],
         "additionalProperties": false
       },
@@ -2288,6 +2293,10 @@
             "type": "string",
             "description": "Default filesystem workspace path inherited by new projects"
           },
+          "serverUrl": {
+            "type": "string",
+            "description": "Default OpenCode Server URL inherited by new projects"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -2297,6 +2306,7 @@
           "id",
           "name",
           "workspacePath",
+          "serverUrl",
           "createdAt"
         ],
         "additionalProperties": false
@@ -2913,6 +2923,10 @@
           },
           "workspacePath": {
             "type": "string"
+          },
+          "serverUrl": {
+            "type": "string",
+            "maxLength": 500
           }
         },
         "required": [
@@ -2930,6 +2944,10 @@
           },
           "workspacePath": {
             "type": "string"
+          },
+          "serverUrl": {
+            "type": "string",
+            "maxLength": 500
           }
         },
         "additionalProperties": false

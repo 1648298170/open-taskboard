@@ -38,6 +38,13 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
     let input = parsed.data;
 
+    // A project created under a directory inherits the directory's OpenCode
+    // Server URL unless it explicitly overrides it.
+    if (input.directoryId && !input.wakeChannel?.trim()) {
+      const directory = store.getDirectory(input.directoryId);
+      if (directory?.serverUrl) input = { ...input, wakeChannel: directory.serverUrl };
+    }
+
     // Web project creation must bind a default Session. CLI/MCP may still
     // create unbound projects for legacy automation.
     if (actor === 'web' && !input.defaultSessionId?.trim()) {
