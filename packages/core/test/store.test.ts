@@ -1665,6 +1665,15 @@ describe('isWakeComment', () => {
 // --- task execution lifecycle and acceptance metadata ---------------------
 
 describe('task execution lifecycle', () => {
+  it('does not record a start time when a task moves directly to review', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'lifecycle-review-project', name: 'Lifecycle review' });
+    const created = store.createIssue({ projectId: 'lifecycle-review-project', title: 'Review without start' });
+    const review = store.updateIssue(created.id, { status: 'in_review' }, created.version, 'web');
+    assert.equal(review.startedAt, null);
+    assert.equal(review.completedAt, null);
+  });
+
   it('records first start/completion and clears completion when reopened', () => {
     const { store } = fresh();
     store.createProject({ id: 'lifecycle-project', name: 'Lifecycle' });
