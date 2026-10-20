@@ -61,7 +61,7 @@ async function firstHealthySessionBase(candidates: readonly string[]): Promise<s
 export interface SseEvent { name: string; data: string }
 
 export interface OpenCodeMessageLike {
-  info?: { id?: string; role?: string; sessionID?: string; time?: { created?: number; completed?: number }; error?: unknown; finish?: unknown };
+  info?: { id?: string; parentID?: string; role?: string; sessionID?: string; time?: { created?: number; completed?: number }; error?: unknown; finish?: unknown };
   parts?: Array<{ type?: string; text?: string }>;
 }
 
@@ -87,8 +87,16 @@ export function findCorrelatedAssistant(
     && (message.parts ?? []).some(part => part.type === 'text' && typeof part.text === 'string' && part.text.includes(marker))
   );
   if (promptIndex < 0) return { matchedPrompt: false };
-  // A later user message starts another request. Never attribute its response
-  // to this marker; inspect only the message segment belonging to this prompt.
+  const promptId = messages[promptIndex].info?.id;
+  // Prefer OpenCode's explicit parent relationship. This remains correct even
+  // when several prompts are queued before the first Assistant response arrives.
+  const linkedAssistant = promptId
+    ? messages.find(message => message.info?.role === 'assistant' && message.info?.parentID === promptId)
+    : undefined;
+  if (linkedAssistant) return { matchedPrompt: true, assistant: linkedAssistant };
+
+  // Compatibility fallback for API payloads without parentID: a later user
+  // message starts another request, so never cross that boundary.
   const nextUserOffset = messages.slice(promptIndex + 1).findIndex(message => message.info?.role === 'user');
   const endIndex = nextUserOffset < 0 ? messages.length : promptIndex + 1 + nextUserOffset;
   const assistants = messages.slice(promptIndex + 1, endIndex).filter(message => message.info?.role === 'assistant');
