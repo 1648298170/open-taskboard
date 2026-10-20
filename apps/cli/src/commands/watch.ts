@@ -39,7 +39,7 @@ export function sessionBaseCandidates(
   projectChannel: string | null | undefined,
   tuiUrl: string | undefined,
 ): string[] {
-  const normalize = (value: string): string => value.trim().replace(/\\/+$/, '');
+  const normalize = (value: string): string => value.trim().replace(/\/+$/, '');
   return [...new Set(
     [opencodeBase, projectChannel ?? undefined, tuiUrl]
       .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
