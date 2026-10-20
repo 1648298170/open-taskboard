@@ -330,6 +330,13 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     if (!project.wakeChannel.trim()) return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
     const directory = issue.worktreePath.trim() || project.workspacePath.trim();
     try {
+      const runtime = await getOpenCodeSessionRuntimeState(project.wakeChannel, directory, issue.sessionId);
+      if (runtime.directory && normalizeOpenCodeDirectory(runtime.directory) !== normalizeOpenCodeDirectory(directory)) {
+        return reply.code(409).send({ error: `OpenCode Session 的实际目录与任务执行目录不一致：${runtime.directory}` });
+      }
+      if (!runtime.busy) {
+        return reply.code(409).send({ error: 'OpenCode Session 当前未报告执行中；请先重新同步状态' });
+      }
       await abortOpenCodeSession(project.wakeChannel, directory, issue.sessionId);
       store.recordExecutionEvent(
         issue.id,
@@ -367,6 +374,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
       'X-Accel-Buffering': 'no'
     });
     res.write(`event: ready\ndata: ${JSON.stringify({ issueId: issue.id, sessionId: issue.sessionId, at: new Date().toISOString() })}\n\n`);
