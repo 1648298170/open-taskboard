@@ -38,8 +38,8 @@ const isoDay = (d: Date): string =>
 // Patch keys that map to a writable column, in repo colMap order — used to
 // build the activity detail ("status,title", "startDate", ...).
 const PATCH_KEYS: (keyof IssuePatch)[] = [
-  'title', 'description', 'status', 'priority', 'labels', 'branch', 'worktree',
-  'sessionId', 'assignee', 'parentId', 'startDate', 'dueDate'
+  'title', 'description', 'status', 'priority', 'labels', 'branch', 'worktree', 'worktreePath',
+  'sessionId', 'assignee', 'parentId', 'startDate', 'dueDate', 'acceptanceCriteria', 'reviewStatus', 'reviewNotes'
 ];
 
 /**
@@ -263,9 +263,10 @@ export class Store {
   createIssue(input: {
     projectId: string; parentId?: string | null; title: string;
     description?: string; status?: Status; priority?: Priority;
-    labels?: string; branch?: string; worktree?: string | null; assignee?: string;
+    labels?: string; branch?: string; worktree?: string | null; worktreePath?: string | null; assignee?: string;
     sessionId?: string | null;
     startDate?: string | null; dueDate?: string | null;
+    acceptanceCriteria?: string; reviewStatus?: 'pending' | 'approved' | 'changes_requested'; reviewNotes?: string;
   }, actor = '', agentSessionId: string | null = null): Issue {
     const parentId = input.parentId ?? null;
     const project = this.projects.get(input.projectId);
@@ -280,10 +281,11 @@ export class Store {
       const issueId = this.issues.create({
         projectId: input.projectId, parentId, title: input.title,
         description: input.description, status: input.status, priority: input.priority,
-        labels: input.labels, branch: input.branch, worktree: input.worktree,
+        labels: input.labels, branch: input.branch, worktree: input.worktree, worktreePath: input.worktreePath,
         sessionId,
         assignee: input.assignee,
-        startDate: input.startDate, dueDate: input.dueDate
+        startDate: input.startDate, dueDate: input.dueDate,
+        acceptanceCriteria: input.acceptanceCriteria, reviewStatus: input.reviewStatus, reviewNotes: input.reviewNotes
       });
       this.syncFts(() => this.fts.indexIssue(issueId, input.projectId, input.title, input.description ?? ''));
       this.logActivity(issueId, actor, 'created', input.title);
@@ -332,6 +334,16 @@ export class Store {
       .map(k => k === 'status' && patch.status ? `status: ${cur.status}→${patch.status}` : k)
       .join(',');
     const statusChanged = patch.status !== undefined && patch.status !== cur.status;
+    // Domain-managed timestamps: first start is immutable across retries; reopening clears completion.
+    const effectivePatch: IssuePatch = { ...patch };
+    if (statusChanged && patch.status === 'in_progress' && cur.startedAt === null) {
+      effectivePatch.startedAt = now();
+    }
+    if (statusChanged && patch.status === 'done' && cur.completedAt === null) {
+      effectivePatch.completedAt = now();
+    } else if (statusChanged && cur.status === 'done' && patch.status !== 'done') {
+      effectivePatch.completedAt = null;
+    }
     const suppliedNote = statusNote?.trim() ?? '';
     // Defense in depth: HTTP validates this too, but a named non-web actor must
     // never move a status without a note. Web board actions get an explicit,
@@ -344,7 +356,7 @@ export class Store {
       : '';
     const transactionResult = inTransaction(this.db, () => {
       let auditComment: Comment | null = null;
-      const result = this.issues.update(id, patch, expectedVersion);
+      const result = this.issues.update(id, effectivePatch, expectedVersion);
       if (result.changed) {
         // Title/description may have moved — refresh both fts rows.
         const updated = this.issues.get(id)!;
