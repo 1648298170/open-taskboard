@@ -156,6 +156,9 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
     const project = store.getProject(issue.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
+    if (issue.claimedBy && issue.leaseExpiresAt && Date.parse(issue.leaseExpiresAt) > Date.now()) {
+      return reply.code(409).send({ error: '任务当前有有效执行租约；请先释放租约再创建或切换 Worktree' });
+    }
 
     const refs = await scanGitRefs(project.workspacePath);
     if (issue.worktreePath && refs.worktrees.some(w => normalizeGitPath(w.path) === normalizeGitPath(issue.worktreePath!))) {
@@ -184,7 +187,10 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
         const updated = store.updateIssue(issue.id, {
           branch: created.branch,
           worktree: created.name,
-          worktreePath: created.path
+          worktreePath: created.path,
+          // A Session previously bound to the main checkout must never survive
+          // a switch to a new worktree; the user must create a Session there.
+          sessionId: null
         }, issue.version, String(req.headers['x-taskboard-actor'] ?? 'web'));
         return reply.code(201).send({
           issue: updated,
