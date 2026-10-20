@@ -9,6 +9,12 @@ services:
         NODE_IMAGE: docker.1ms.run/library/node:22-slim
     image: open-taskboard:latest
     container_name: open-taskboard
+    environment:
+      # 新建项目弹窗不再填写服务地址：默认从宿主机 opencode serve 读取会话。
+      TASKBOARD_OPENCODE_URL: http://host.docker.internal:4096
+    extra_hosts:
+      # Linux 下把 host.docker.internal 解析到宿主机网关（Docker Desktop 自带）。
+      - "host.docker.internal:host-gateway"
     ports:
       - "47825:47824"
     volumes:
