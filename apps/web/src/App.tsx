@@ -815,7 +815,10 @@ export default function App() {
       </div>
 
       {openId && (
-        <Drawer issueId={openId} projectId={projectId} onClose={closeDrawer}
+        <Drawer issueId={openId} projectId={projectId}
+          workspacePath={projects.find(project => project.id === projectId)?.workspacePath}
+          sessionServerUrl={projects.find(project => project.id === projectId)?.wakeChannel}
+          onClose={closeDrawer}
           onChanged={() => void refresh()}
           onToast={showToast}
           onOpenIssue={openIssue}

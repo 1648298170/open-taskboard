@@ -5,13 +5,37 @@ import { Markdown } from '../markdown';
 import { confirmDialog, promptDialog } from './dialogs';
 import { fmtHMLocal, fmtWhenLocal } from '../logic/time';
 import { applyMention, mentionCandidatesFor, MentionCandidate, nextHi } from '../logic/mention';
-import { Pencil, Plus, Sparkles, UserRound, X } from 'lucide-react';
+import { ExternalLink, Pencil, Plus, Sparkles, UserRound, X } from 'lucide-react';
 import { WAKE_PREFIX } from '@taskboard/core/types';
 
 const fmtWhen = fmtWhenLocal;
 import { Select } from './Select';
 
 
+
+/** Encode a workspace path as the URL-safe directory segment used by OpenCode's web UI. */
+function encodeDirectoryPath(path: string): string {
+  const bytes = new TextEncoder().encode(path);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+/** Build a deep link to the OpenCode session bound to this task. */
+function buildOpenCodeSessionUrl(serverUrl: string | undefined, workspacePath: string | undefined, sessionId: string | null): string | null {
+  if (!serverUrl?.trim() || !workspacePath?.trim() || !sessionId?.trim()) return null;
+  try {
+    const url = new URL(serverUrl.trim());
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    const basePath = url.pathname.replace(/\/+$/g, '');
+    url.pathname = basePath + '/' + encodeDirectoryPath(workspacePath.trim()) + '/session/' + encodeURIComponent(sessionId.trim());
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
 
 /** T7-39: 字节数人性化（B / KB / MB）。 */
 const humanSize = (bytes: number): string =>
@@ -23,10 +47,13 @@ const humanSize = (bytes: number): string =>
 // 规则同源；taskboard watch --on 可改运行时前缀，此处只反映默认值）。
 const MENTION_CANDIDATES: MentionCandidate[] = [{ value: WAKE_PREFIX, label: '唤醒 agent 干活（主进程忙时排队：收尾当前任务后接手 · Enter 选择）' }];
 
-export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToast, onOpenIssue, issues }: {
+export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, statuses, onClose, onChanged, onToast, onOpenIssue, issues }: {
   issueId: string;
   /** 当前项目 id —— 抽屉打开时拉一次 git 分支/工作树列表（T2-8） */
   projectId: string | null;
+  /** OpenCode directory + server used to build a direct session deep link. */
+  workspacePath?: string;
+  sessionServerUrl?: string;
   statuses: readonly Status[];
   onClose: () => void;
   onChanged: () => void;
@@ -136,6 +163,8 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
     } catch (err) { onToast(`✗ ${(err as Error).message}`); }
   };
 
+  const sessionUrl = buildOpenCodeSessionUrl(sessionServerUrl, workspacePath, detail.sessionId);
+
   const addDep = async (dependsOnId: string): Promise<void> => {
     try {
       await api_.addDependency(detail.id, dependsOnId);
@@ -226,6 +255,16 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
             }}>归档</button>
           )}
+        <button className="btn tiny" disabled={!sessionUrl}
+          title={sessionUrl
+            ? '打开此任务绑定的 OpenCode 会话 ' + detail.sessionId + '。当前任务只记录 Session ID，暂不能跳到会话中的某一条具体消息。'
+            : detail.sessionId
+              ? '缺少项目工作目录或 OpenCode Server URL，无法生成会话链接'
+              : '此任务尚未绑定 OpenCode Session'}
+          onClick={() => {
+            if (!sessionUrl) return;
+            window.open(sessionUrl, '_blank', 'noopener,noreferrer');
+          }}><ExternalLink size={13} /> 定位会话</button>
         {/* v0.4: 一键唤醒 —— UI 代发唤醒评论（web 来源，人工触发）。路由由
             watch 决定：已绑定 sessionId → prompt_async 续原会话；未绑定 →
             项目 wakeChannel/TUI → headless 新会话。done 任务无编排意义。 */}
