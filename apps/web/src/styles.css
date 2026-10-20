@@ -370,7 +370,7 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 
 /* ---- drawer ---- */
 .drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 92vw);
+  position: fixed; top: 0; right: 0; bottom: 0; width: 50vw; min-width: 360px;
   background: var(--bg-raised); border-left: 1px solid var(--line);
   box-shadow: -20px 0 50px #0008; padding: 18px 22px; overflow-y: auto; z-index: 20;
   animation: drawer-in .2s ease;
@@ -859,7 +859,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .side-directory-meta {
   padding: 0 8px 5px 30px; font-size: 10px; opacity: 1; color: var(--ink-dim);
 }
-.side-directory-projects { padding-left: 12px; gap: 2px; }
+.side-directory-projects { padding-left: 36px; gap: 2px; }
 .side-directory .icon-btn { width: 26px; height: 28px; border-radius: 7px; }
 .side-item {
   border: 0; border-radius: 8px; padding: 8px 10px;
@@ -1075,4 +1075,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   .new-issue-form .row { flex-direction:column; }
   .task-detail-title { font-size:19px; }
   .timeline { margin:12px; padding:10px; overflow-x:auto; }
+}
+@media (max-width:760px) {
+  .drawer { width: 92vw; min-width: 0; }
 }
