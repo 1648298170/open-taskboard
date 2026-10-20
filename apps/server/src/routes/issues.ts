@@ -3,6 +3,7 @@
 // options. JSON bodies are validated with the shared zod schemas — no
 // hand-rolled type assertions.
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import { createTaskWorktree, GitWorktreeError, scanGitRefs } from '../git-refs.js';
 import { STATUSES, Store, ValidationError, resolveIssueSessionId } from '@taskboard/core';
 import type { Status, TaskboardServerConfig } from '@taskboard/core';
 import { claimSchema, createIssueSchema, restUpdateIssueSchema, z } from '@taskboard/core/schemas';
@@ -139,6 +140,64 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     // 兼容旧客户端的 confirm 字段不作为审批凭证，且不透传 Store
     const { version, confirm, statusNote, ...patch } = parsed.data;
     return store.updateIssue(req.params.id, patch, version, actor, statusNote);
+  });
+
+  // Create and bind an isolated Git worktree for this task. Git and SQLite
+  // cannot share a transaction, so the handler validates first and reports an
+  // explicit orphan path if Git succeeds but persistence fails.
+  app.post('/api/issues/:id/create-worktree', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const issue = store.getIssue(req.params.id);
+    if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    const project = store.getProject(issue.projectId);
+    if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
+
+    const refs = await scanGitRefs(project.workspacePath);
+    if (issue.worktreePath && refs.worktrees.some(w => w.path === issue.worktreePath)) {
+      // Retry is idempotent when the task is already bound to its real worktree.
+      return { issue, branch: issue.branch, worktree: issue.worktree, worktreePath: issue.worktreePath, alreadyBound: true };
+    }
+    if (issue.branch || issue.worktree || issue.worktreePath) {
+      return reply.code(409).send({
+        error: '任务已有 Git 绑定。为避免覆盖现有分支或工作树，请先确认并解除绑定后再自动创建'
+      });
+    }
+
+    try {
+      const created = await createTaskWorktree(project.workspacePath, project.id, issue.id, issue.title);
+      const siblings = store.listIssues(issue.projectId, { archived: 'all' });
+      const collision = siblings.find(other => other.id !== issue.id &&
+        (other.worktreePath === created.path || other.branch === created.branch));
+      if (collision) {
+        // This should be rare (concurrent requests), but never bind one Git
+        // execution context to multiple tasks. Keep the created path visible.
+        return reply.code(409).send({
+          error: `Worktree 已创建但绑定冲突：任务 #${collision.id} 已使用同一分支或路径；请检查并手动清理 ${created.path}`
+        });
+      }
+      try {
+        const updated = store.updateIssue(issue.id, {
+          branch: created.branch,
+          worktree: created.name,
+          worktreePath: created.path
+        }, issue.version, String(req.headers['x-taskboard-actor'] ?? 'web'));
+        return reply.code(201).send({
+          issue: updated,
+          branch: created.branch,
+          worktree: created.name,
+          worktreePath: created.path,
+          alreadyBound: false
+        });
+      } catch (error) {
+        return reply.code(500).send({
+          error: `Worktree 已创建，但任务绑定写入失败。请勿重复创建；先检查路径并手动绑定：${created.path}。原因：${(error as Error).message}`
+        });
+      }
+    } catch (error) {
+      if (error instanceof GitWorktreeError) {
+        return reply.code(error.statusCode).send({ error: error.message });
+      }
+      throw error;
+    }
   });
 
   app.delete('/api/issues/:id', async (req: FastifyRequest<{ Params: IssueParams }>) => {
