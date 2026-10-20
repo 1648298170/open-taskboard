@@ -481,7 +481,17 @@ export const watchCommand: Command = {
         }
       }
 
-      // Only unbound tasks may use the TUI input box (which belongs to the
+      // A task with a worktree must never fall through to a TUI or headless
+      // command whose cwd is not guaranteed to be that worktree. Require a
+      // Session created in the worktree and validated above.
+      if (taskWorktreePath) {
+        const reason = `任务已绑定 Worktree ${taskWorktreePath}，但没有绑定 OpenCode Session；为避免在错误目录执行，请先创建工作树 Session`;
+        await reportExecution(issueId, 'failed', reason);
+        console.error(`watch: refusing to dispatch task ${issueId} without a Session bound to its worktree`);
+        return false;
+      }
+
+      // Only tasks without a worktree binding may use the TUI input box (which belongs to the
       // currently selected TUI session) or headless spawn fallback.
       if (tuiUrl) {
         try {
