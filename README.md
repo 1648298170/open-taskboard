@@ -66,9 +66,9 @@ taskboard project delete skill-test --yes
 ## 5 分钟上手（人类视角）
 
 1. `pnpm install && pnpm start` → 浏览器打开 `http://127.0.0.1:47824`
-2. 首次使用可在左侧「全局设置」配置默认工作目录；该设置保存在 taskboard 数据库中，供所有浏览器客户端共享。新建目录时自动预填，也可以单独填写当前目录路径；两者都为空时不允许创建。更改全局默认值不会改动已有目录或项目
-3. 在目录下创建项目时自动继承默认工作目录（目录路径可选）；项目必须配置实际工作目录、OpenCode Server URL，并选择已有 Session 或新建 Session。服务端校验所选 Session 的实际目录后才允许绑定
-4. 「＋ 新任务」建任务——默认预选项目 Session，也可以选择同一项目目录下的其他会话；勾选「创建后唤醒 agent 编排」可直接召唤 AI 接手
+2. 首次使用可在左侧「全局设置」配置默认工作目录与默认 OpenCode Server URL；该设置保存在 taskboard 数据库中，供所有浏览器客户端共享。新建目录时自动预填这两项，也可以单独填写；两者都为空时不允许创建。更改全局默认值不会改动已有目录或项目
+3. 在目录下创建项目时自动继承该目录的工作目录与 OpenCode Server URL，这两项在项目表单中锁定不可修改；项目需要选择已有 Session 或新建 Session。服务端校验所选 Session 的实际目录后才允许绑定
+4. 「＋ 新任务」直接继承项目的工作目录、默认 Session 与 OpenCode Server URL，这三项在表单中锁定不可修改；勾选「创建后唤醒 agent 编排」可直接召唤 AI 接手
 5. 拖卡片流转状态；拖**父任务**时会询问是否整组移动（子任务跟随）
 6. 点卡片开抽屉：改状态/负责人/分支/会话绑定、拆子任务、排依赖、传附件、写评论（输入 @ 唤醒 agent）
 
@@ -135,7 +135,7 @@ todo → in_progress → in_review → done
 - 时间线视图 📅（甘特 lite）、统计面板 📊（周吞吐/平均周期/贡献榜）
 - 快捷键：`/` 搜索 · `n` 新建 · `j/k` 上下移动 · `Enter` 打开 · `?` 全部帮助
 - 附件上传下载（每任务 ≤20 个/总量 ≤50MB）、桌面通知、暗/亮主题
-- 全局设置保存新建目录默认工作目录（跨浏览器共享）；左侧目录用于分组管理项目，并可单独覆盖默认继承的工作目录地址；项目保存必需的实际工作目录（可覆盖目录默认值）、OpenCode Server URL 和默认 Session；绑定 Session 时服务端会校验该 Session 的实际目录。新建任务自动使用项目工作目录与默认 Session，不必重复填写路径；任务保存实际执行的 `sessionId`，唤醒时继续原会话上下文
+- 全局设置保存新建目录的默认工作目录与默认 OpenCode Server URL（跨浏览器共享）；左侧目录用于分组管理项目，并保存工作目录与 Server URL；在目录下新建项目时这两项自动继承且锁定，项目只需绑定默认 Session；绑定 Session 时服务端会校验该 Session 的实际目录。新建任务自动锁定项目的工作目录、默认 Session 与 Server URL，不必重复填写；任务保存实际执行的 `sessionId`，唤醒时继续原会话上下文
 
 ## 评论唤醒 agent（watch 侧车）
 
@@ -158,7 +158,7 @@ taskboard watch                                        # opencode run（默认�
 
 > 模型注意：`--model` 走 opencode 的 `-m` 约定；Claude/Codex 用自家 `--model` 参数时直接写进 `--exec`（如 `--exec "claude --model sonnet -p"`），不要混用 `--model`。
 
-**目录分组 + 项目会话绑定**：左侧目录是项目分组并保存默认工作目录；项目继承该路径（可单独覆盖），并保存 OpenCode Server URL 和默认 Session。创建项目时可选择已有 Session，或通过「新建 Session」按钮在指定工作目录中创建。任务默认预选项目 Session，也可以选择同一工作目录下的其他会话。`@agent` 评论对已绑定任务直接发往对应 Server 的 `prompt_async`，未绑定任务才注入 TUI。项目路由存在数据里，改绑即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时留空即可。
+**目录分组 + 项目会话绑定**：左侧目录是项目分组并保存工作目录与 OpenCode Server URL；在目录下新建项目时这两项自动继承且锁定，项目只需绑定默认 Session（可选择已有 Session，或通过「新建 Session」按钮在指定工作目录中创建）。新建任务直接继承并锁定项目的工作目录、Session 与 Server URL。`@agent` 评论对已绑定任务直接发往对应 Server 的 `prompt_async`，未绑定任务才注入 TUI。项目路由存在数据里，改绑即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时留空即可。
 
 ### 先把 opencode 终端跑起来（watch 的目的地）
 
