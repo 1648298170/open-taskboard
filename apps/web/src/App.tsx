@@ -535,9 +535,12 @@ export default function App() {
             <span className="glyph">▚</span>
             <h1>taskboard</h1>
           </div>
-          <button className="side-btn side-create-directory" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryServerUrl(defaultOpenCodeServerUrl); setDirectoryCreateOpen(true); }}><Plus size={14} /> 新建目录</button>
           <div className="sidebar-heading">
             <span>目录</span>
+            <button className="icon-btn" title="新建目录" aria-label="新建目录"
+              onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryServerUrl(defaultOpenCodeServerUrl); setDirectoryCreateOpen(true); }}>
+              <Plus size={15} />
+            </button>
           </div>
           <nav className="side-projects" aria-label="目录与项目">
             {directories.map(directory => {
