@@ -1781,4 +1781,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 
 .execution-history .execution-outcome-failed { color: var(--danger); }
 .execution-history .execution-outcome-succeeded { color: var(--accent); }
+.execution-history .execution-outcome-running { color: var(--accent); }
+.execution-history .execution-outcome-idle { color: var(--ink-dim); }
 .execution-history .execution-outcome-retrying { color: var(--danger); }
