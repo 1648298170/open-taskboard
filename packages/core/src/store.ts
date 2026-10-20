@@ -321,7 +321,7 @@ export class Store {
     }
   }
 
-  updateIssue(id: string, patch: IssuePatch, expectedVersion?: number, actor = ''): Issue {
+  updateIssue(id: string, patch: IssuePatch, expectedVersion?: number, actor = '', statusNote?: string): Issue {
     this.assertParentPatch(id, patch);
     const cur = this.issues.get(id);
     if (!cur) throw new NotFoundError(`issue not found: ${id}`);
@@ -331,13 +331,32 @@ export class Store {
       .filter(k => patch[k] !== undefined)
       .map(k => k === 'status' && patch.status ? `status: ${cur.status}→${patch.status}` : k)
       .join(',');
-    const changed = inTransaction(this.db, () => {
+    const statusChanged = patch.status !== undefined && patch.status !== cur.status;
+    const suppliedNote = statusNote?.trim() ?? '';
+    // Defense in depth: HTTP validates this too, but a named non-web actor must
+    // never move a status without a note. Web board actions get an explicit,
+    // honest automatic audit comment when no explanation was supplied.
+    if (statusChanged && actor.trim() !== '' && actor !== 'web' && !suppliedNote) {
+      throw new ValidationError('status changes require statusNote; include the reason, verification evidence, and any unchecked items');
+    }
+    const effectiveNote = statusChanged
+      ? suppliedNote || (actor === 'web' ? 'Taskboard 网页人工操作；操作者未提供额外说明。' : '')
+      : '';
+    const transactionResult = inTransaction(this.db, () => {
+      let auditComment: Comment | null = null;
       const result = this.issues.update(id, patch, expectedVersion);
       if (result.changed) {
         // Title/description may have moved — refresh both fts rows.
         const updated = this.issues.get(id)!;
         this.syncFts(() => this.fts.reindexIssue(id, updated.projectId, updated.title, updated.description));
         this.logActivity(id, actor, 'updated', detail);
+        if (statusChanged && effectiveNote) {
+          const body = `状态变更记录：${cur.status} → ${patch.status}\n${effectiveNote}`;
+          const commentId = this.comments.add(id, { author: actor || 'system', body });
+          this.syncFts(() => this.fts.indexComment(commentId, updated.projectId, body));
+          this.logActivity(id, actor || 'system', 'commented', body.slice(0, 200));
+          auditComment = this.comments.get(commentId);
+        }
         if (patch.status === 'in_progress' && cur.status !== 'in_progress') {
           this.flowParentOnChildStart(cur, actor);
         }
@@ -345,9 +364,20 @@ export class Store {
           this.flowParentOnChildrenReview(cur, actor);
         }
       }
-      return result.changed;
+      return { changed: result.changed, auditComment };
     });
-    if (changed) this.emit('issue.updated', { id });
+    if (transactionResult.changed) this.emit('issue.updated', { id });
+    if (transactionResult.changed && transactionResult.auditComment) {
+      const comment = transactionResult.auditComment;
+      this.emit('comment.created', {
+        id: comment.id,
+        issueId: id,
+        author: comment.author,
+        body: comment.body.slice(0, 200),
+        status: comment.status,
+        issueTitle: this.issues.get(id)!.title
+      });
+    }
     return this.issues.get(id)!;
   }
 

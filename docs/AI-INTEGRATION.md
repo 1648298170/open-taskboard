@@ -47,7 +47,7 @@ taskboard next --project my-project           # 智能取下一个该做的任�
 | ① 取任务 | `next_issue` / `ready_issues` | 自动跳过他人租约中的任务，只返回依赖已满足的 |
 | ② 认领 | `claim_issue {agent: "你的名字", sessionId: "你的会话id"}` | **认领即开工**：服务端自动把 `todo` 流转为 `in_progress`，并把任务绑定到你的会话（仅当未绑定时；已绑他人会话不抢绑） |
 | ③ 执行 | 干活 + `add_comment` 记录进展 | 重要结论写评论，不要只留在对话里 |
-| ④ 交验 | `update_issue {status: "in_review"}` + 评论写明验证方式 | 然后停下来，向人类报告 |
+| ④ 交验 | `update_issue {status: "in_review", statusNote: "原因；验证证据；未覆盖项"}` | 状态与审计评论由服务端在同一事务提交；然后停下来，向人类报告 |
 | ⑤ 等确认 | 人类在面板点 done，或明确说"确认"后你传 `confirm: true` | **默认配置下 agent 直接置 done 会被 403 拒绝** |
 
 **创建任务时的会话解析顺序**：请求体 `sessionId` → `x-taskboard-session` 头（agent 当前会话）→ 项目默认会话（`project.defaultSessionId`）→ 未绑定。省略会话时自动继承项目默认；修改项目默认会话只影响后续新建任务，已有任务不会追溯改绑。
@@ -63,6 +63,7 @@ taskboard next --project my-project           # 智能取下一个该做的任�
 | 开工必绑（403 硬门禁） | claim/PATCH 流转 in_progress 必须带 `sessionId`+`branch`；被 403 拦了就按错误文案补齐重试 | 跳过绑定直接开工 |
 | 不可编辑 agent 评论 | 评论编辑权只属于创建它的网页用户；agent 评论永远原样（你也不可编辑自己的历史评论） | 事后篡改 agent 发言 |
 | 乐观锁 | 所有变更带 `show_issue` 返回的 `version` | 409 = 别人改过，重读再改一次，仍失败就停下报告，**绝不循环重试** |
+| 状态变更审计（403 硬门禁） | 每次实际状态变更都在 `update_issue` 同一请求传 `statusNote`，说明原因、验证证据、未覆盖项 | 服务端在同一个 SQLite 事务写入状态和审计评论；缺少说明即拒绝，不得拆成 `update_issue` + `add_comment` 两步 |
 | 认领冲突 | 409 = 他人持有有效租约 | 重读一次，条件不变才重试，否则放弃；**绝不抢他人的认领** |
 | done 需人类确认 | `in_review` 后停下等验收（`TASKBOARD_HUMAN_DONE` 默认开启） | 403；人类明确说"确认"后才可传 `confirm: true` |
 | 父任务人工关闭 | 子任务开工自动拉起 `todo` 父任务 → `in_progress`；所有子任务进入 `in_review`/`done` 时父任务自动进入 `in_review`；父任务最终 `done` 永远人工，全子 done 也不自动关父 | 不要代替人类关闭父任务 |

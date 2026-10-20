@@ -100,24 +100,28 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
   app.patch('/api/issues/:id', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
     const parsed = restUpdateIssueSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
-    // v0.4: 先落评再交验——非 web 来源置 in_review 时，执行者必须在任务上
-    // 留过评论（工作与验证的书面痕迹）；默认开启，TASKBOARD_REVIEW_COMMENT=0 退出。
-    // 仅拦状态流转（当前已 in_review 的非流转补丁不拦——已有人交验过，无信息损失）。
-    // require-session：agent 流转 to in_progress 必须携带 sessionId（或任务已
-    // 绑定 / web 来源）——错误文案直接教学，agent 重试即补齐。
+    const currentIssue = store.getIssue(req.params.id);
+    if (!currentIssue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    const statusChanging = parsed.data.status !== undefined && parsed.data.status !== currentIssue.status;
+    // Every agent-driven status transition must carry its audit note in the
+    // same PATCH request. Store persists the status + comment in one SQLite
+    // transaction. Web actions are exempt here; Store writes an automatic,
+    // explicitly-labelled audit comment when the UI supplies no note.
+    if (statusChanging && actor !== 'web' && !parsed.data.statusNote?.trim()) {
+      return reply.code(403).send({
+        error: 'status transition requires statusNote; include the reason, verification evidence, and any unchecked items'
+      });
+    }
+    // Opening work also requires a session binding. Check this after the
+    // audit-note gate so callers get the most relevant missing-field error.
     if (config.requireSession && parsed.data.status === 'in_progress'
-      && store.getIssue(req.params.id)?.status !== 'in_progress'
-      && String(req.headers['x-taskboard-actor'] ?? '') !== 'web'
-      && !parsed.data.sessionId && !store.getIssue(req.params.id)?.sessionId) {
+      && currentIssue.status !== 'in_progress'
+      && actor !== 'web'
+      && !parsed.data.sessionId && !currentIssue.sessionId) {
       return reply.code(403).send({
         error: 'starting a task requires binding: claim/PATCH with sessionId and branch; confirm:true is not an approval credential (TASKBOARD_REQUIRE_SESSION)'
       });
-    }
-    if (config.reviewComment && parsed.data.status === 'in_review' &&
-        store.getIssue(req.params.id)?.status !== 'in_review' &&
-        String(req.headers['x-taskboard-actor'] ?? '') !== 'web' &&
-        store.commentCountBy(req.params.id, String(req.headers['x-taskboard-actor'] ?? '')) === 0) {
-      return reply.code(403).send({ error: 'in_review requires a comment by this actor (先落评再交验)' });
     }
     // T7-36: optional human final-review gate. With TASKBOARD_HUMAN_DONE=1, only
     // the web UI (x-taskboard-actor: 'web') may set status to done — CLI/MCP
@@ -133,9 +137,8 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       return reply.code(403).send({ error: 'done requires human confirmation' });
     }
     // 兼容旧客户端的 confirm 字段不作为审批凭证，且不透传 Store
-    const { version, confirm, ...patch } = parsed.data;
-    const actor = String(req.headers['x-taskboard-actor'] ?? '');
-    return store.updateIssue(req.params.id, patch, version, actor);
+    const { version, confirm, statusNote, ...patch } = parsed.data;
+    return store.updateIssue(req.params.id, patch, version, actor, statusNote);
   });
 
   app.delete('/api/issues/:id', async (req: FastifyRequest<{ Params: IssueParams }>) => {

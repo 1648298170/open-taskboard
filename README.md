@@ -63,7 +63,8 @@ taskboard project set --id my-project --session-id <新会话ID>   # 传 '' 清�
 taskboard project list                       # 已绑定时显示 session=<id>
 taskboard issue create --project my-project --title "搭建登录模块" --priority high --branch feat/login --session-id <会话ID>
 taskboard issue create --project my-project --parent <父任务ID> --title "登录表单 UI"   # 省略 --session-id 时继承项目默认会话
-taskboard issue done <id> --expected-version 2
+taskboard issue update <id> --status in_review --expected-version 2 --status-note "完成原因；验证证据；未覆盖项"
+taskboard issue done <id> --expected-version 3 --status-note "确认原因；验证证据；未覆盖项"
 taskboard next --project my-project          # 智能取任务：依赖全 done + 优先级排序
 taskboard issue claim <id> --agent codex     # 独占租约（默认 30 分钟，taskboard ready --agent 可跳过他人租约）
 taskboard search "登录"                       # 全文搜索（标题/描述/评论）
@@ -248,7 +249,7 @@ args = ["/abs/path/open-taskboard/apps/mcp/dist/mcp.js"]
 
 建议同时在 AGENTS.md / rules 中加入：
 
-> 管理任务时使用 taskboard MCP 工具；状态流转 todo → in_progress → in_review → done，**不流转不许开工**（服务端 claim 会把 todo 自动置为 in_progress，认领即开工），done 必须等用户确认；update_issue 必须携带 show_issue 返回的 version（乐观锁）；拆解需求时先建父任务再用 parentId 建子任务；多 agent 并发先 claim 再开工，长任务定期 heartbeat 续租，完成即 release；agent 创建任务带 sessionId（省略时继承项目默认会话），认领未绑定任务用 claim sessionId 绑定自己的会话（只绑空位，不抢绑）。
+> 管理任务时使用 taskboard MCP 工具；状态流转 todo → in_progress → in_review → done，**不流转不许开工**（服务端 claim 会把 todo 自动置为 in_progress，认领即开工），done 必须等用户确认；update_issue 必须携带 show_issue 返回的 version（乐观锁）；每次通过 update_issue/PATCH 实际变更状态都必须在同一请求传 statusNote（原因、验证证据、未覆盖项），服务端在同一事务保存状态和审计评论，缺少说明返回 403，禁止拆成 update_issue + add_comment；拆解需求时先建父任务再用 parentId 建子任务；多 agent 并发先 claim 再开工，长任务定期 heartbeat 续租，完成即 release；agent 创建任务带 sessionId（省略时继承项目默认会话），认领未绑定任务用 claim sessionId 绑定自己的会话（只绑空位，不抢绑）。
 
 ### 方式二：Skill + CLI（opencode 或不支持 MCP 的工具）
 
