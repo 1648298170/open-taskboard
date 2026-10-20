@@ -370,6 +370,23 @@ export const watchCommand: Command = {
       }
     };
 
+    const reportExecution = async (
+      issueId: string,
+      outcome: 'started' | 'queued' | 'retrying' | 'succeeded' | 'failed',
+      detail: string
+    ): Promise<void> => {
+      try {
+        const res = await fetchWithTimeout(`${base()}/api/issues/${encodeURIComponent(issueId)}/agent-events`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-taskboard-actor': 'watch', ...(token() ? { Authorization: `Bearer ${token()}` } : {}) },
+          body: JSON.stringify({ outcome, detail })
+        });
+        if (!res.ok) console.error(`watch: execution event report failed (HTTP ${res.status})`);
+      } catch (err) {
+        console.error(`watch: execution event report failed (${(err as Error).message})`);
+      }
+    };
+
     const executeWake = async (issueId: string, prompt: string, tuiUrl?: string, commentId = '', projectChannel?: string | null): Promise<boolean> => {
       // Session binding is authoritative. Never inject a bound task into the
       // currently selected TUI session, and never silently spawn a new session.
@@ -390,6 +407,7 @@ export const watchCommand: Command = {
         return false;
       }
 
+      await reportExecution(issueId, 'started', '收到唤醒请求，开始解析任务路由');
       if (sessionId) {
         // Project wakeChannel and --opencode normally point at the same server.
         // Prefer the explicit session server, then use the project's configured
@@ -404,7 +422,9 @@ export const watchCommand: Command = {
         // prompt). A bound task that fails it must refuse: falling through to
         // TUI/headless would inject into the WRONG session.
         if (decideWake(sessionId, sessionBase) !== 'prompt') {
+          const reason = `任务绑定 Session ${sessionId}，但没有可用的 OpenCode 服务；拒绝回退到其他会话`;
           console.error(`watch: task ${issueId} is bound to ${sessionId}, but no healthy OpenCode server is reachable (checked: ${sessionCandidates.join(', ') || 'none'}); refusing to start a new session`);
+          await reportExecution(issueId, 'failed', reason);
           return false;
         }
         try {
@@ -417,14 +437,18 @@ export const watchCommand: Command = {
             })
           });
           if (!res.ok) {
+            const reason = `绑定 Session ${sessionId} 拒绝了提示词请求（HTTP ${res.status}）；没有创建备用会话`;
             console.error(`watch: bound session ${sessionId} rejected prompt (HTTP ${res.status}); no fallback session will be created`);
+            await reportExecution(issueId, 'failed', reason);
             return false;
           }
           console.log(`watch: queued prompt in bound session ${sessionId}`);
           await markStatus(commentId, 'processing');
+          await reportExecution(issueId, 'queued', `提示词已提交到绑定的 OpenCode Session ${sessionId}；该状态表示已排队，不代表 Agent 已完成`);
           return true;
         } catch (err) {
           console.error(`watch: bound session ${sessionId} failed (${(err as Error).message}); no fallback session will be created`);
+          await reportExecution(issueId, 'failed', `提交到绑定 Session ${sessionId} 失败：${(err as Error).message}`);
           return false;
         }
       }
@@ -441,6 +465,7 @@ export const watchCommand: Command = {
           if (res.ok) {
             console.log(`watch: appended wake to TUI (${tuiUrl}) — 等待人工回车提交`);
             await markStatus(commentId, 'processing');
+            await reportExecution(issueId, 'queued', `唤醒内容已写入 TUI 输入框 ${tuiUrl}，等待人工提交`);
             return true;
           }
           console.error(`watch: TUI append failed (HTTP ${res.status}) — 尝试 headless`);
@@ -458,14 +483,22 @@ export const watchCommand: Command = {
           child.on('exit', code => resolve(code === 0 ? 'ok' : 'failed'));
           child.on('error', () => resolve('missing'));
         });
-        if (outcome === 'ok') { await markStatus(commentId, 'processed'); return true; }
+        if (outcome === 'ok') {
+          await markStatus(commentId, 'processed');
+          await reportExecution(issueId, 'succeeded', `Headless Agent 执行成功（第 ${i + 1} 次尝试）`);
+          return true;
+        }
         if (outcome === 'missing') {
           console.error(`watch: exec ${execParts[0]} not found in PATH`);
+          await reportExecution(issueId, 'failed', `找不到执行命令 ${execParts[0]}，请检查 PATH 配置`);
           return false;
         }
         console.error(`watch: headless run failed (attempt ${i + 1}/${attempts.length})`);
+        await reportExecution(issueId, i + 1 < attempts.length ? 'retrying' : 'failed',
+          `Headless Agent 第 ${i + 1}/${attempts.length} 次尝试失败${i + 1 < attempts.length ? '，将按重试间隔再次执行' : '，已耗尽重试次数'}`);
       }
       console.error('watch: headless run failed after all retries — 结果不可用，请检查 exec 命令与目标 agent CLI 状态');
+      await reportExecution(issueId, 'failed', 'Headless Agent 所有重试均失败，请检查命令、环境变量和 Agent CLI 日志');
       return false;
     };
 
