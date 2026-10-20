@@ -202,6 +202,45 @@ export const openApiSpec: OpenApiDocument = {
         responses: { 200: { description: 'Updated settings', ...jsonResponse({ $ref: '#/components/schemas/AppSettings' }) }, 400: { $ref: '#/components/responses/BadRequest' }, ...commonResponses(true) }
       }
     },
+    '/api/directories/browse': {
+      summary: 'Browse directories on a configured OpenCode server',
+      get: {
+        operationId: 'browseWorkspaceDirectories',
+        summary: 'List child directories from the OpenCode server filesystem',
+        description: 'This endpoint browses the filesystem that belongs to the supplied OpenCode Server, not the browser host or Taskboard container. Omit path to start at the OpenCode server current directory.',
+        tags: ['directories'],
+        parameters: [
+          { name: 'serverUrl', in: 'query', required: true, schema: { type: 'string', format: 'uri' } },
+          { name: 'path', in: 'query', required: false, schema: { type: 'string' }, description: 'Absolute directory path on the OpenCode server; omitted uses its current path' }
+        ],
+        responses: {
+          200: {
+            description: 'Current directory and its direct child directories',
+            ...jsonResponse({
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+                parentPath: { type: ['string', 'null'] },
+                entries: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: { name: { type: 'string' }, path: { type: 'string' } },
+                    required: ['name', 'path'],
+                    additionalProperties: false
+                  }
+                }
+              },
+              required: ['path', 'parentPath', 'entries'],
+              additionalProperties: false
+            })
+          },
+          400: { $ref: '#/components/responses/BadRequest' },
+          502: { description: 'OpenCode server unavailable or does not support directory listing', ...jsonResponse({ $ref: '#/components/schemas/Error' }) },
+          ...commonResponses(false)
+        }
+      }
+    },
     '/api/directories': {
       summary: 'List and create workspace directories',
       get: {
