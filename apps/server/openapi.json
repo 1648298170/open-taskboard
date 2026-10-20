@@ -2491,6 +2491,44 @@
           }
         }
       }
+    },
+    "/api/issues/{id}/git-binding": {
+      "summary": "Release task Git binding without deleting local resources",
+      "delete": {
+        "tags": [
+          "Issues"
+        ],
+        "summary": "Unbind branch/worktree metadata",
+        "description": "Clears the task's branch, worktree name and absolute path. Does not delete local Git branches or worktree directories. Rejected while the task has an active claim lease.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Git binding cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Issue"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found"
+          },
+          "409": {
+            "description": "Task has an active execution lease"
+          }
+        }
+      }
     }
   },
   "components": {
