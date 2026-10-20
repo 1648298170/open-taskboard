@@ -1,4 +1,7 @@
 /* open-taskboard — industrial terminal aesthetic (React) */
+/* 自托管 JetBrains Mono（variable 版，单 woff2 含全部字重）：跨机器渲染一致，
+   不再依赖本机是否装了 Cascadia/JetBrains/Sarasa。 */
+@import '@fontsource-variable/jetbrains-mono';
 :root {
   --bg: #101312;
   --bg-deep: #0c0f0e;
@@ -17,7 +20,7 @@
   --in-review: #b48ead;
   --done: #7fb069;
   --danger: #e0645c;
-  --mono: "Cascadia Code", "JetBrains Mono", "Sarasa Mono SC", ui-monospace, Consolas, monospace;
+  --mono: "JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", "Sarasa Mono SC", "PingFang SC", "Microsoft YaHei", ui-monospace, Consolas, monospace;
   color-scheme: dark;
 }
 /* T5-28: 浅色主题 —— 保持琥珀 accent 家族，整体压深以保证对比度。 */
