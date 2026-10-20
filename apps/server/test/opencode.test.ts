@@ -49,6 +49,7 @@ describe('directory browser path navigation', () => {
   it('recognizes Windows drive roots regardless of slash style', () => {
     assert.equal(isWindowsDriveRoot('D:\\'), true);
     assert.equal(isWindowsDriveRoot('C:/'), true);
+    assert.equal(isWindowsDriveRoot('D:'), false);
     assert.equal(isWindowsDriveRoot('D:\\JERRY'), false);
   });
 
