@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor, isIgnoredAuthor, fetchWithTimeout, WATCH_REQUEST_TIMEOUT_MS, type IssueDetailLike } from '../src/commands/watch.js';
+import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor,sessionBaseCandidates, isIgnoredAuthor, fetchWithTimeout, WATCH_REQUEST_TIMEOUT_MS, type IssueDetailLike } from '../src/commands/watch.js';
+
 
 describe('makeSseParser', () => {
   it('reassembles events from split chunks', () => {
@@ -245,5 +246,40 @@ describe('fetchWithTimeout（防止唤醒队列永久阻塞）', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('preserves caller-provided abort signals', async () => {
+    const originalFetch = globalThis.fetch;
+    const upstream = new AbortController();
+    let observedSignal: AbortSignal | undefined;
+    globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        observedSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    }) as typeof fetch;
+    try {
+      const pending = fetchWithTimeout('http://127.0.0.1:4096/session/ses_test/prompt_async', { signal: upstream.signal }, 1_000);
+      upstream.abort();
+      await assert.rejects(pending);
+      assert.equal(observedSignal?.aborted, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+describe('sessionBaseCandidates（唤醒服务地址回退）', () => {
+  it('保留显式参数优先级，但在其不可用时可探测项目地址作为备用', () => {
+    assert.deepEqual(
+      sessionBaseCandidates('http://127.0.0.1:4096', ' http://192.168.3.7:4097/ ', 'http://127.0.0.1:47825/'),
+      ['http://127.0.0.1:4096', 'http://192.168.3.7:4097', 'http://127.0.0.1:47825'],
+    );
+  });
+
+  it('去重规范化后的相同地址', () => {
+    assert.deepEqual(
+      sessionBaseCandidates('http://127.0.0.1:4097/', 'http://127.0.0.1:4097', undefined),
+      ['http://127.0.0.1:4097'],
+    );
   });
 });

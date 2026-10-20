@@ -19,6 +19,57 @@ import type { Command } from './registry.js';
 // sqlite-backed Store into its process.
 import { isWakeComment } from '@taskboard/core/types';
 
+
+/** All request/response calls must be bounded so one dead endpoint cannot stall the serial wake queue forever. */
+export const WATCH_REQUEST_TIMEOUT_MS = 10_000;
+
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = WATCH_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+  return fetch(url, { ...init, signal });
+}
+
+/** Try the explicit endpoint first, then project/TUI routes, deduplicating equivalent URLs. */
+export function sessionBaseCandidates(
+  opencodeBase: string | undefined,
+  projectChannel: string | null | undefined,
+  tuiUrl: string | undefined,
+): string[] {
+  const normalize = (value: string): string => value.trim().replace(/\/+$/, '');
+  return [...new Set(
+    [opencodeBase, projectChannel ?? undefined, tuiUrl]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map(normalize),
+  )];
+}
+
+async function firstHealthySessionBase(candidates: readonly string[]): Promise<string | undefined> {
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i]!;
+    try {
+      // OpenCode's health endpoint is cheap. Probe before sending a prompt so a stale
+      // --opencode URL cannot pin the queue against a half-dead TCP listener.
+      const response = await fetchWithTimeout(`${candidate}/global/health`, { headers: { accept: 'application/json' } }, 2_000);
+      await response.arrayBuffer();
+      if (!response.ok) {
+        console.error(`watch: OpenCode health check failed (${candidate}, HTTP ${response.status})`);
+        continue;
+      }
+      if (i > 0) {
+        console.error(`watch: preferred OpenCode endpoint is unavailable; using reachable fallback ${candidate}`);
+      }
+      return candidate;
+    } catch (err) {
+      console.error(`watch: OpenCode health check failed (${candidate}: ${(err as Error).message})`);
+    }
+  }
+  return undefined;
+}
+
 export interface SseEvent { name: string; data: string }
 
 /**
@@ -261,7 +312,7 @@ export const watchCommand: Command = {
       let cached = channelCache.get(projectId);
       if (!cached) {
         const headers: Record<string, string> = token() ? { Authorization: `Bearer ${token()}` } : {};
-        cached = fetch(`${base()}/api/projects/${encodeURIComponent(projectId)}`, { headers })
+        cached = fetchWithTimeout(`${base()}/api/projects/${encodeURIComponent(projectId)}`, { headers })
           .then(r => r.ok ? (r.json() as Promise<{ wakeChannel?: string }>).then(d => d.wakeChannel ?? null) : null)
           .catch(() => null);
         channelCache.set(projectId, cached);
@@ -272,7 +323,7 @@ export const watchCommand: Command = {
       let cached = projectCache.get(issueId);
       if (!cached) {
         const headers: Record<string, string> = token() ? { Authorization: `Bearer ${token()}` } : {};
-        cached = fetch(`${base()}/api/issues/${encodeURIComponent(issueId)}`, { headers })
+        cached = fetchWithTimeout(`${base()}/api/issues/${encodeURIComponent(issueId)}`, { headers })
           .then(r => r.ok ? (r.json() as Promise<{ projectId?: string }>).then(d => d.projectId ?? null) : null)
           .catch(() => null);
         projectCache.set(issueId, cached);
@@ -285,18 +336,18 @@ export const watchCommand: Command = {
       missedSince = Date.now();
       try {
         const headers: Record<string, string> = token() ? { Authorization: `Bearer ${token()}` } : {};
-        const pr = await fetch(`${base()}/api/projects`, { headers });
+        const pr = await fetchWithTimeout(`${base()}/api/projects`, { headers });
         if (!pr.ok) return;
         const allProjects = (await pr.json()) as Array<{ id: string; wakeChannel?: string }>;
         const projects = projectFilter ? allProjects.filter(p => p.id === projectFilter) : allProjects;
         let found = 0;
         for (const p of projects) {
-          const lr = await fetch(`${base()}/api/projects/${encodeURIComponent(p.id)}/issues?includeDone=1`, { headers });
+          const lr = await fetchWithTimeout(`${base()}/api/projects/${encodeURIComponent(p.id)}/issues?includeDone=1`, { headers });
           if (!lr.ok) continue;
           const issues = (await lr.json()) as Array<{ id: string }>;
           const backfillChannel = ('wakeChannel' in p ? String(p.wakeChannel) : '') || '';
           for (const it of issues) {
-            const dr = await fetch(`${base()}/api/issues/${encodeURIComponent(it.id)}`, { headers });
+            const dr = await fetchWithTimeout(`${base()}/api/issues/${encodeURIComponent(it.id)}`, { headers });
             if (!dr.ok) continue;
             const detail = (await dr.json()) as IssueDetailLike;
             for (const w of missedWakes([detail], since, prefix, processed, ignoreAuthors)) {
@@ -321,7 +372,7 @@ export const watchCommand: Command = {
     const markStatus = async (commentId: string, status: string): Promise<void> => {
       if (!commentId) return;
       try {
-        await fetch(`${base()}/api/comments/${commentId}`, {
+        await fetchWithTimeout(`${base()}/api/comments/${commentId}`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json', 'x-taskboard-actor': 'watch', ...(token() ? { Authorization: `Bearer ${token()}` } : {}) },
           body: JSON.stringify({ status })
@@ -336,7 +387,7 @@ export const watchCommand: Command = {
       // currently selected TUI session, and never silently spawn a new session.
       let sessionId: string | null = null;
       try {
-        const res = await fetch(`${base()}/api/issues/${encodeURIComponent(issueId)}`, {
+        const res = await fetchWithTimeout(`${base()}/api/issues/${encodeURIComponent(issueId)}`, {
           headers: token() ? { Authorization: `Bearer ${token()}` } : {}
         });
         if (res.ok) {
@@ -359,12 +410,13 @@ export const watchCommand: Command = {
         // 显式配置（--opencode / OPENCODE_SERVER_URL）必须优先于项目里存的值：
         // 看板可能跑在 Docker 里，项目 wakeChannel 得写 host.docker.internal 才能从
         // 容器访问宿主机；而 watch 跑在宿主机上，只有 127.0.0.1 才通。
-        const sessionBase = opencodeBase || projectChannel?.trim() || tuiUrl;
+        const sessionCandidates = sessionBaseCandidates(opencodeBase, projectChannel, tuiUrl);
+        const sessionBase = await firstHealthySessionBase(sessionCandidates);
         // decideWake owns the routing decision (bound + reachable server →
         // prompt). A bound task that fails it must refuse: falling through to
         // TUI/headless would inject into the WRONG session.
         if (decideWake(sessionId, sessionBase) !== 'prompt') {
-          console.error(`watch: task ${issueId} is bound to ${sessionId}, but no OpenCode server URL is configured; refusing to start a new session`);
+          console.error(`watch: task ${issueId} is bound to ${sessionId}, but no healthy OpenCode server is reachable (checked: ${sessionCandidates.join(', ') || 'none'}); refusing to start a new session`);
           return false;
         }
         try {
@@ -393,7 +445,7 @@ export const watchCommand: Command = {
       // currently selected TUI session) or headless spawn fallback.
       if (tuiUrl) {
         try {
-          const res = await fetch(`${tuiUrl}/tui/append-prompt`, {
+          const res = await fetchWithTimeout(`${tuiUrl}/tui/append-prompt`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ text: prompt })
