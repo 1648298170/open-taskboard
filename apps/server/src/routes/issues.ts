@@ -40,7 +40,7 @@ function openCodeEventBelongsToSession(event: unknown, sessionId: string): boole
     event.sessionID, event.sessionId,
     payload.sessionID, payload.sessionId,
     properties.sessionID, properties.sessionId,
-    info.sessionID, info.sessionId,
+    info.sessionID, info.sessionId, info.id,
     part.sessionID, part.sessionId
   ];
   return candidates.some(value => typeof value === 'string' && value === sessionId);
