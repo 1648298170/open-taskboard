@@ -1072,7 +1072,6 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .cards {
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
-  scrollbar-gutter: stable;
 }
 .cards::-webkit-scrollbar {
   width: 5px;
