@@ -215,7 +215,11 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
         {/* T2-8: 工作树字段，同样的下拉/回退模式（值为 worktree 名称）。 */}
         {refs && refs.worktrees.length > 0 ? (
           <Select title="工作树" value={detail.worktree}
-            onChange={v => { if (v !== detail.worktree) void patch({ worktree: v }); }}
+            onChange={v => {
+              if (v === detail.worktree) return;
+              const selected = refs.worktrees.find(w => w.name === v);
+              void patch({ worktree: v, worktreePath: selected?.path ?? '' });
+            }}
             options={[{ value: '', label: '工作树 —' },
               ...(detail.worktree && !refs.worktrees.some(w => w.name === detail.worktree) ? [{ value: detail.worktree, label: detail.worktree }] : []),
               ...refs.worktrees.map(w => ({ value: w.name, label: w.name }))]} />
@@ -342,6 +346,73 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
           </div>
         );
       })()}
+
+      <section className="detail-section execution-context">
+        <h3>执行上下文</h3>
+        <div className="detail-context-grid">
+          <div className="detail-context-item">
+            <span>实际开始</span>
+            <strong>{detail.startedAt ? fmtWhen(detail.startedAt) : '尚未开始'}</strong>
+          </div>
+          <div className="detail-context-item">
+            <span>实际完成</span>
+            <strong>{detail.completedAt ? fmtWhen(detail.completedAt) : '尚未完成'}</strong>
+          </div>
+          <div className="detail-context-item detail-context-wide">
+            <span>工作树路径</span>
+            {detail.worktreePath
+              ? <code title={detail.worktreePath}>{detail.worktreePath}</code>
+              : <span className="detail-empty">尚未解析工作树路径</span>}
+          </div>
+          <div className="detail-context-item detail-context-wide">
+            <span>OpenCode Session</span>
+            {detail.sessionId
+              ? <code title={detail.sessionId}>{detail.sessionId}</code>
+              : <span className="detail-empty">未绑定会话</span>}
+          </div>
+          <div className="detail-context-item detail-context-wide">
+            <span>执行耗时</span>
+            <strong>{detail.startedAt && detail.completedAt
+              ? (() => {
+                  const minutes = Math.max(0, Math.round((Date.parse(detail.completedAt) - Date.parse(detail.startedAt)) / 60000));
+                  return minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
+                })()
+              : detail.startedAt ? '进行中' : '—'}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="detail-section review-context">
+        <h3>验收与审核</h3>
+        <label className="detail-field">
+          <span>验收标准（Markdown）</span>
+          <textarea rows={4} defaultValue={detail.acceptanceCriteria}
+            placeholder="列出可验证的完成条件，例如：功能行为、边界情况、测试要求…"
+            onBlur={e => {
+              const value = e.currentTarget.value;
+              if (value !== detail.acceptanceCriteria) void patch({ acceptanceCriteria: value });
+            }} />
+        </label>
+        <div className="review-status-row">
+          <span>审核结论</span>
+          <Select value={detail.reviewStatus} onChange={v => {
+            if (v !== detail.reviewStatus) void patch({ reviewStatus: v as IssueDetail['reviewStatus'] });
+          }} options={[
+            { value: 'pending', label: '待审核' },
+            { value: 'approved', label: '已通过' },
+            { value: 'changes_requested', label: '需要修改' }
+          ]} />
+        </div>
+        <label className="detail-field">
+          <span>审核意见 / 验收证据</span>
+          <textarea rows={3} defaultValue={detail.reviewNotes}
+            placeholder="记录验证结果、未覆盖项或需要修改的内容…"
+            onBlur={e => {
+              const value = e.currentTarget.value;
+              if (value !== detail.reviewNotes) void patch({ reviewNotes: value });
+            }} />
+        </label>
+      </section>
 
       {/* T6-36: 最近提交预览 —— 绑定了分支或工作树才显示。 */}
       {commitRef && (
