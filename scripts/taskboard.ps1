@@ -105,7 +105,7 @@ function Stop-ManagedServer {
   Write-Info 'Taskboard process stopped.'
 }
 function Get-CommandPath([string]$Name) {
-  $command = Get-Command $Name -ErrorAction SilentlyContinue | Where-Object { $_.CommandType -eq 'Application' } | Select-Object -First 1
+  $command = Get-Command $Name -All -ErrorAction SilentlyContinue | Where-Object { $_.CommandType -eq 'Application' } | Select-Object -First 1
   if (-not $command) { return $null }
   return $command.Source
 }
