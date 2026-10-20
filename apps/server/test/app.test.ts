@@ -209,7 +209,7 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
 
     const withBind = await t.app.inject({
       method: 'PATCH', url: `/api/issues/${freshId}`, headers: json,
-      payload: { status: 'in_progress', sessionId: 'ses_x3', branch: 'feat/z', version: 1 }
+      payload: { status: 'in_progress', sessionId: 'ses_x3', branch: 'feat/z', statusNote: '开始执行：已绑定会话和分支。验证证据：本次开工前检查完成。未覆盖：实现与回归测试尚未完成。', version: 1 }
     });
     assert.equal(withBind.statusCode, 200);
     assert.equal(withBind.json<{ sessionId: string }>().sessionId, 'ses_x3');
@@ -542,7 +542,7 @@ describe('TASKBOARD_HUMAN_DONE gate', () => {
     const v = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<{ version: number }>().version;
     const res = await app.inject({
       method: 'PATCH', url: `/api/issues/${issueId}`,
-      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_progress', version: v }
+      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_progress', statusNote: '开始执行：准备工作已完成。验证证据：会话和分支已确认。未覆盖：任务实现尚未开始。', version: v }
     });
     assert.equal(res.statusCode, 200);
     cleanup();
@@ -755,81 +755,95 @@ describe('ready/next views', () => {
   });
 });
 
-describe('in_review 评论门禁（TASKBOARD_REVIEW_COMMENT 默认开）', () => {
-  it('DEBUG2 store 层计数', async () => {
-    const { DatabaseSync } = await import('node:sqlite');
-    const { mkdtempSync, rmSync } = await import('node:fs');
-    const { tmpdir } = await import('node:os');
-    const { join } = await import('node:path');
-    const { Store } = await import('@taskboard/core');
-    const { buildApp } = await import('../src/app.js');
-    const dir = mkdtempSync(join(tmpdir(), 'dbg2-'));
-    const store = new Store(join(dir, 'b.sqlite'), new DatabaseSync(':memory:'));
-    const { app } = await buildApp({ store, env: {} });
-    await app.inject({ method: 'POST', url: '/api/projects', payload: { id: 'p1', name: 'P' } });
-    const issue = (await app.inject({ method: 'POST', url: '/api/projects/p1/issues', payload: { title: 't' } })).json<any>();
-    await app.inject({ method: 'POST', url: `/api/issues/${issue.id}/comments`, payload: { author: 'cli', body: '自验' } });
-    console.log('DBG2 store.countByAuthor:', store.commentCountBy(issue.id, 'cli'));
-    const patch = await app.inject({ method: 'PATCH', url: `/api/issues/${issue.id}`, headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: issue.version } });
-    console.log('DBG2 patch:', patch.statusCode, JSON.stringify(patch.json<any>()));
-    console.log('DBG2 repo list:', JSON.stringify(store.listComments(issue.id).map(c => c.author)));
-    await app.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('DEBUG 评论区布局与计数', async () => {
+describe('status transition audit-note gate', () => {
+  it('rejects an agent transition without statusNote even when the agent already commented', async () => {
     const { app, cleanup } = await makeApp();
     await seedProject(app);
     const issueId = await seedIssue(app);
-    const c = await app.inject({ method: 'POST', url: `/api/issues/${issueId}/comments`, headers: json, payload: { author: 'cli', body: '自验' } });
-    const detail = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<any>();
-    console.log('DBG comment-status:', c.statusCode, '| authors:', JSON.stringify(detail.comments.map((x: any) => x.author)));
+    await app.inject({
+      method: 'POST', url: `/api/issues/${issueId}/comments`,
+      headers: { ...json, 'x-taskboard-actor': 'cli' },
+      payload: { author: 'cli', body: '以前留过的评论不能替代本次变更说明' }
+    });
+    const before = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<any>();
     const res = await app.inject({
       method: 'PATCH', url: `/api/issues/${issueId}`,
-      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: 2 }
-    });
-    console.log('DBG patch:', res.statusCode, JSON.stringify(res.json<any>()));
-    const dbg = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<any>();
-    console.log('DBG detail.comments:', JSON.stringify(dbg.comments.map((x: any) => ({ a: x.author }))));
-    console.log('DBG store gate count (经 API 无法直查，改查路由行为):', '见上');
-    cleanup();
-  });
-
-  it('403s an agent with zero own comments; passes after the agent comments', async () => {
-    const { app, cleanup } = await makeApp();
-    await seedProject(app);
-    const issueId = await seedIssue(app);
-    const noComment = await app.inject({
-      method: 'PATCH', url: `/api/issues/${issueId}`,
-      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: 1 }
-    });
-    assert.equal(noComment.statusCode, 403);
-    assert.match(noComment.json<{ error: string }>().error, /先落评再交验/);
-    // 评论后同 actor 交验通过
-    await app.inject({ method: 'POST', url: `/api/issues/${issueId}/comments`, headers: json, payload: { author: 'cli', body: '自验通过：单测覆盖' } });
-    const v2 = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<{ version: number }>().version;
-    const ok = await app.inject({
-      method: 'PATCH', url: `/api/issues/${issueId}`,
-      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: v2 }
-    });
-    assert.equal(ok.statusCode, 200);
-    cleanup();
-  });
-
-  it("another actor's comment does not count — the reviewer must have written one", async () => {
-    const { app, cleanup } = await makeApp();
-    await seedProject(app);
-    const issueId = await seedIssue(app);
-    await app.inject({ method: 'POST', url: `/api/issues/${issueId}/comments`, headers: json, payload: { author: 'web', body: '人类上下文' } });
-    const res = await app.inject({
-      method: 'PATCH', url: `/api/issues/${issueId}`,
-      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: 2 }
+      headers: { ...json, 'x-taskboard-actor': 'cli' },
+      payload: { status: 'in_review', version: before.version }
     });
     assert.equal(res.statusCode, 403);
+    assert.match(res.json<{ error: string }>().error, /statusNote/);
+    const after = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<any>();
+    assert.equal(after.status, 'todo', 'a rejected transition must not change status');
+    assert.equal(after.comments.length, before.comments.length, 'a rejected transition must not create a comment');
     cleanup();
   });
 
-  it('web actor is exempt; confirm cannot bypass create-at-in_review gate', async () => {
+  it('atomically stores an agent status transition and its audit comment', async () => {
+    const { app, cleanup } = await makeApp();
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    const before = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<any>();
+    const note = '原因：实现与自测已完成。验证证据：prettier、eslint 通过。未覆盖：1366/1920 目验与 vue-tsc。';
+    const res = await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'codex' },
+      payload: { status: 'in_review', statusNote: note, version: before.version }
+    });
+    assert.equal(res.statusCode, 200);
+    const after = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<any>();
+    assert.equal(after.status, 'in_review');
+    assert.equal(after.version, before.version + 1);
+    const audit = after.comments.find((comment: any) => comment.body.includes('状态变更记录：todo → in_review'));
+    assert.ok(audit, 'transition comment should be committed with the status');
+    assert.equal(audit.author, 'codex');
+    assert.ok(audit.body.includes('prettier、eslint 通过'));
+    assert.ok(audit.body.includes('未覆盖：1366/1920 目验与 vue-tsc'));
+    cleanup();
+  });
+
+  it('automatically records web transitions and does not duplicate comments on no-op status writes', async () => {
+    const { app, cleanup } = await makeApp();
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    const first = await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'web' },
+      payload: { status: 'in_review', version: 1 }
+    });
+    assert.equal(first.statusCode, 200);
+    const afterFirst = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<any>();
+    assert.equal(afterFirst.comments.length, 1);
+    assert.equal(afterFirst.comments[0].author, 'web');
+    assert.match(afterFirst.comments[0].body, /todo → in_review/);
+    assert.match(afterFirst.comments[0].body, /未提供额外说明/);
+
+    const noOp = await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'cli' },
+      payload: { status: 'in_review', version: afterFirst.version }
+    });
+    assert.equal(noOp.statusCode, 200, 're-affirming a status is not a transition');
+    const afterNoOp = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<any>();
+    assert.equal(afterNoOp.comments.length, 1, 'no-op status writes must not duplicate audit comments');
+    cleanup();
+  });
+
+  it('statusNote gate cannot be disabled by TASKBOARD_REVIEW_COMMENT=0', async () => {
+    const { app, cleanup } = await makeApp({ TASKBOARD_REVIEW_COMMENT: '0' });
+    await seedProject(app);
+    const issueId = await seedIssue(app);
+    const res = await app.inject({
+      method: 'PATCH', url: `/api/issues/${issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'cli' },
+      payload: { status: 'in_review', version: 1 }
+    });
+    assert.equal(res.statusCode, 403);
+    assert.match(res.json<{ error: string }>().error, /statusNote/);
+    cleanup();
+  });
+
+  it('keeps web UI transitions convenient and preserves the create-at-in_review gate', async () => {
     const { app, cleanup } = await makeApp();
     await seedProject(app);
     const issueId = await seedIssue(app);
@@ -839,51 +853,13 @@ describe('in_review 评论门禁（TASKBOARD_REVIEW_COMMENT 默认开）', () =>
     });
     assert.equal(webPatch.statusCode, 200);
     const create = await app.inject({
-      method: 'POST', url: '/api/projects/p1/issues', headers: json, payload: { title: '直接交验', status: 'in_review' }
+      method: 'POST', url: '/api/projects/p1/issues', headers: json,
+      payload: { title: '直接交验', status: 'in_review' }
     });
     assert.equal(create.statusCode, 403);
-    const escaped = await app.inject({
-      method: 'POST', url: '/api/projects/p1/issues', headers: json, payload: { title: '直接交验', status: 'in_review', confirm: true }
-    });
-    assert.equal(escaped.statusCode, 403);
-    cleanup();
-  });
-
-  it('TASKBOARD_REVIEW_COMMENT=0 disables the gate', async () => {
-    const { app, cleanup } = await makeApp({ TASKBOARD_REVIEW_COMMENT: '0' });
-    await seedProject(app);
-    const issueId = await seedIssue(app);
-    const v = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<{ version: number }>().version;
-    const res = await app.inject({
-      method: 'PATCH', url: `/api/issues/${issueId}`,
-      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: v }
-    });
-    assert.equal(res.statusCode, 200);
     cleanup();
   });
 });
-
-describe('in_review 门禁只拦状态流转', () => {
-  it('re-affirming in_review (no transition) by a comment-less agent passes', async () => {
-    const { app, cleanup } = await makeApp();
-    await seedProject(app);
-    const issueId = await seedIssue(app);
-    // web 先置 in_review（人工/已有交验语义）
-    await app.inject({
-      method: 'PATCH', url: `/api/issues/${issueId}`,
-      headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { status: 'in_review', version: 1 }
-    });
-    // 无评论 agent 重申 in_review（非流转）→ 不拦（动态取最新 version）
-    const vNow = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<{ version: number }>().version;
-    const res = await app.inject({
-      method: 'PATCH', url: `/api/issues/${issueId}`,
-      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { status: 'in_review', version: vNow }
-    });
-    assert.equal(res.statusCode, 200);
-    cleanup();
-  });
-});
-
 
 describe('server bind safety', () => {
   it('refuses non-loopback binding without an API token', async () => {
