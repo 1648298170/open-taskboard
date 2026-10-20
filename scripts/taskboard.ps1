@@ -136,10 +136,20 @@ function Invoke-Pnpm([string]$PnpmPath, [string[]]$Arguments, [string]$Purpose) 
   } finally { Pop-Location }
 }
 function Ensure-Build([string]$PnpmPath) {
-  $needsBuild = -not (Test-Path -LiteralPath $ServerEntry)
-  if (-not $needsBuild -and -not (Test-Path -LiteralPath (Join-Path $Root 'apps\web\dist\index.html'))) { $needsBuild = $true }
-  if ($needsBuild) { Invoke-Pnpm $PnpmPath @('build') 'Build output is missing; building all packages' }
-  if (-not (Test-Path -LiteralPath $ServerEntry)) { throw "Build completed but server entry was not created: $ServerEntry" }
+  $requiredOutputs = @(
+    $ServerEntry,
+    (Join-Path $Root 'packages\core\dist\index.js'),
+    (Join-Path $Root 'apps\web\dist\index.html')
+  )
+  $missingOutputs = @($requiredOutputs | Where-Object { -not (Test-Path -LiteralPath $_) })
+  if ($missingOutputs.Count -gt 0) {
+    Write-Warn "Missing build output(s): $($missingOutputs -join ', ')"
+    Invoke-Pnpm $PnpmPath @('build') 'Build output is missing; building all packages'
+  }
+  $missingOutputs = @($requiredOutputs | Where-Object { -not (Test-Path -LiteralPath $_) })
+  if ($missingOutputs.Count -gt 0) {
+    throw "Build completed but required output(s) are still missing: $($missingOutputs -join ', ')"
+  }
 }
 function Start-Taskboard {
   Ensure-RuntimeDir
