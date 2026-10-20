@@ -1016,6 +1016,24 @@ describe('task Git worktree creation', () => {
   });
 });
 
+describe('task OpenCode Session binding', () => {
+  it('refuses to create a Session until the project OpenCode server is configured', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      await seedProject(app);
+      const issueId = await seedIssue(app);
+      const response = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/opencode-session`,
+        headers: { ...json, 'x-taskboard-actor': 'web' }, payload: {}
+      });
+      assert.equal(response.statusCode, 400);
+      assert.match(response.json<{ error: string }>().error, /OpenCode Server URL/);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 describe('Agent execution event timeline', () => {
   it('persists queued, retry and failure events on the task detail', async () => {
     const { app, cleanup } = await makeApp();
