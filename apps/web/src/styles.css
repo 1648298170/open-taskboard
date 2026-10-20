@@ -1092,3 +1092,179 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 @media (max-width:760px) {
   .drawer { width: 92vw; min-width: 0; }
 }
+
+
+/* ---- OpenCode server-side workspace directory picker ---- */
+.workspace-path-control {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+}
+.workspace-path-control input {
+  width: 0;
+  min-width: 0;
+  flex: 1;
+  margin-top: 0;
+}
+.workspace-path-control .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.directory-picker-dialog {
+  width: min(720px, 94vw);
+  max-height: 90vh;
+  overflow: auto;
+  z-index: 80;
+}
+.directory-picker-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.directory-picker-header h2 { margin-bottom: 5px; }
+.directory-picker-header p {
+  margin: 0 0 12px;
+  color: var(--ink-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.directory-picker-server {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-panel);
+  font-size: 10px;
+}
+.directory-picker-server > span {
+  flex: 0 0 auto;
+  color: var(--ink-dim);
+}
+.directory-picker-server code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+.directory-picker-pathbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+}
+.directory-picker-pathbar input {
+  width: 100%;
+  min-width: 0;
+  margin-top: 0;
+  font-size: 12px;
+}
+.directory-picker-pathbar .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+.directory-picker-current {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 1px;
+  color: var(--ink-dim);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.directory-picker-current svg { flex: 0 0 auto; margin-top: 1px; }
+.directory-picker-list {
+  min-height: 120px;
+  max-height: min(340px, 42vh);
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+.directory-picker-entry {
+  display: grid;
+  grid-template-columns: 16px minmax(80px, auto) minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  color: var(--ink);
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  cursor: pointer;
+}
+.directory-picker-entry:last-child { border-bottom: 0; }
+.directory-picker-entry:hover { background: var(--bg-raised); }
+.directory-picker-entry > svg { color: var(--ink-dim); }
+.directory-picker-entry span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.directory-picker-entry small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.directory-picker-state {
+  display: grid;
+  min-height: 120px;
+  place-items: center;
+  padding: 16px;
+  color: var(--ink-dim);
+  font-size: 11px;
+  text-align: center;
+}
+.directory-picker-error {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.directory-picker-error small { color: var(--ink-dim); line-height: 1.5; }
+.directory-picker-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+.directory-picker-footer > span {
+  max-width: 330px;
+  color: var(--ink-dim);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.directory-picker-footer menu {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+}
+@media (max-width: 560px) {
+  .directory-picker-pathbar { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .directory-picker-pathbar .icon-btn { display: none; }
+  .directory-picker-entry { grid-template-columns: 16px minmax(0, 1fr) 14px; }
+  .directory-picker-entry small { display: none; }
+  .directory-picker-footer { flex-direction: column; }
+  .directory-picker-footer > span { max-width: none; }
+  .directory-picker-footer menu { width: 100%; justify-content: flex-end; }
+}
