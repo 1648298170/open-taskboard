@@ -47,8 +47,8 @@ function openCodeEventBelongsToSession(event: unknown, sessionId: string): boole
 }
 
 function normalizeOpenCodeDirectory(value: string): string {
-  const normalized = value.trim().replace(/\\/g, '/').replace(/\\/+$/, '');
-  return /^[a-zA-Z]:\\//.test(normalized) ? normalized.toLowerCase() : normalized;
+  const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^[a-zA-Z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
 const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerConfig }> = async (app, { store, config }) => {
@@ -380,7 +380,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       for await (const chunk of upstream.body!) {
         if (controller.signal.aborted || res.destroyed) break;
         buffer += decoder.decode(chunk, { stream: true });
-        let boundary = buffer.search(/\\r?\\n\\r?\\n/);
+        let boundary = buffer.search(/\r?\n\r?\n/);
         while (boundary >= 0) {
           const frame = buffer.slice(0, boundary);
           const delimiter = /^\\r?\\n\\r?\\n/.exec(buffer.slice(boundary))?.[0] ?? '\\n\\n';
@@ -399,7 +399,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
               // Ignore malformed/non-JSON upstream frames; do not break the stream.
             }
           }
-          boundary = buffer.search(/\\r?\\n\\r?\\n/);
+          boundary = buffer.search(/\r?\n\r?\n/);
         }
       }
     } catch (err) {
