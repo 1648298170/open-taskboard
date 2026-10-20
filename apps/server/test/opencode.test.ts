@@ -47,15 +47,15 @@ describe('OpenCode metadata destination guard', () => {
 
 describe('directory browser path navigation', () => {
   it('recognizes Windows drive roots regardless of slash style', () => {
-    assert.equal(isWindowsDriveRoot('D:\\), true);
+    assert.equal(isWindowsDriveRoot('D:\\'), true);
     assert.equal(isWindowsDriveRoot('C:/'), true);
     assert.equal(isWindowsDriveRoot('D:\\JERRY'), false);
   });
 
   it('returns Windows parents up to the drive root without crossing volumes', () => {
     assert.equal(parentDirectoryPath('D:\\JERRY\\dsh'), 'D:\\JERRY');
-    assert.equal(parentDirectoryPath('D:\\JERRY'), 'D:\\);
-    assert.equal(parentDirectoryPath('D:\\), null);
+    assert.equal(parentDirectoryPath('D:\\JERRY'), 'D:\\');
+    assert.equal(parentDirectoryPath('D:\\'), null);
   });
 
   it('returns POSIX parents up to the filesystem root', () => {
