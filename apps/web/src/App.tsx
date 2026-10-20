@@ -8,10 +8,9 @@ import { Select } from './components/Select';
 import { Bell, ChartColumn, GanttChart, Keyboard, Moon, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings } from 'lucide-react';
 import { Drawer } from './components/Drawer';
 import { NewIssueDialog } from './components/NewIssueDialog';
-import { ProjectSessionDialog } from './components/ProjectSessionDialog';
 import { StatsPanel } from './components/StatsPanel';
 import { Timeline } from './components/Timeline';
-import { mergeSessionOptions, sessionProjectName, sessionWorkspacePath } from './logic/session';
+import { sessionProjectName, sessionWorkspacePath } from './logic/session';
 
 /** 从 location.hash 解析深链：#/issue/<id> → <id>，其余 → null。 */
 function issueIdFromHash(): string | null {
@@ -256,60 +255,6 @@ export default function App() {
     if (!statsOpen || !projectId) return;
     api_.stats(projectId).then(setStats).catch(err => { if (isUnauthorized(err)) setNeedToken(true); });
   }, [statsOpen, projectId]);
-
-  // 新建项目对话框：打开/工作区变化时防抖拉取会话列表（无状态端点）。
-  // 不传 url —— 服务端按环境变量 → 项目 wakeChannel → 默认地址解析。
-  // cancelled 标记丢弃过期响应；关闭对话框后不再请求。
-  useEffect(() => { projSessionIdRef.current = projSessionId; }, [projSessionId]);
-
-  useEffect(() => {
-    if (!projCreateOpen) return;
-    let cancelled = false;
-    setProjSessionsLoading(true);
-    setProjSessionsError(null);
-    const timer = setTimeout(() => {
-      api_.openCodeSessionsFor(undefined, projWorkspacePath.trim() || undefined)
-        .then(result => {
-          if (cancelled) return;
-          // 工作区路径若来自「选中会话自动回填」，重取列表后保留刚选中的会话；
-          // 若它因过滤条件未返回，用合成选项继续显示，避免静默丢选择。
-          const keepSelection = autoFilledWorkspaceRef.current !== null
-            && autoFilledWorkspaceRef.current === projWorkspacePath.trim();
-          const selected = projSessionIdRef.current;
-          setProjSessions(mergeSessionOptions(result.sessions, keepSelection ? selected : '').options);
-          setProjSessionId(prev => (keepSelection ? prev : result.sessions.some(s => s.id === prev) ? prev : ''));
-          if (keepSelection) autoFilledWorkspaceRef.current = null;
-          if (result.sessions.length === 0 && !(keepSelection && selected)) {
-            setProjSessionsError(result.workspacePath
-              ? '没有找到目录匹配项目工作区的会话：' + result.workspacePath
-              : '当前 OpenCode 服务没有可选会话，请先在 OpenCode 中创建或打开一个会话。');
-          }
-        })
-        .catch(err => {
-          if (cancelled) return;
-          setProjSessions([]);
-          setProjSessionId('');
-          setProjSessionsError((err as Error).message);
-        })
-        .finally(() => { if (!cancelled) setProjSessionsLoading(false); });
-    }, 300);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [projCreateOpen, projWorkspacePath]);
-
-  const openProjectDialog = (): void => {
-    setProjName(''); setProjId(''); setProjLabels(''); setProjWorkspacePath('');
-    setProjSessionId(''); setProjSessions([]); setProjSessionsLoading(false);
-    setProjSessionsError(null); setProjError(null);
-    autoFilledWorkspaceRef.current = null;
-    setProjCreateOpen(true);
-  };
-
-  const closeProjectDialog = (): void => {
-    setProjCreateOpen(false);
-    setProjSessionId(''); setProjSessions([]); setProjSessionsLoading(false);
-    setProjSessionsError(null); setProjError(null);
-    autoFilledWorkspaceRef.current = null;
-  };
 
   // ---- 过滤 / 排序 ----
   const filtersActive = filters.text.trim() !== '' || filters.assignee !== '' || filters.label !== '' || filters.due !== '';
@@ -828,7 +773,7 @@ export default function App() {
         defaultSessionId={projects.find(project => project.id === projectId)?.defaultSessionId}
         onClose={() => setDialogOpen(false)}
         onCreated={id => { void refresh(); if (id) openIssue(id); }}
-        onError={msg => showToast(`✗ ${msg}`)} />}
+        onError={msg => showToast(`✗ ${msg}`)} />
 
       {directoryCreateOpen && (
         <dialog open className="new-dialog">
@@ -920,9 +865,19 @@ export default function App() {
             <label>默认 OpenCode Session（必选）
               <div className="session-select-row">
                 <div className="session-select-control">
-                  <Select value={projDefaultSessionId} onChange={setProjDefaultSessionId}
+                  <Select value={projDefaultSessionId} onChange={value => {
+                    setProjDefaultSessionId(value);
+                    const picked = projSessions.find(session => session.id === value);
+                    // Selecting a Session fills the project name and workspace;
+                    // both stay editable so advanced setups can still override.
+                    const pickedName = sessionProjectName(picked);
+                    if (pickedName) setProjName(pickedName);
+                    const pickedWorkspace = sessionWorkspacePath(picked);
+                    if (pickedWorkspace) setProjWorkspacePath(pickedWorkspace);
+                  }}
                     options={projSessions.map(session => ({ value: session.id, label: session.title + ' · ' + session.id.slice(0, 12) }))}
-                    placeholder={projSessionsLoading ? '正在读取 Session…' : '选择已有 Session'} />
+                    placeholder="选择会话"
+                    emptyText={projSessionsLoading ? '正在读取 Session…' : '当前没有OpenCode 会话，请先前往OpenCode创建会话'} />
                 </div>
                 <button type="button" className="btn" disabled={!projectDirectoryId || !projWorkspacePath.trim() || !projServerUrl.trim() || projSessionsLoading}
                   onClick={() => { setSessionTitle(projName.trim() || '新项目'); setSessionCreateOpen(true); }}><Plus size={13} /> 新建 Session</button>
@@ -964,14 +919,6 @@ export default function App() {
           </form>
         </dialog>
       )}
-
-      <ProjectSessionDialog open={configSessionOpen}
-        project={projects.find(p => p.id === projectId) ?? null}
-        onClose={() => setConfigSessionOpen(false)}
-        onSaved={updated => {
-          setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
-          showToast(updated.sessionId ? '已绑定默认会话：' + updated.sessionId : '已解除默认会话绑定');
-        }} />
 
       {/* v0.4: 快捷键帮助浮层（? 呼出，Esc / 点击遮罩关闭）。 */}
       {helpOpen && (

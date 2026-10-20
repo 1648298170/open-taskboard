@@ -12,7 +12,7 @@ export function ProjectSessionDialog({ open, project, onClose, onSaved }: {
   onSaved: (project: Project) => void;
 }) {
   const projectId = project?.id ?? '';
-  const defaultSessionId = project?.sessionId ?? '';
+  const defaultSessionId = project?.defaultSessionId ?? '';
   const [sessions, setSessions] = useState<OpenCodeSessionOption[]>([]);
   const [sessionId, setSessionId] = useState('');
   const [loading, setLoading] = useState(false);
@@ -51,7 +51,7 @@ export function ProjectSessionDialog({ open, project, onClose, onSaved }: {
     setSaving(true);
     setError(null);
     try {
-      const updated = await api_.updateProject(project.id, { sessionId });
+      const updated = await api_.updateProject(project.id, { defaultSessionId: sessionId.trim() ? sessionId : null });
       onSaved(updated);
       onClose();
     } catch (err) {
