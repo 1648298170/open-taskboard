@@ -47,7 +47,7 @@ taskboard next --project my-project           # 智能取下一个该做的任�
 | ① 取任务 | `next_issue` / `ready_issues` | 自动跳过他人租约中的任务，只返回依赖已满足的 |
 | ② 认领 | `claim_issue {agent: "你的名字", sessionId: "你的会话id"}` | **认领即开工**：服务端自动把 `todo` 流转为 `in_progress`，并把任务绑定到你的会话（仅当未绑定时；已绑他人会话不抢绑） |
 | ③ 执行 | 干活 + `add_comment` 记录进展 | 重要结论写评论，不要只留在对话里 |
-| ④ 交验 | `update_issue {status: "in_review"}` + 评论写明验证方式 | 然后停下来，向人类报告 |
+| ④ 交验 | `update_issue {status: "in_review", statusNote: "原因；验证证据；未覆盖项"}` | 状态与审计评论由服务端在同一事务提交；然后停下来，向人类报告 |
 | ⑤ 等确认 | 人类在面板点 done，或明确说"确认"后你传 `confirm: true` | **默认配置下 agent 直接置 done 会被 403 拒绝** |
 
 **创建任务时的会话解析顺序**：请求体 `sessionId` → `x-taskboard-session` 头（agent 当前会话）→ 项目默认会话（`project.defaultSessionId`）→ 未绑定。省略会话时自动继承项目默认；修改项目默认会话只影响后续新建任务，已有任务不会追溯改绑。
