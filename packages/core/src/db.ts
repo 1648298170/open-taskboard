@@ -294,6 +294,18 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       ), '')
     `);
   },
+  // v16 → v17: execution context, lifecycle timestamps, and human review fields.
+  // Existing rows remain NULL/pending; we do not fabricate historical timestamps.
+  (db: DatabaseSync) => {
+    db.exec(`
+      ALTER TABLE issues ADD COLUMN worktree_path TEXT NOT NULL DEFAULT '';
+      ALTER TABLE issues ADD COLUMN started_at TEXT;
+      ALTER TABLE issues ADD COLUMN completed_at TEXT;
+      ALTER TABLE issues ADD COLUMN acceptance_criteria TEXT NOT NULL DEFAULT '';
+      ALTER TABLE issues ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending';
+      ALTER TABLE issues ADD COLUMN review_notes TEXT NOT NULL DEFAULT '';
+    `);
+  },
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after
