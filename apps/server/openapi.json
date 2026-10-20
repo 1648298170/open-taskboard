@@ -1592,6 +1592,170 @@
         }
       }
     },
+    "/api/issues/{id}/opencode-state": {
+      "summary": "Recover the current OpenCode Session state for an issue",
+      "get": {
+        "operationId": "getIssueOpenCodeState",
+        "summary": "Read authoritative Session status after reconnect or Taskboard restart",
+        "tags": [
+          "issues"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IssueId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenCode Session snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server unavailable or Session cannot be recovered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/issues/{id}/opencode-abort": {
+      "summary": "Cancel the agent currently executing in the issue-bound OpenCode Session",
+      "post": {
+        "operationId": "abortIssueOpenCodeSession",
+        "summary": "Send an abort request to the owning OpenCode server",
+        "tags": [
+          "issues"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IssueId"
+          },
+          {
+            "$ref": "#/components/parameters/Actor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancellation request accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server rejected or could not process cancellation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/issues/{id}/opencode-events": {
+      "summary": "Subscribe to live events for the issue-bound OpenCode Session",
+      "get": {
+        "operationId": "subscribeIssueOpenCodeEvents",
+        "summary": "Proxy OpenCode SSE events filtered to the bound Session; reconnect then refresh opencode-state",
+        "tags": [
+          "issues"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IssueId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-sent events: ready, opencode, and upstream-error",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode event stream unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/issues/{id}/archive": {
       "summary": "Archive an issue",
       "post": {
