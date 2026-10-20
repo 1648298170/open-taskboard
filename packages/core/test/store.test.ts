@@ -520,19 +520,20 @@ describe('activity stream', () => {
     const { store } = fresh();
     store.createProject({ id: 'p1', name: 'P' });
     const id = store.createIssue({ projectId: 'p1', title: 'tracked' }, 'alice').id;
-    store.updateIssue(id, { status: 'in_progress', title: 'tracked v2' }, undefined, 'bob');
+    store.updateIssue(id, { status: 'in_progress', title: 'tracked v2' }, undefined, 'bob', '开始执行：任务已领取。验证证据：工作分支已确认。未覆盖：编码与测试尚未完成。');
     store.addComment(id, { body: 'ship it' }, 'carol');
 
-    // newest first: commented, updated, created
+    // newest first: regular comment, audit comment, update, create
     const acts = store.listActivities(id);
-    assert.equal(acts.length, 3);
-    assert.deepEqual(acts.map(a => a.action), ['commented', 'updated', 'created']);
-    assert.deepEqual(acts.map(a => a.actor), ['carol', 'bob', 'alice']);
+    assert.equal(acts.length, 4);
+    assert.deepEqual(acts.map(a => a.action), ['commented', 'commented', 'updated', 'created']);
+    assert.deepEqual(acts.map(a => a.actor), ['carol', 'bob', 'bob', 'alice']);
     assert.equal(acts[0]!.detail, 'ship it');
     assert.equal(acts[0]!.issueId, id);
+    assert.match(acts[1]!.detail, /状态变更记录：todo → in_progress/);
     // changed keys joined by ',' (colMap order); status spells out its transition
-    assert.equal(acts[1]!.detail, 'title,status: todo→in_progress');
-    assert.equal(acts[2]!.detail, 'tracked');
+    assert.equal(acts[2]!.detail, 'title,status: todo→in_progress');
+    assert.equal(acts[3]!.detail, 'tracked');
   });
 
   it('emits no activity when the patch is empty', () => {
@@ -1241,9 +1242,9 @@ describe('Store.projectStats', () => {
     const a = store.createIssue({ projectId: 'p1', title: 'A' }, 'alice').id;
     const b = store.createIssue({ projectId: 'p1', title: 'B' }, 'alice').id;
     store.createIssue({ projectId: 'p1', title: 'C open' }, 'alice');
-    store.updateIssue(a, { status: 'done' }, undefined, 'alice');
-    store.updateIssue(b, { status: 'in_progress' }, undefined, 'alice');
-    store.updateIssue(b, { status: 'done' }, undefined, 'alice');
+    store.updateIssue(a, { status: 'done' }, undefined, 'alice', '完成原因：需求实现完成。验证证据：定向测试通过。未覆盖：浏览器视觉验收。');
+    store.updateIssue(b, { status: 'in_progress' }, undefined, 'alice', '开始执行：已开始实现。验证证据：分支与任务范围已确认。未覆盖：实现和测试。');
+    store.updateIssue(b, { status: 'done' }, undefined, 'alice', '完成原因：任务实现完成。验证证据：单测通过。未覆盖：端到端验证。');
     store.addComment(a, { body: 'nice' }, 'bob');
 
     const stats = store.projectStats('p1');
@@ -1274,11 +1275,11 @@ describe('Store.projectStats', () => {
     assert.ok(stats.avgCycleHours! >= 0);
     assert.ok(stats.avgCycleHours! < 1, 'cycle of a just-completed issue should round to 0.0');
 
-    // byActor: alice = 3 creates + 3 updates = 6, bob = 1 comment; desc order
+    // byActor: alice = 3 creates + 3 updates + 3 atomic audit comments = 9, bob = 1 comment; desc order
     // (sqlite rows are null-prototype; spread for deep-equal)
     const alice = stats.byActor.find(x => x.actor === 'alice');
     assert.ok(alice, 'alice should appear in byActor');
-    assert.equal(alice!.actions, 6);
+    assert.equal(alice!.actions, 9);
     assert.equal(stats.byActor[0]!.actor, 'alice');
     assert.deepEqual({ ...stats.byActor[1]! }, { actor: 'bob', actions: 1 });
   });
@@ -1313,10 +1314,10 @@ describe('Store.projectStats', () => {
     store.createProject({ id: 'p2', name: 'Two' });
     const a = store.createIssue({ projectId: 'p1', title: 'A' }, 'alice').id;
     store.createIssue({ projectId: 'p2', title: 'B' }, 'zoe');
-    store.updateIssue(a, { status: 'done' }, undefined, 'alice');
+    store.updateIssue(a, { status: 'done' }, undefined, 'alice', '完结原因：测试任务完成。验证证据：Store 测试覆盖。未覆盖：无。');
 
     const s1 = store.projectStats('p1');
-    assert.deepEqual(s1.byActor.map(x => ({ ...x })), [{ actor: 'alice', actions: 2 }]); // zoe's p2 activity is excluded
+    assert.deepEqual(s1.byActor.map(x => ({ ...x })), [{ actor: 'alice', actions: 3 }]); // zoe's p2 activity is excluded
     const s2 = store.projectStats('p2');
     assert.deepEqual(s2.byActor.map(x => ({ ...x })), [{ actor: 'zoe', actions: 1 }]);
   });
