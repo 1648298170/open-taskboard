@@ -589,7 +589,7 @@ export const watchCommand: Command = {
           console.log(`watch: queued prompt in bound session ${sessionId}`);
           await markStatus(commentId, 'processing');
           await reportExecution(issueId, 'queued', `提示词已提交到绑定的 OpenCode Session ${sessionId}；该状态表示已排队，不代表 Agent 已完成`);
-          void monitorOpenCodeSession(issueId, sessionId!, sessionBase, correlationMarker);
+          void monitorOpenCodeSession(issueId, sessionId!, sessionBase!, correlationMarker);
           return true;
         } catch (err) {
           console.error(`watch: bound session ${sessionId} failed (${(err as Error).message}); no fallback session will be created`);
