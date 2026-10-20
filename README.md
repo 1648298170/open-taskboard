@@ -197,7 +197,7 @@ opencode attach http://127.0.0.1:4097        # 终端 2：接管绑定了 4097 �
 
 #### 细节备忘
 
-- 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47825`）；服务地址与默认会话都存在**项目数据**（`wakeChannel` + `sessionId`），路由就是 `任务 → 项目 → 服务/会话`，没有中心化的路由表；Web 新建项目时无需填写地址，服务端按默认顺序解析后写入 `wakeChannel`；已有任务保留自己的 `sessionId`，不会被项目会话变更改写
+- 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47825`）；服务地址与默认会话都存在**项目数据**（`wakeChannel` + `defaultSessionId`），路由就是 `任务 → 项目 → 服务/会话`，没有中心化的路由表；Web 新建项目需选择目录、工作目录、OpenCode Server 与 Session，选中 Session 会自动回填项目名称与工作区，服务端校验 Session 的实际目录后才写入 `wakeChannel`；已有任务保留自己的 `sessionId`，不会被项目会话变更改写
 - 唤醒优先级：任务已绑定 `sessionId` → 对应 OpenCode 服务的 `prompt_async`；只有未绑定任务才使用项目 `wake_channel` / `--tui-url` 注入当前 TUI，最后才 headless。绑定会话投递失败时不会静默创建新会话，唤醒评论保持 pending 以便重试
 - 同一 serve 端口被多终端 attach 时注入是**广播**（每窗都出现）——多终端请各用各的端口，绑定时不会串
 - 端口/项目/终端数量不受限：`wakeChannel` 是完整 URL（可绑局域网另一台机器），单实例锁按 server 端口 + 作用域自动命名字，headless 通道连端口都不需要

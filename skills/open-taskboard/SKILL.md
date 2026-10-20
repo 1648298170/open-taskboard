@@ -21,7 +21,7 @@ todo → in_progress → in_review → done
 ```
 
 - **不流转不许开工**（dashi 语义）：服务端 `claim` 会把 `todo` 自动置为 `in_progress`（认领即开工）——开工必须先 claim，不存在"干着活但状态还在 todo"的合法状态。认领冲突（409）重读一次，条件不变才重试，绝不抢他人的认领。
-- **会话绑定**：Web 新建任务必须选择会话（项目已绑默认会话时自动预选）；agent 创建任务优先带自己的 `sessionId`（CLI `--session-id` / `TASKBOARD_SESSION_ID`，MCP 记住最近声明的会话并自动发送），省略时继承项目默认会话；认领未绑定任务时传 `claim_issue sessionId` / `claim --session-id`（认领即绑定，只绑空位）；已绑他人会话不抢绑——绑定即所有权，接管需显式解绑。Web 新建项目同样只需选择会话：项目名称/工作区自动回填（可改），服务地址由服务端解析。修改项目会话只影响后续新建任务，不追溯改绑已有任务。
+- **会话绑定**：Web 新建任务必须选择会话（项目已绑默认会话时自动预选）；agent 创建任务优先带自己的 `sessionId`（CLI `--session-id` / `TASKBOARD_SESSION_ID`，MCP 记住最近声明的会话并自动发送），省略时继承项目默认会话；认领未绑定任务时传 `claim_issue sessionId` / `claim --session-id`（认领即绑定，只绑空位）；已绑他人会话不抢绑——绑定即所有权，接管需显式解绑。Web 新建项目需选择目录、工作目录、OpenCode Server 与 Session；选中会话会自动回填项目名称与工作区（可改），服务端校验 Session 实际目录后才保存。修改项目会话只影响后续新建任务，不追溯改绑已有任务。
 - **同会话唤醒**：已绑定任务通过 OpenCode v1 `POST /session/:id/prompt_async` 继续原会话；投递失败不得 fallback 到当前 TUI 或新 headless session，修复连接后重试。
 - **done 只能由用户确认后设置**。完成工作并验证后，把任务置为 `in_review`，向用户报告，等用户明确认可（或明确要求标记完成）才置 `done`。
 - **收尾必推唤醒评论（硬性规则）**：TUI 注入通道下 watch 观测不到你何时干完（人工回车提交，headless 的 exit-0 自动标只属于 spawn 通道）；被 `@agent` 唤醒并处理完后，把该唤醒评论置 `processed`（`comment edit <commentId> --status processed` / MCP `update_comment`）——不落此步评论永远停在「唤醒中」，面板无法知道指令已被消化。

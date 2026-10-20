@@ -50,7 +50,7 @@ taskboard next --project my-project           # 智能取下一个该做的任�
 | ④ 交验 | `update_issue {status: "in_review"}` + 评论写明验证方式 | 然后停下来，向人类报告 |
 | ⑤ 等确认 | 人类在面板点 done，或明确说"确认"后你传 `confirm: true` | **默认配置下 agent 直接置 done 会被 403 拒绝** |
 
-**创建任务时的会话解析顺序**：请求体 `sessionId` → `x-taskboard-session` 头（agent 当前会话）→ 项目默认会话（`project.sessionId`）→ 未绑定。省略会话时自动继承项目默认；修改项目默认会话只影响后续新建任务，已有任务不会追溯改绑。
+**创建任务时的会话解析顺序**：请求体 `sessionId` → `x-taskboard-session` 头（agent 当前会话）→ 项目默认会话（`project.defaultSessionId`）→ 未绑定。省略会话时自动继承项目默认；修改项目默认会话只影响后续新建任务，已有任务不会追溯改绑。
 
 **声明并保持会话**：CLI 用 `--session-id <id>` 或环境变量 `TASKBOARD_SESSION_ID`（每次请求自动带 `x-taskboard-session`，`--session-id` 优先）；MCP 会记住你最近一次声明的 `sessionId` 并自动随请求发送该头，`create_issue` 未显式传时省略字段，从而继承项目默认。整个工作流尽量使用同一个会话 ID，人类才能唤醒并延续你的上下文。
 
@@ -77,9 +77,9 @@ taskboard next --project my-project           # 智能取下一个该做的任�
 - 你收到的唤醒 prompt 形如：`#<任务ID> <任务标题>\n[看板唤醒] …\n收尾：处理完把本次唤醒评论置为 processed…\n指令：<评论指令>`
 - 正确反应：读任务详情（`show_issue` + `comment list`）→ 按上面 5 步工作流执行
 - **别在回执评论里用 `@agent` 开头**：默认不做 actor 过滤，你自己写的唤醒评论会把你自己再叫醒（形成循环）。部署方用 `watch --ignore-author <你的actor>` 把你加入忽略名单后才会免疫（`watch` 这个 actor 始终被忽略）；不带该参数的部署下，回执评论请用别的前缀
-- 多终端部署（README「评论唤醒 agent」）：watch 按项目数据里的 `wake_channel` 绑定路由（面板建项目只需选会话，服务地址由服务端解析并写入新项目 `wakeChannel`；CLI 可显式绑 `--wake-port` 与会话）——你只会收到管道通到你端口的项目 `@agent` 评论；同一 serve 端口被多终端 attach 时注入是广播，只入库一次信息即可，不要重复认领
+- 多终端部署（README「评论唤醒 agent」）：watch 按项目数据里的 `wake_channel` 绑定路由（面板建项目需选择目录、工作目录、Server 与 Session，选中 Session 会自动回填名称与工作区；服务端校验 Session 实际目录后写入 `wakeChannel`；CLI 可显式绑 `--wake-port` 与会话）——你只会收到管道通到你端口的项目 `@agent` 评论；同一 serve 端口被多终端 attach 时注入是广播，只入库一次信息即可，不要重复认领
 - 唤醒评论有状态机（`pending`→`processing`→`processed`）：watch 唤走即置 processing，headless 跑完自动 processed；人类编辑保存 pending 评论会再次唤醒你（评论内容可能已更新——处理前先 `show_issue` 重读最新指令）；重唤会顺带重开停在 `in_review`/`done` 的任务为 `in_progress`（新建与编辑路径同一契约）；TUI 注入通道 watch 观测不到你的完工时机——**收尾时把你正在处理的唤醒评论置 `processed`**（MCP 工具状态改为已处理 / CLI `comment edit <id> --status processed`），留一步评论会永远停在「唤醒中」；不要用 `update_comment` 改别人挂的唤醒指令状态，那是人工验收的权力
-- 路由机制备忘：Web 新建任务需选择会话（项目有默认会话时自动预选，无默认会话的旧项目手动选择）；未显式指定时任务继承项目默认 `sessionId`。绑定会话优先使用 OpenCode v1 `POST /session/:id/prompt_async` 续原上下文；失败不降级到另一个会话，评论保留 pending 供重试。只有未绑定任务才按项目 `wake_channel` → `--tui-url` → headless 路由。修改项目会话只影响后续新建任务，已有任务不追溯改绑；watch 单实例即可覆盖多项目，改路由 = `project set --wake-port/--session-id` 改绑即时生效，不用重启 watch
+- 路由机制备忘：Web 新建任务需选择会话（项目有默认会话时自动预选，无默认会话的旧项目手动选择）；未显式指定时任务继承项目默认 `defaultSessionId`。绑定会话优先使用 OpenCode v1 `POST /session/:id/prompt_async` 续原上下文；失败不降级到另一个会话，评论保留 pending 供重试。只有未绑定任务才按项目 `wake_channel` → `--tui-url` → headless 路由。修改项目会话只影响后续新建任务，已有任务不追溯改绑；watch 单实例即可覆盖多项目，改路由 = `project set --wake-port/--session-id` 改绑即时生效，不用重启 watch
 - 部署平台：macOS / Windows / Linux 全兼容（Node ≥22.5 即可，零原生依赖）；常驻方案按平台选——mac/linux 后台进程或 launchd/systemd，Windows 用 pm2（`pm2 start … && pm2 save && pm2 startup`）或 NSSM，见 README「常驻方案对照」表
 
 ## 5. 状态机
