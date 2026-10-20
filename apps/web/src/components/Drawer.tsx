@@ -358,12 +358,27 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
             <span>实际完成</span>
             <strong>{detail.completedAt ? fmtWhen(detail.completedAt) : '尚未完成'}</strong>
           </div>
-          <div className="detail-context-item detail-context-wide">
-            <span>工作树路径</span>
-            {detail.worktreePath
-              ? <code title={detail.worktreePath}>{detail.worktreePath}</code>
-              : <span className="detail-empty">尚未解析工作树路径</span>}
+          <div className="detail-context-item">
+            <span>当前执行者</span>
+            <strong>{activeClaim(detail) ?? '未认领'}</strong>
           </div>
+          <div className="detail-context-item">
+            <span>Git 分支</span>
+            <strong>{detail.branch || '未绑定'}</strong>
+          </div>
+          <div className="detail-context-item detail-context-wide">
+            <span>Git 工作树</span>
+            <strong>{detail.worktree || '未绑定'}</strong>
+          </div>
+          <label className="detail-field detail-context-wide">
+            <span>工作树绝对路径</span>
+            <input title="工作树绝对路径" defaultValue={detail.worktreePath}
+              placeholder="选择工作树后自动填充，也可手动填写"
+              onBlur={e => {
+                const value = e.currentTarget.value.trim();
+                if (value !== detail.worktreePath) void patch({ worktreePath: value });
+              }} />
+          </label>
           <div className="detail-context-item detail-context-wide">
             <span>OpenCode Session</span>
             {detail.sessionId
