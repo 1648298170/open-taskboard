@@ -269,7 +269,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
   });
 
   app.post('/api/issues/:id/agent-events', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
-    const eventSchema = z.object({ outcome: z.enum(['started', 'queued', 'retrying', 'succeeded', 'failed']), detail: z.string().trim().min(1).max(2000) });
+    const eventSchema = z.object({ outcome: z.enum(['started', 'queued', 'running', 'idle', 'retrying', 'succeeded', 'failed']), detail: z.string().trim().min(1).max(2000) });
     const parsed = eventSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     const actor = String(req.headers['x-taskboard-actor'] ?? 'watch');
