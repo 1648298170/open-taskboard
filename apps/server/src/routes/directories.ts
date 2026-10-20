@@ -26,6 +26,9 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
     if (serverUrl.length > 500 || path.length > 4096) {
       return reply.code(400).send({ error: 'OpenCode Server URL 或目录路径过长' });
     }
+    if (path && !path.startsWith('/') && !/^[a-zA-Z]:[\\\\/]/.test(path) && !/^\\\\\\\\/.test(path)) {
+      return reply.code(400).send({ error: '目录路径必须是 OpenCode Server 上的绝对路径' });
+    }
     try {
       // The OpenCode server, not the Taskboard container, owns this filesystem.
       return await listOpenCodeDirectories(serverUrl, path);
