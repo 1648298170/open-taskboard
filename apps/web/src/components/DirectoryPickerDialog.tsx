@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, ChevronRight, Folder, FolderOpen, RotateCw } from 'lucide-react';
 import { api_ } from '../api';
 
+function isWindowsDriveRoot(path: string): boolean {
+  return /^[a-zA-Z]:[\\/]+$/.test(path.trim());
+}
+
 interface DirectoryPickerDialogProps {
   open: boolean;
   serverUrl: string;
@@ -25,6 +29,7 @@ export function DirectoryPickerDialog({
   const [pathInput, setPathInput] = useState('');
   const [parentPath, setParentPath] = useState<string | null>(null);
   const [entries, setEntries] = useState<{ name: string; path: string }[]>([]);
+  const [drives, setDrives] = useState<{ name: string; path: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const requestIdRef = useRef(0);
@@ -40,10 +45,12 @@ export function DirectoryPickerDialog({
       setPathInput(listing.path);
       setParentPath(listing.parentPath);
       setEntries(listing.entries);
+      setDrives(listing.drives ?? []);
     } catch (err) {
       if (requestId === requestIdRef.current) {
         setError((err as Error).message || '读取目录失败');
         setEntries([]);
+        setDrives([]);
       }
     } finally {
       if (requestId === requestIdRef.current) setLoading(false);
@@ -100,6 +107,26 @@ export function DirectoryPickerDialog({
         <FolderOpen size={14} />
         <span>{currentPath || '正在读取当前目录…'}</span>
       </div>
+
+      {isWindowsDriveRoot(currentPath) && (
+        <div className="directory-picker-drives" aria-label="Windows 磁盘切换">
+          <span className="directory-picker-drives-title">可用磁盘</span>
+          {drives.length ? (
+            <div className="directory-picker-drives-list">
+              {drives.map(drive => (
+                <button type="button" key={drive.path}
+                  className={`directory-picker-drive${drive.path.replace(/[\\/]+$/, '').toLowerCase() === currentPath.replace(/[\\/]+$/, '').toLowerCase() ? ' active' : ''}`}
+                  title={drive.path} onClick={() => void loadDirectory(drive.path)}>
+                  <FolderOpen size={14} />
+                  <span>{drive.name}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="directory-picker-drives-empty">没有探测到其它可用盘符。你仍可以在上方输入框直接输入路径，例如 C:\\。</p>
+          )}
+        </div>
+      )}
 
       {error && <div className="directory-picker-error" role="alert">
         <strong>读取目录失败</strong>

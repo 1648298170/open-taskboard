@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { filterSessionsByWorkspace, normalizeOpenCodeBase } from '../src/opencode.js';
+import { filterSessionsByWorkspace, isWindowsDriveRoot, normalizeOpenCodeBase, parentDirectoryPath } from '../src/opencode.js';
 import type { OpenCodeSessionOption } from '../src/opencode.js';
 
 describe('normalizeOpenCodeBase', () => {
@@ -41,5 +41,26 @@ describe('OpenCode metadata destination guard', () => {
 
   it('continues to allow a local OpenCode server', () => {
     assert.equal(normalizeOpenCodeBase('http://127.0.0.1:4096'), 'http://127.0.0.1:4096');
+  });
+});
+
+
+describe('directory browser path navigation', () => {
+  it('recognizes Windows drive roots regardless of slash style', () => {
+    assert.equal(isWindowsDriveRoot('D:\\'), true);
+    assert.equal(isWindowsDriveRoot('C:/'), true);
+    assert.equal(isWindowsDriveRoot('D:'), false);
+    assert.equal(isWindowsDriveRoot('D:\\JERRY'), false);
+  });
+
+  it('returns Windows parents up to the drive root without crossing volumes', () => {
+    assert.equal(parentDirectoryPath('D:\\JERRY\\dsh'), 'D:\\JERRY');
+    assert.equal(parentDirectoryPath('D:\\JERRY'), 'D:\\');
+    assert.equal(parentDirectoryPath('D:\\'), null);
+  });
+
+  it('returns POSIX parents up to the filesystem root', () => {
+    assert.equal(parentDirectoryPath('/srv/workspaces/app'), '/srv/workspaces');
+    assert.equal(parentDirectoryPath('/'), null);
   });
 });

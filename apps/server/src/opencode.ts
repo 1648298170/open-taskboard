@@ -109,7 +109,7 @@ async function assertSafeOpenCodeDestination(url: URL): Promise<void> {
   }
 }
 
-async function requestOpenCodeJson(url: string, directory: string, method = 'GET', body?: unknown): Promise<unknown> {
+async function requestOpenCodeJson(url: string, directory: string, method = 'GET', body?: unknown, timeoutMs = 5_000): Promise<unknown> {
   const requestUrl = new URL(url);
   await assertSafeOpenCodeDestination(requestUrl);
   if (directory) requestUrl.searchParams.set('directory', directory);
@@ -120,7 +120,7 @@ async function requestOpenCodeJson(url: string, directory: string, method = 'GET
     // A configured server URL is user-controlled. Do not follow redirects to
     // a different host, and never let an unavailable local service hang the UI.
     redirect: 'error',
-    signal: AbortSignal.timeout(5_000)
+    signal: AbortSignal.timeout(timeoutMs)
   });
   if (!response.ok) {
     throw new Error(`OpenCode server returned HTTP ${response.status}`);
@@ -177,14 +177,71 @@ export interface OpenCodeDirectoryListing {
   path: string;
   parentPath: string | null;
   entries: OpenCodeDirectoryEntry[];
+  /** Present only at Windows drive roots; contains accessible drive roots. */
+  drives: OpenCodeDirectoryEntry[];
 }
 
-function parentDirectoryPath(value: string): string | null {
+export function parentDirectoryPath(value: string): string | null {
   // The Taskboard server may run on Linux while OpenCode serves a Windows path.
   // Choose the path parser from the returned path, not from the server OS.
   const windowsPath = /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
   const parent = windowsPath ? win32.dirname(value) : posix.dirname(value);
   return parent === value || parent === '.' ? null : parent;
+}
+
+export function isWindowsDriveRoot(value: string): boolean {
+  return /^[a-zA-Z]:[\\/]+$/.test(value.trim());
+}
+
+const WINDOWS_DRIVE_CACHE_TTL_MS = 60_000;
+const windowsDriveCache = new Map<string, { expiresAt: number; drives: OpenCodeDirectoryEntry[] }>();
+
+/**
+ * OpenCode's GET /file requires the path query key even when it is empty.
+ * The directory query selects the filesystem context; path="" lists that
+ * directory's immediate children.
+ */
+async function listDirectoryAt(base: string, absolutePath: string, timeoutMs = 5_000): Promise<unknown> {
+  const query = new URLSearchParams({ path: '' });
+  return requestOpenCodeJson(base + '/file?' + query.toString(), absolutePath, 'GET', undefined, timeoutMs);
+}
+
+/**
+ * OpenCode has no dedicated endpoint for enumerating Windows volumes. At a
+ * drive root, probe the 26 drive roots through OpenCode's own file API. This
+ * keeps the picker independent of the Taskboard container's operating system.
+ * Results are cached briefly so visiting roots does not repeatedly probe.
+ */
+async function listWindowsDriveRoots(base: string): Promise<OpenCodeDirectoryEntry[]> {
+  const cacheKey = base.toLowerCase();
+  const cached = windowsDriveCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.drives;
+
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const results: Array<OpenCodeDirectoryEntry | null> = new Array(letters.length).fill(null);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const index = cursor++;
+      if (index >= letters.length) return;
+      const letter = letters[index];
+      if (!letter) continue;
+      const root = letter + ':\\';
+      try {
+        const payload = await listDirectoryAt(base, root, 1_200);
+        if (Array.isArray(payload)) results[index] = { name: letter + ':', path: root };
+      } catch {
+        // Missing, unavailable, or inaccessible drives are omitted. The path
+        // input remains available for advanced setups and network-mounted paths.
+      }
+    }
+  };
+
+  // Avoid flooding a remote OpenCode server with 26 simultaneous requests.
+  await Promise.all(Array.from({ length: 6 }, () => worker()));
+  const drives = results.filter((item): item is OpenCodeDirectoryEntry => item !== null);
+  windowsDriveCache.set(cacheKey, { expiresAt: Date.now() + WINDOWS_DRIVE_CACHE_TTL_MS, drives });
+  return drives;
 }
 
 /** Browse one directory on the OpenCode server's filesystem (GET /file). */
@@ -197,15 +254,14 @@ export async function listOpenCodeDirectories(
 
   // With no starting path, use the configured OpenCode server's current workspace.
   if (!directoryPath) {
-    const current = await requestOpenCodeJson(`${base}/path`, '');
+    const current = await requestOpenCodeJson(base + '/path', '');
     if (!isRecord(current) || typeof current.directory !== 'string' || !current.directory.trim()) {
       throw new Error('OpenCode server did not return its current directory');
     }
     directoryPath = current.directory.trim();
   }
 
-  const query = new URLSearchParams({ path: directoryPath });
-  const payload = await requestOpenCodeJson(`${base}/file?${query.toString()}`, directoryPath);
+  const payload = await listDirectoryAt(base, directoryPath);
   if (!Array.isArray(payload)) {
     throw new Error('OpenCode GET /file returned an unexpected response');
   }
@@ -218,10 +274,14 @@ export async function listOpenCodeDirectories(
     return [{ name: item.name, path: item.absolute }];
   }).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
+  const atDriveRoot = isWindowsDriveRoot(directoryPath);
+  const drives = atDriveRoot ? await listWindowsDriveRoots(base) : [];
+
   return {
     path: directoryPath,
     parentPath: parentDirectoryPath(directoryPath),
-    entries
+    entries,
+    drives
   };
 }
 

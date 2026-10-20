@@ -1280,3 +1280,48 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   .directory-picker-footer > span { max-width: none; }
   .directory-picker-footer menu { width: 100%; justify-content: flex-end; }
 }
+
+
+/* Windows drive switcher appears when the browser reaches D:\\ / C:\\ roots. */
+.directory-picker-drives {
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px;
+  margin: 0 0 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+.directory-picker-drives-title {
+  color: var(--ink-dim);
+  font-size: 10px;
+}
+.directory-picker-drives-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.directory-picker-drive {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 58px;
+  padding: 6px 9px;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+}
+.directory-picker-drive:hover,
+.directory-picker-drive.active {
+  border-color: var(--accent);
+  background: var(--bg-raised);
+}
+.directory-picker-drive svg { color: var(--ink-dim); }
+.directory-picker-drives-empty {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 10px;
+  line-height: 1.5;
+}

@@ -27,7 +27,9 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
     if (serverUrl.length > 500 || path.length > 4096) {
       return reply.code(400).send({ error: 'OpenCode Server URL 或目录路径过长' });
     }
-    if (path && !path.startsWith('/') && !/^[a-zA-Z]:[\\\\/]/.test(path) && !/^\\\\\\\\/.test(path)) {
+    const isWindowsDrivePath = /^[A-Za-z]:[\\/]/.test(path);
+    const isWindowsUncPath = path.startsWith('\\\\');
+    if (path && !path.startsWith('/') && !isWindowsDrivePath && !isWindowsUncPath) {
       return reply.code(400).send({ error: '目录路径必须是 OpenCode Server 上的绝对路径' });
     }
     try {
