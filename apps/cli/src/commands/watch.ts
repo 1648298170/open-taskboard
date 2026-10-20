@@ -494,8 +494,10 @@ export const watchCommand: Command = {
           return false;
         }
         console.error(`watch: headless run failed (attempt ${i + 1}/${attempts.length})`);
-        await reportExecution(issueId, i + 1 < attempts.length ? 'retrying' : 'failed',
-          `Headless Agent 第 ${i + 1}/${attempts.length} 次尝试失败${i + 1 < attempts.length ? '，将按重试间隔再次执行' : '，已耗尽重试次数'}`);
+        if (i + 1 < attempts.length) {
+          await reportExecution(issueId, 'retrying',
+            `Headless Agent 第 ${i + 1}/${attempts.length} 次尝试失败，将按重试间隔再次执行`);
+        }
       }
       console.error('watch: headless run failed after all retries — 结果不可用，请检查 exec 命令与目标 agent CLI 状态');
       await reportExecution(issueId, 'failed', 'Headless Agent 所有重试均失败，请检查命令、环境变量和 Agent CLI 日志');
