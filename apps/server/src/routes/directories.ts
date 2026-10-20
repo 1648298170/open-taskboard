@@ -4,7 +4,8 @@ import { createDirectorySchema, directoryPatchSchema, z } from '@taskboard/core/
 import { createOpenCodeSession, listOpenCodeDirectories, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
 
 interface DirectoryParams { directoryId: string }
-interface DirectorySessionQuery { workspacePath?: string; serverUrl?: string }\ninterface DirectoryBrowseQuery { path?: string; serverUrl?: string }
+interface DirectorySessionQuery { workspacePath?: string; serverUrl?: string }
+interface DirectoryBrowseQuery { path?: string; serverUrl?: string }
 const createSessionSchema = z.object({
   title: z.string().min(1).max(200),
   workspacePath: z.string().min(1),
@@ -26,7 +27,9 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
     if (serverUrl.length > 500 || path.length > 4096) {
       return reply.code(400).send({ error: 'OpenCode Server URL 或目录路径过长' });
     }
-    if (path && !path.startsWith('/') && !/^[a-zA-Z]:[\\\\/]/.test(path) && !/^\\\\\\\\/.test(path)) {
+    const isWindowsDrivePath = /^[A-Za-z]:[\\/]/.test(path);
+    const isWindowsUncPath = path.startsWith('\\\\');
+    if (path && !path.startsWith('/') && !isWindowsDrivePath && !isWindowsUncPath) {
       return reply.code(400).send({ error: '目录路径必须是 OpenCode Server 上的绝对路径' });
     }
     try {
