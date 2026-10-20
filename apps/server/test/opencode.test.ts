@@ -1,6 +1,5 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { abortOpenCodeSession, filterSessionsByWorkspace, getOpenCodeSessionRuntimeState, isWindowsDriveRoot, normalizeOpenCodeBase, parentDirectoryPath } from '../src/opencode.js';
 import type { OpenCodeSessionOption } from '../src/opencode.js';
