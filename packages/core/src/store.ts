@@ -337,7 +337,7 @@ export class Store {
     // Domain-managed timestamps: first start is immutable across retries; reopening clears completion.
     const effectivePatch: IssuePatch = { ...patch };
     const transitionAt = statusChanged ? now() : null;
-    if (statusChanged && patch.status !== 'todo' && cur.startedAt === null) {
+    if (statusChanged && patch.status === 'in_progress' && cur.startedAt === null) {
       effectivePatch.startedAt = transitionAt;
     }
     if (statusChanged && patch.status === 'done' && cur.completedAt === null) {
