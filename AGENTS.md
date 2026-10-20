@@ -45,7 +45,7 @@ pnpm start      # 启动服务 http://127.0.0.1:47824（0.0.0.0 时额外打印 
 ## taskboard 使用纪律（重要）
 
 - 状态流转严格遵循：`todo → in_progress → in_review → done`。**不流转不许开工**：服务端 `claim` 会把 `todo` 自动置为 `in_progress`（认领即开工）——开工必须先 claim，不存在"干着活但状态还在 todo"的合法状态。
-- `done` 必须等用户确认后才能设置；自验完成先置 `in_review` 并在评论写明验证方式；服务端可用 `TASKBOARD_HUMAN_DONE=1` 强制——届时 agent 来源改 done 将被 403 拒绝，除非用户已确认且请求带 `confirm: true`。
+- `done` 必须等用户确认后才能设置；自验完成先通过带 `statusNote` 的状态更新置为 `in_review`，在 `statusNote` 中写明验证方式与未覆盖项；服务端可用 `TASKBOARD_HUMAN_DONE=1` 强制——届时 agent 来源改 done 将被 403 拒绝，除非用户已确认且请求带 `confirm: true`。
 - `update_issue` 必须携带 `show_issue` 返回的 `version`（乐观锁）；版本冲突说明别人改过，重读再改。认领冲突（409）同理：重读一次，条件不变才重试，**绝不抢他人的认领**。
 - **状态变更强制留痕（服务端硬门禁）**：任何 Agent 通过 PATCH/`update_issue` 实际改变状态，都必须在同一请求传 `statusNote`，说明变更原因、验证证据、未覆盖项；缺少时服务端返回 403，不改变状态。服务端会把状态更新与状态审计评论写入同一个 SQLite 事务，绝不要再拆成先 `update_issue`、随后补 `add_comment`。CLI 使用 `--status-note "原因；验证证据；未覆盖项"`。网页人工操作可不传，系统会自动生成明确注明“人工操作、未提供额外说明”的审计评论。状态更新成功后核实详情，再释放租约。
 - **多 agent 并发**：开工前先 `claim`（租约默认 30 分钟，todo 任务认领即自动流转 in_progress），长任务定期 `heartbeat` 续租，完成即 `release`；`next`/`ready` 会自动跳过他人租约中的任务。
