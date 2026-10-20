@@ -1462,7 +1462,10 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   box-shadow: 0 5px 14px rgb(0 0 0 / 7%);
   transform: translateY(-1px);
 }
+.card[data-status="todo"]:hover { border-left-color: var(--todo); }
 .card[data-status="in_progress"]:hover { border-left-color: var(--in-progress); }
+.card[data-status="in_review"]:hover { border-left-color: var(--in-review); }
+.card[data-status="done"]:hover { border-left-color: var(--done); }
 .card-title-row {
   display: flex;
   align-items: flex-start;
