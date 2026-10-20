@@ -1009,8 +1009,8 @@ describe('Agent execution event timeline', () => {
       const events = detail.json<{ activities: { action: string; detail: string }[] }>().activities
         .filter(activity => activity.action === 'execution');
       assert.equal(events.length, 3);
-      assert.match(events[0]!.detail, /\\[failed\\] all attempts failed/);
-      assert.match(events[1]!.detail, /\\[retrying\\] attempt 1 failed/);
+      assert.ok(events[0]!.detail.includes('[failed] all attempts failed'));
+      assert.ok(events[1]!.detail.includes('[retrying] attempt 1 failed'));
     } finally {
       cleanup();
     }
