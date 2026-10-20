@@ -2351,6 +2351,77 @@
           }
         }
       }
+    },
+    "/api/issues/{id}/create-worktree": {
+      "summary": "Create and bind an isolated Git worktree for a task",
+      "post": {
+        "tags": [
+          "Issues"
+        ],
+        "summary": "Create task branch and worktree",
+        "description": "Creates a dedicated task/<issue-id>-<title> branch and a sibling worktree under .taskboard-worktrees. Existing branches and paths are never overwritten. Repeating the request for an already bound, valid worktree is idempotent.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Worktree created and bound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "issue": {
+                      "$ref": "#/components/schemas/Issue"
+                    },
+                    "branch": {
+                      "type": "string"
+                    },
+                    "worktree": {
+                      "type": "string"
+                    },
+                    "worktreePath": {
+                      "type": "string"
+                    },
+                    "alreadyBound": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "issue",
+                    "branch",
+                    "worktree",
+                    "worktreePath",
+                    "alreadyBound"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Project workspace missing or is not a Git repository"
+          },
+          "404": {
+            "description": "Task or project not found"
+          },
+          "409": {
+            "description": "Branch/path collision or task already has a Git binding"
+          },
+          "500": {
+            "description": "Worktree created but binding persistence failed; response includes the path for recovery"
+          },
+          "502": {
+            "description": "Git failed to create the worktree"
+          }
+        }
+      }
     }
   },
   "components": {
