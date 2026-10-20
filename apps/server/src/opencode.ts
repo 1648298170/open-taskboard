@@ -205,7 +205,7 @@ export async function listOpenCodeDirectories(
   }
 
   const query = new URLSearchParams({ path: directoryPath });
-  const payload = await requestOpenCodeJson(`${base}/file?${query.toString()}`, '');
+  const payload = await requestOpenCodeJson(`${base}/file?${query.toString()}`, directoryPath);
   if (!Array.isArray(payload)) {
     throw new Error('OpenCode GET /file returned an unexpected response');
   }
