@@ -1136,7 +1136,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .new-issue-form > label,.new-issue-form .row > label { gap:7px; color:var(--ink); font-size:12px; font-weight:550; }
 .new-issue-form input:not([type="checkbox"]),.new-issue-form textarea { border-radius:8px; }
 .new-issue-form textarea { min-height:108px; line-height:1.6; }
-.new-issue-form menu { padding-top:12px; margin-top:2px; border-top:1px solid var(--line); background:var(--bg-panel); }
+.new-issue-form menu { padding-top:12px; margin-top:2px; border-top:1px solid var(--line); background:transparent; }
 .task-detail-title { margin:18px 0 16px; font-size:22px; line-height:1.4; font-weight:650; letter-spacing:-.035em; overflow-wrap:anywhere; }
 .drawer-head { min-height:48px; border-bottom:1px solid var(--line); }
 .meta-row { gap:8px; }
@@ -1391,4 +1391,11 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   color: var(--ink-dim);
   font-size: 10px;
   line-height: 1.5;
+}
+
+/* Final layout corrections for the new-task dialog. */
+.new-issue-form menu { background: transparent; }
+@media (max-width: 640px) {
+  .new-issue-dialog .new-issue-form .row { flex-direction: column; }
+  .column:not(:first-child)::before { display: none; }
 }
