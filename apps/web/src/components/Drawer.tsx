@@ -263,7 +263,11 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
               : '此任务尚未绑定 OpenCode Session'}
           onClick={() => {
             if (!sessionUrl) return;
-            window.open(sessionUrl, '_blank', 'noopener,noreferrer');
+            // 使用固定命名目标：后续定位会复用由此按钮打开的 OpenCode 标签，
+            // 不再像 _blank 一样每次新建标签。浏览器不能自动查找用户手动打开、
+            // 且没有这个窗口名的其他标签页。
+            const sessionWindow = window.open(sessionUrl, 'taskboard-opencode-session');
+            sessionWindow?.focus();
           }}><ExternalLink size={13} /> 定位会话</button>
         {/* v0.4: 一键唤醒 —— UI 代发唤醒评论（web 来源，人工触发）。路由由
             watch 决定：已绑定 sessionId → prompt_async 续原会话；未绑定 →
