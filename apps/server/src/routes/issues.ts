@@ -205,6 +205,17 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     }
   });
 
+  // Unbind metadata only. The local branch/worktree is intentionally preserved.
+  app.delete('/api/issues/:id/git-binding', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const issue = store.getIssue(req.params.id);
+    if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    if (issue.claimedBy && issue.leaseExpiresAt && Date.parse(issue.leaseExpiresAt) > Date.now()) {
+      return reply.code(409).send({ error: '任务当前有有效执行租约；请先释放租约再解除 Git 绑定' });
+    }
+    const actor = String(req.headers['x-taskboard-actor'] ?? 'web');
+    return store.updateIssue(issue.id, { branch: '', worktree: null, worktreePath: null }, issue.version, actor);
+  });
+
   app.post('/api/issues/:id/agent-events', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
     const eventSchema = z.object({ outcome: z.enum(['started', 'queued', 'retrying', 'succeeded', 'failed']), detail: z.string().trim().min(1).max(2000) });
     const parsed = eventSchema.safeParse(req.body);
