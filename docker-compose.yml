@@ -10,10 +10,13 @@ services:
     image: open-taskboard:latest
     container_name: open-taskboard
     environment:
-      # 新建项目弹窗不再填写服务地址：默认从宿主机 opencode serve 读取会话。
+      # New-project dialog no longer asks for a server URL; default to the host.
       TASKBOARD_OPENCODE_URL: http://host.docker.internal:4096
+      # Non-loopback binding requires a token (server startup guard). Keep the
+      # value in the gitignored .env file.
+      TASKBOARD_TOKEN: ${TASKBOARD_TOKEN:?set TASKBOARD_TOKEN in .env}
     extra_hosts:
-      # Linux 下把 host.docker.internal 解析到宿主机网关（Docker Desktop 自带）。
+      # Linux resolves host.docker.internal to the host gateway.
       - "host.docker.internal:host-gateway"
     ports:
       - "47825:47824"
@@ -21,7 +24,7 @@ services:
       - taskboard-data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:47824/api/meta').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:47824/api/meta', { headers: { Authorization: 'Bearer ' + (process.env.TASKBOARD_TOKEN || '') } }).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
