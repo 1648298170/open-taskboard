@@ -942,6 +942,21 @@ describe('task Git worktree creation', () => {
         payload: { id: 'git-project', name: 'Git project', workspacePath }
       });
       assert.equal(project.statusCode, 201);
+
+      const conflictIssue = await app.inject({
+        method: 'POST', url: '/api/projects/git-project/issues', headers: json,
+        payload: { title: 'Conflict task' }
+      });
+      const conflictId = conflictIssue.json<{ id: string }>().id;
+      const conflictBranch = `task/${conflictId}-conflict-task`;
+      git(['branch', conflictBranch]);
+      const conflict = await app.inject({
+        method: 'POST', url: `/api/issues/${conflictId}/create-worktree`,
+        headers: { ...json, 'x-taskboard-actor': 'web' }, payload: {}
+      });
+      assert.equal(conflict.statusCode, 409);
+      assert.match(conflict.json<{ error: string }>().error, /分支已存在/);
+
       const issue = await app.inject({
         method: 'POST', url: '/api/projects/git-project/issues', headers: json,
         payload: { title: 'Implement calendar view' }
