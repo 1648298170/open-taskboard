@@ -885,7 +885,6 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 .side-btn:hover { background: var(--bg-raised); border-color: transparent; color: var(--ink); }
 .side-btn.danger:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
-.side-create-directory { width: 100%; display: flex; align-items: center; justify-content: flex-start; gap: 7px; margin: 2px 0 0; }
 .side-actions .icon-btn { justify-self: start; }
 .main-col { background: var(--bg); }
 .topbar {
