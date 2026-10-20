@@ -190,7 +190,7 @@ export function parentDirectoryPath(value: string): string | null {
 }
 
 export function isWindowsDriveRoot(value: string): boolean {
-  return /^[a-zA-Z]:[\\/]*$/.test(value.trim());
+  return /^[a-zA-Z]:[\\/]+$/.test(value.trim());
 }
 
 const WINDOWS_DRIVE_CACHE_TTL_MS = 60_000;
