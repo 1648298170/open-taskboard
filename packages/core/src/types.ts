@@ -23,6 +23,8 @@ export type Priority = (typeof PRIORITIES)[number];
 export interface AppSettings {
   /** Default workspace path prefilled for newly created directories. */
   defaultWorkspacePath: string;
+  /** Default OpenCode Server URL prefilled for directories and projects. */
+  defaultOpenCodeServerUrl: string;
 }
 
 export interface WorkspaceDirectory {
@@ -30,6 +32,8 @@ export interface WorkspaceDirectory {
   name: string;
   /** Default filesystem workspace inherited by newly created projects in this directory. */
   workspacePath: string;
+  /** Default OpenCode Server URL inherited by newly created projects in this directory. */
+  serverUrl: string;
   createdAt: string;
 }
 

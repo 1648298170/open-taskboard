@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { WorkspaceDirectory } from '../types.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
-const DIRECTORY_COLS = 'id, name, workspace_path AS workspacePath, created_at AS createdAt';
+const DIRECTORY_COLS = 'id, name, workspace_path AS workspacePath, server_url AS serverUrl, created_at AS createdAt';
 const now = (): string => new Date().toISOString();
 const shortId = (): string => randomUUID().slice(0, 8);
 
@@ -11,10 +11,12 @@ export interface DirectoryCreateInput {
   id?: string;
   name: string;
   workspacePath?: string;
+  serverUrl?: string;
 }
 export interface DirectoryPatchInput {
   name?: string;
   workspacePath?: string;
+  serverUrl?: string;
 }
 
 export class DirectoryRepo {
@@ -24,8 +26,8 @@ export class DirectoryRepo {
     const id = input.id || shortId();
     if (this.get(id)) throw new ConflictError(`directory already exists: ${id}`);
     if (!input.name.trim()) throw new ValidationError('name: must not be blank');
-    this.db.prepare('INSERT INTO directories (id, name, workspace_path, created_at) VALUES (?, ?, ?, ?)')
-      .run(id, input.name.trim(), input.workspacePath?.trim() ?? '', now());
+    this.db.prepare('INSERT INTO directories (id, name, workspace_path, server_url, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(id, input.name.trim(), input.workspacePath?.trim() ?? '', input.serverUrl?.trim() ?? '', now());
     return id;
   }
 
@@ -36,6 +38,7 @@ export class DirectoryRepo {
     const values: string[] = [];
     if (patch.name !== undefined) { sets.push('name = ?'); values.push(patch.name.trim()); }
     if (patch.workspacePath !== undefined) { sets.push('workspace_path = ?'); values.push(patch.workspacePath.trim()); }
+    if (patch.serverUrl !== undefined) { sets.push('server_url = ?'); values.push(patch.serverUrl.trim()); }
     if (sets.length === 0) return;
     values.push(id);
     this.db.prepare(`UPDATE directories SET ${sets.join(', ')} WHERE id = ?`).run(...values);

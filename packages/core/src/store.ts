@@ -127,14 +127,29 @@ export class Store {
   }
 
   // ---- application settings ----
-  getAppSettings(): { defaultWorkspacePath: string } {
-    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = 'default_workspace_path'").get() as { value: string } | undefined;
-    return { defaultWorkspacePath: row?.value ?? '' };
+  getAppSettings(): { defaultWorkspacePath: string; defaultOpenCodeServerUrl: string } {
+    const rows = this.db.prepare(
+      "SELECT key, value FROM app_settings WHERE key IN ('default_workspace_path', 'default_opencode_server_url')"
+    ).all() as { key: string; value: string }[];
+    const values = new Map(rows.map(row => [row.key, row.value]));
+    return {
+      defaultWorkspacePath: values.get('default_workspace_path') ?? '',
+      defaultOpenCodeServerUrl: values.get('default_opencode_server_url') ?? ''
+    };
   }
 
-  updateAppSettings(patch: { defaultWorkspacePath: string }): { defaultWorkspacePath: string } {
-    this.db.prepare("INSERT INTO app_settings (key, value) VALUES ('default_workspace_path', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(patch.defaultWorkspacePath.trim());
+  updateAppSettings(patch: { defaultWorkspacePath?: string; defaultOpenCodeServerUrl?: string }): {
+    defaultWorkspacePath: string; defaultOpenCodeServerUrl: string;
+  } {
+    const statements: Array<[string, string | undefined]> = [
+      ['default_workspace_path', patch.defaultWorkspacePath],
+      ['default_opencode_server_url', patch.defaultOpenCodeServerUrl]
+    ];
+    for (const [key, value] of statements) {
+      if (value === undefined) continue;
+      this.db.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .run(key, value.trim());
+    }
     return this.getAppSettings();
   }
 

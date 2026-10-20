@@ -280,6 +280,20 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       INSERT INTO app_settings (key, value) VALUES ('default_workspace_path', '');
     `);
   },
+  // v15 → v16: a directory carries the OpenCode Server URL inherited by the
+  // projects created under it. Backfill from an existing project so migrated
+  // directories keep working without manual re-entry.
+  (db: DatabaseSync) => {
+    db.exec("ALTER TABLE directories ADD COLUMN server_url TEXT NOT NULL DEFAULT ''");
+    db.exec(`
+      UPDATE directories
+      SET server_url = COALESCE((
+        SELECT p.wake_channel FROM projects p
+        WHERE p.directory_id = directories.id AND p.wake_channel <> ''
+        ORDER BY p.created_at LIMIT 1
+      ), '')
+    `);
+  },
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after
