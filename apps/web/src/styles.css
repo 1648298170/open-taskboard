@@ -1067,6 +1067,33 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 }
 .column .count { display:inline-flex; align-items:center; justify-content:center; min-width:21px; height:21px; padding:0 6px; border-radius:6px; background:var(--bg-raised); color:var(--ink-dim); font-size:10px; font-variant-numeric:tabular-nums; }
 .cards { gap:8px; padding-top:10px; }
+
+/* Slim, unobtrusive task-list scrollbar. */
+.cards {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  scrollbar-gutter: stable;
+}
+.cards::-webkit-scrollbar {
+  width: 5px;
+}
+.cards::-webkit-scrollbar-track {
+  background: transparent;
+  margin-block: 4px;
+}
+.cards::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink-dim) 42%, transparent);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+.cards::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-dim);
+  background-clip: padding-box;
+}
+.cards::-webkit-scrollbar-corner {
+  background: transparent;
+}
 .card { position:relative; padding:12px; border:1px solid var(--line); border-radius:9px; background:var(--bg-panel); box-shadow:0 1px 1px rgb(0 0 0 / 3%); transition:border-color .14s ease,box-shadow .14s ease,transform .14s ease; }
 .card:hover { border-color:var(--ink-dim); box-shadow:0 3px 10px rgb(0 0 0 / 5%); }
 .card-title { line-height:1.55; font-size:12px; font-weight:550; letter-spacing:-.01em; }
