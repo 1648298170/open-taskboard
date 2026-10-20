@@ -4,7 +4,8 @@ import { createDirectorySchema, directoryPatchSchema, z } from '@taskboard/core/
 import { createOpenCodeSession, listOpenCodeDirectories, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
 
 interface DirectoryParams { directoryId: string }
-interface DirectorySessionQuery { workspacePath?: string; serverUrl?: string }\ninterface DirectoryBrowseQuery { path?: string; serverUrl?: string }
+interface DirectorySessionQuery { workspacePath?: string; serverUrl?: string }
+interface DirectoryBrowseQuery { path?: string; serverUrl?: string }
 const createSessionSchema = z.object({
   title: z.string().min(1).max(200),
   workspacePath: z.string().min(1),
