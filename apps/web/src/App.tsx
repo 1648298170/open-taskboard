@@ -553,6 +553,15 @@ export default function App() {
                         showToast('已更新目录工作目录');
                       } catch (err) { showToast('✗ ' + (err as Error).message); }
                     }}><Folder size={14} /></button>
+                    <button className="icon-btn" title="配置目录 OpenCode Server URL" onClick={async () => {
+                      const serverUrl = await promptDialog({ title: '配置目录 OpenCode Server URL', lines: ['新建项目时会默认继承此地址；已创建项目的地址不会自动改变。', '留空表示清除。'], placeholder: '例如：http://127.0.0.1:4096', value: directory.serverUrl });
+                      if (serverUrl === null) return;
+                      try {
+                        const updated = await api_.updateDirectory(directory.id, { serverUrl: serverUrl.trim() });
+                        setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
+                        showToast(serverUrl.trim() ? '已更新目录 OpenCode Server URL' : '已清除目录 OpenCode Server URL');
+                      } catch (err) { showToast('✗ ' + (err as Error).message); }
+                    }}><Settings size={14} /></button>
                     <button className="icon-btn" title="重命名目录" onClick={async () => {
                       const name = await promptDialog({ title: '重命名目录', lines: ['目录用于在左侧分组管理项目。'], placeholder: '目录名称', value: directory.name });
                       if (name === null) return;
