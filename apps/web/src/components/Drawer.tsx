@@ -296,8 +296,14 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
                     await new Promise(r => setTimeout(r, 1000));
                     try {
                       const fresh = await api_.showIssue(issueId);
+                      setDetail(fresh);
                       const st = fresh.comments.find(c => c.id === created.id)?.status;
                       if (st && st !== 'pending') {
+                        // The watcher reports the execution outcome immediately
+                        // after changing comment status; fetch once more so the
+                        // activity timeline also includes that event.
+                        await new Promise(r => setTimeout(r, 250));
+                        try { setDetail(await api_.showIssue(issueId)); } catch { /* keep latest successful detail */ }
                         onToast(st === 'processed' ? '✓ agent 已处理本条唤醒' : '✓ 已送达，agent 处理中');
                         onChanged();
                         return;
