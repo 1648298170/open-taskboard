@@ -227,7 +227,7 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
           <input placeholder="工作树" defaultValue={detail.worktree}
             onBlur={e => { if (e.target.value !== detail.worktree) void patch({ worktree: e.target.value }); }} />
         )}
-        <input type="date" title="开始日期" defaultValue={detail.startDate ?? ''}
+        <input type="date" title="计划开始日期" defaultValue={detail.startDate ?? ''}
           onChange={e => { const v = e.target.value || null; if (v !== detail.startDate) void patch({ startDate: v }); }} />
         <input type="date" title="截止日期" defaultValue={detail.dueDate ?? ''}
           onChange={e => { const v = e.target.value || null; if (v !== detail.dueDate) void patch({ dueDate: v }); }} />
