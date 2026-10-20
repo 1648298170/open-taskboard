@@ -3,7 +3,7 @@ import { ArrowUp, ChevronRight, Folder, FolderOpen, RotateCw } from 'lucide-reac
 import { api_ } from '../api';
 
 function isWindowsDriveRoot(path: string): boolean {
-  return /^[a-zA-Z]:[\\/]*$/.test(path.trim());
+  return /^[a-zA-Z]:[\\/]+$/.test(path.trim());
 }
 
 interface DirectoryPickerDialogProps {
