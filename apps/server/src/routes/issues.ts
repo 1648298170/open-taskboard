@@ -369,7 +369,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no'
     });
-    res.write(`event: ready\ndata: ${JSON.stringify({ issueId: issue.id, sessionId: issue.sessionId, at: new Date().toISOString() })}\\n\\n`);
+    res.write(`event: ready\ndata: ${JSON.stringify({ issueId: issue.id, sessionId: issue.sessionId, at: new Date().toISOString() })}\n\n`);
 
     const stop = (): void => { if (!controller.signal.aborted) controller.abort(); };
     res.on('close', stop);
@@ -393,7 +393,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
             try {
               const parsed: unknown = JSON.parse(data);
               if (openCodeEventBelongsToSession(parsed, issue.sessionId!)) {
-                res.write(`event: opencode\ndata: ${JSON.stringify(parsed)}\\n\\n`);
+                res.write(`event: opencode\ndata: ${JSON.stringify(parsed)}\n\n`);
               }
             } catch {
               // Ignore malformed/non-JSON upstream frames; do not break the stream.
@@ -404,7 +404,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       }
     } catch (err) {
       if (!controller.signal.aborted && !res.destroyed) {
-        res.write(`event: upstream-error\ndata: ${JSON.stringify({ error: (err as Error).message })}\\n\\n`);
+        res.write(`event: upstream-error\ndata: ${JSON.stringify({ error: (err as Error).message })}\n\n`);
       }
     } finally {
       res.off('close', stop);
