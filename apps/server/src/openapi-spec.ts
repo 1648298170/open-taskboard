@@ -242,8 +242,11 @@ export const openApiSpec: OpenApiDocument = {
       },
       delete: {
         operationId: 'deleteDirectory',
-        summary: 'Delete an empty workspace directory',
+        summary: 'Delete a directory, optionally cascading its projects and tasks',
         tags: ['directories'],
+        parameters: [
+          { name: 'cascade', in: 'query', required: false, schema: { type: 'boolean' }, description: 'true/1 deletes all projects, tasks, comments and attachments under the directory' }
+        ],
         responses: {
           200: { description: 'Deleted directory', ...jsonResponse({ $ref: '#/components/schemas/Ok' }) },
           400: { $ref: '#/components/responses/BadRequest' },

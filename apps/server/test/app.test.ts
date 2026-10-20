@@ -262,7 +262,7 @@ describe('workspace directory API', () => {
     }
   });
 
-  it('keeps project routing independent from directory grouping and prevents deleting a non-empty directory', async () => {
+  it('keeps project routing independent from directory grouping and cascades deletion on request', async () => {
     const { app, cleanup } = await makeApp();
     const created = await app.inject({
       method: 'POST', url: '/api/directories', headers: json,
@@ -282,8 +282,21 @@ describe('workspace directory API', () => {
     const projectAfter = (await app.inject({ method: 'GET', url: `/api/projects/${projectId}` })).json<{ workspacePath: string; wakeChannel: string }>();
     assert.equal(projectAfter.workspacePath, '/workspace/renamed');
     assert.equal(projectAfter.wakeChannel, 'http://127.0.0.1:4097');
-    const deletion = await app.inject({ method: 'DELETE', url: `/api/directories/${directoryId}` });
-    assert.equal(deletion.statusCode, 400);
+
+    const issue = await app.inject({
+      method: 'POST', url: `/api/projects/${projectId}/issues`,
+      headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { title: 'cascade me' }
+    });
+    assert.equal(issue.statusCode, 201);
+    const issueId = issue.json<{ id: string }>().id;
+
+    const blocked = await app.inject({ method: 'DELETE', url: `/api/directories/${directoryId}` });
+    assert.equal(blocked.statusCode, 400);
+
+    const deletion = await app.inject({ method: 'DELETE', url: `/api/directories/${directoryId}?cascade=1` });
+    assert.equal(deletion.statusCode, 200, deletion.body);
+    assert.equal((await app.inject({ method: 'GET', url: `/api/projects/${projectId}` })).statusCode, 404);
+    assert.equal((await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).statusCode, 404);
     cleanup();
   });
 });

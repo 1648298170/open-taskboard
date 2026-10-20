@@ -75,8 +75,9 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
     return store.updateDirectory(req.params.directoryId, parsed.data);
   });
 
-  app.delete('/api/directories/:directoryId', async (req: FastifyRequest<{ Params: DirectoryParams }>) => {
-    store.deleteDirectory(req.params.directoryId);
+  app.delete('/api/directories/:directoryId', async (req: FastifyRequest<{ Params: DirectoryParams; Querystring: { cascade?: string } }>) => {
+    const cascade = req.query.cascade === '1' || req.query.cascade === 'true';
+    store.deleteDirectory(req.params.directoryId, { cascadeProjects: cascade });
     return { ok: true };
   });
 };
