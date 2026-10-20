@@ -436,10 +436,11 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
                     const separator = event.detail.indexOf('] ');
                     const outcome = event.detail.startsWith('[') && separator > 1 ? event.detail.slice(1, separator) : '记录';
                     const message = event.detail.startsWith('[') && separator > 1 ? event.detail.slice(separator + 2) : event.detail;
+                    const outcomeLabel = ({ started: '开始', queued: '已提交', retrying: '重试', succeeded: '成功', failed: '失败' } as Record<string, string>)[outcome] ?? outcome;
                     return (
                       <li key={event.id}>
                         <time>{fmtWhen(event.createdAt)}</time>
-                        <strong>{outcome}</strong>
+                        <strong className={`execution-outcome execution-outcome-${outcome}`}>{outcomeLabel}</strong>
                         <span>{message}</span>
                       </li>
                     );
