@@ -36,6 +36,16 @@ pnpm start        # http://127.0.0.1:47824
 
 > **全平台兼容**：macOS / Windows / Linux 均可运行——Node ≥22.5 + pnpm 即可，零原生编译依赖（SQLite 用 Node 内置模块）。下文 shell 样例是 zsh/bash 语法，Windows 用户把 `&` 换成 `start /b`、或直接用 pm2 托管（见「评论唤醒 agent」的常驻方案对照表）。
 
+## Windows 一键启动（推荐本地使用）
+
+Windows 10/11 用户可双击仓库根目录的 `start.bat`。启动器会检查 Node.js/pnpm 版本、首次安装依赖、构建产物、端口占用与 API 健康状态；服务日志写入 `.taskboard-runtime/`，不会自动杀掉未知进程。
+
+- 使用说明与故障场景：[`docs/WINDOWS-STARTUP.md`](docs/WINDOWS-STARTUP.md)
+- 命令行管理：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\taskboard.ps1 -Action status`
+- 支持操作：`start`、`stop`、`restart`、`status`、`logs`
+
+该启动器用于本机手动启动，不提供开机自启或崩溃自动拉起；脚本仍需在真实 Windows 环境中验证。
+
 # 开发模式（先构建 core，再并行起 server watch + vite 热更新）
 pnpm dev          # API :47824, Vite :5174
 
