@@ -72,10 +72,10 @@ export const issueTools: ToolTable = [
   )],
   ['update_issue', defineTool(
     mcpUpdateIssueSchema.extend({ id: z.string() }),
-    '更新任务。状态流转 todo → in_progress → in_review → done；done 需用户确认后才能设置。必须带 version（乐观锁，取自 show_issue），冲突时重新读取再试',
+    '更新任务。状态流转 todo → in_progress → in_review → done；done 需用户确认后才能设置。必须带 version（乐观锁，取自 show_issue）。每次实际状态变更都必须同时传 statusNote，写明变更原因、验证证据和未覆盖项；服务端会把状态与评论原子提交。冲突时重新读取再试',
     args => {
       const body: Record<string, unknown> = { version: args.version };
-      for (const k of ['title', 'description', 'status', 'priority', 'labels', 'branch', 'worktree', 'sessionId', 'assignee', 'parentId', 'startDate', 'dueDate', 'confirm'] as const) {
+      for (const k of ['title', 'description', 'status', 'statusNote', 'priority', 'labels', 'branch', 'worktree', 'sessionId', 'assignee', 'parentId', 'startDate', 'dueDate', 'confirm'] as const) {
         const v = args[k];
         if (v !== undefined) body[k] = v;
       }
