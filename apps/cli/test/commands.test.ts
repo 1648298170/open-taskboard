@@ -121,20 +121,20 @@ describe('project session flags', () => {
   it('project create forwards --session-id in the body', async () => {
     const { calls, ctx } = makeCtx({ name: 'P', 'session-id': 'p' });
     await quiet(() => projectCommands['project create']!.run(ctx));
-    assert.deepEqual(calls[0]!.body, { id: undefined, name: 'P', workspacePath: '', sessionId: 'p' });
+    assert.deepEqual(calls[0]!.body, { id: undefined, name: 'P', workspacePath: '', defaultSessionId: 'p' });
   });
 
   it('project set keeps an empty --session-id (clear default)', async () => {
     const { calls, ctx } = makeCtx({ id: 'p', 'session-id': '' });
     await quiet(() => projectCommands['project set']!.run(ctx));
-    assert.deepEqual(calls[0]!.body, { sessionId: '' });
+    assert.deepEqual(calls[0]!.body, { defaultSessionId: null });
   });
 
   it('project list appends the bound session only when non-empty', async () => {
-    const projects = [{ id: 'a', name: 'A', workspacePath: '', sessionId: 'ses_a' }, { id: 'b', name: 'B', workspacePath: '' }];
+    const projects = [{ id: 'a', name: 'A', workspacePath: '', defaultSessionId: 'ses_a' }, { id: 'b', name: 'B', workspacePath: '' }];
     const ctx = { ...makeCtx().ctx, api: (async () => projects) as unknown as ApiClient };
     const { logs } = await quiet(() => projectCommands['project list']!.run(ctx));
-    assert.match(logs[0]!, /session=ses_a/);
+    assert.match(logs[0]!, /defaultSession=ses_a/);
     assert.doesNotMatch(logs[1]!, /session=/);
   });
 });

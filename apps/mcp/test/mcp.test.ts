@@ -180,20 +180,21 @@ describe('MCP session propagation', () => {
     assert.equal(wire[1]!.body?.sessionId, 'ses_claim');
   });
 
-  it('update_project forwards an empty sessionId (clear)', async () => {
+  it('update_project forwards a null defaultSessionId (clear)', async () => {
     process.env.TASKBOARD_URL = 'http://127.0.0.1:49999';
     const wire = stub();
     const table = new Map(projectTools);
-    await table.get('update_project')!.handler({ id: 'p', sessionId: '' });
-    assert.deepEqual(wire[0]!.body, { sessionId: '' });
+    await table.get('update_project')!.handler({ id: 'p', defaultSessionId: null });
+    assert.deepEqual(wire[0]!.body, { defaultSessionId: null });
   });
 
-  it('create_project forwards a sessionId when present', async () => {
+  it('create_project forwards directoryId and defaultSessionId when present', async () => {
     process.env.TASKBOARD_URL = 'http://127.0.0.1:49999';
     const wire = stub();
     const table = new Map(projectTools);
-    await table.get('create_project')!.handler({ name: 'P', sessionId: 'ses_p' });
-    assert.equal(wire[0]!.body?.sessionId, 'ses_p');
+    await table.get('create_project')!.handler({ name: 'P', directoryId: 'dir1', defaultSessionId: 'ses_p' });
+    assert.equal(wire[0]!.body?.directoryId, 'dir1');
+    assert.equal(wire[0]!.body?.defaultSessionId, 'ses_p');
   });
 });
 

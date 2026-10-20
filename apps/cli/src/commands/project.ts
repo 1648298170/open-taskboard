@@ -9,7 +9,7 @@ export const projectCommands: Record<string, Command> = {
       need(!!flags.name, 'project create --name NAME [--id ID] [--wake-port PORT] [--session-id ID] [--labels LIST]');
       const port = String(flags['wake-port'] ?? '').trim();
       const p = await api('POST', '/api/projects', {
-        id: flags.id, name: flags.name, workspacePath: flags['workspace-path'] ?? '', ...(port ? { wakeChannel: `http://127.0.0.1:${port}` } : {}), ...(flags.labels ? { labels: String(flags.labels) } : {}), ...(flags['session-id'] !== undefined ? { sessionId: String(flags['session-id']) } : {}),
+        id: flags.id, name: flags.name, workspacePath: flags['workspace-path'] ?? '', ...(port ? { wakeChannel: `http://127.0.0.1:${port}` } : {}), ...(flags.labels ? { labels: String(flags.labels) } : {}), ...(flags['session-id'] !== undefined && String(flags['session-id']).trim() ? { defaultSessionId: String(flags['session-id']) } : {}),
       });
       console.log(`created project ${p.id} (${p.name})${p.wakeChannel ? ` — wake → ${p.wakeChannel}` : ''}`);
       if (!p.wakeChannel) return;
@@ -23,10 +23,13 @@ export const projectCommands: Record<string, Command> = {
     async run(ctx) {
       const { api, flags } = ctx;
       need(!!flags.id, 'project set --id ID [--name NAME] [--wake-port PORT] [--session-id ID] [--labels LIST]');
-      const body: { name?: string; wakeChannel?: string; labels?: string; sessionId?: string } = {};
+      const body: { name?: string; wakeChannel?: string; labels?: string; defaultSessionId?: string | null } = {};
       if (flags.name) body.name = String(flags.name);
       if (flags.labels !== undefined) body.labels = String(flags.labels).trim();
-      if (flags['session-id'] !== undefined) body.sessionId = String(flags['session-id']);
+      if (flags['session-id'] !== undefined) {
+        const raw = String(flags['session-id']).trim();
+        body.defaultSessionId = raw === '' ? null : raw;
+      }
       if (flags['wake-port'] !== undefined) {
         const raw = String(flags['wake-port']).trim();
         body.wakeChannel = raw === '0' || raw === '-' ? '' : `http://127.0.0.1:${raw}`;
@@ -40,7 +43,7 @@ export const projectCommands: Record<string, Command> = {
     summary: 'List projects',
     usage: 'project list',
     async run(ctx) {
-      for (const p of await ctx.api('GET', '/api/projects')) console.log(`${p.id}  ${p.name}  ${p.workspacePath}${p.wakeChannel ? `  wake→${p.wakeChannel}` : ''}${p.sessionId ? `  session=${p.sessionId}` : ''}${p.labels ? `  [${p.labels}]` : ''}`);
+      for (const p of await ctx.api('GET', '/api/projects')) console.log(`${p.id}  ${p.name}  ${p.workspacePath}${p.wakeChannel ? `  wake→${p.wakeChannel}` : ''}${p.defaultSessionId ? `  defaultSession=${p.defaultSessionId}` : ''}${p.labels ? `  [${p.labels}]` : ''}`);
     }
   },
   'project refs': {
