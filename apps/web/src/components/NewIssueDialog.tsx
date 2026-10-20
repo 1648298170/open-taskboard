@@ -1,11 +1,14 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Select } from './Select';
 import { api_, OpenCodeSessionOption, PRIORITIES, Priority } from '../api';
+import { initialSessionId, mergeSessionOptions } from '../logic/session';
 import { WAKE_PREFIX } from '@taskboard/core/types';
 
-export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }: {
+export function NewIssueDialog({ open, projectId, defaultSessionId = '', onClose, onCreated, onError }: {
   open: boolean;
   projectId: string;
+  /** 项目绑定的默认会话；为空时仍需人工选择。 */
+  defaultSessionId?: string;
   onClose: () => void;
   onCreated: (parentId?: string) => void;
   onError: (msg: string) => void;
@@ -16,20 +19,24 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
   const [sessionId, setSessionId] = useState('');
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [missingDefault, setMissingDefault] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setSessions([]);
-    setSessionId('');
+    setSessionId(initialSessionId(defaultSessionId));
+    setMissingDefault(false);
     setSessionsLoading(true);
     setSessionsError(null);
     api_.openCodeSessions(projectId)
       .then(result => {
         if (cancelled) return;
-        setSessions(result.sessions);
-        if (result.sessions.length === 0) {
+        const merged = mergeSessionOptions(result.sessions, defaultSessionId);
+        setSessions(merged.options);
+        setMissingDefault(merged.missingDefault);
+        if (result.sessions.length === 0 && !merged.missingDefault) {
           setSessionsError(result.workspacePath
             ? '没有找到目录匹配项目工作区的会话：' + result.workspacePath
             : '当前 OpenCode 服务没有可选会话，请先在 OpenCode 中创建或打开一个会话。');
@@ -40,7 +47,7 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
       })
       .finally(() => { if (!cancelled) setSessionsLoading(false); });
     return () => { cancelled = true; };
-  }, [open, projectId]);
+  }, [open, projectId, defaultSessionId]);
 
   if (!open) return null;
 
@@ -99,11 +106,17 @@ export function NewIssueDialog({ open, projectId, onClose, onCreated, onError }:
               value: session.id,
               label: session.title + ' · ' + session.id.slice(0, 12)
             }))}
-            placeholder={sessionsLoading ? '正在读取会话…' : '选择已有会话'} />
+            placeholder={sessionsLoading ? '正在读取会话…' : '选择已有会话'}
+            emptyText={sessionsLoading ? '正在读取会话…' : '当前没有OpenCode 会话，请先前往OpenCode创建会话'} />
         </label>
         {sessionId && sessions.find(session => session.id === sessionId) && (
           <p className="session-hint">
             会话目录：{sessions.find(session => session.id === sessionId)?.directory || '未提供'}
+          </p>
+        )}
+        {missingDefault && (
+          <p className="session-hint" style={{ color: 'var(--accent)' }}>
+            项目默认会话未出现在当前列表中，已保留绑定；请确认该会话仍然有效。
           </p>
         )}
         {sessionsError && <p style={{ color: 'var(--danger)', fontSize: 12 }}>{sessionsError}</p>}

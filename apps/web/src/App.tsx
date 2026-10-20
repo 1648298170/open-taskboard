@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUS_CN, STATUSES } from './api';
+import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUS_CN, STATUSES, OpenCodeSessionOption } from './api';
 import { Board, buildBlockedByMap, flattenCardOrder, GroupBy, todayStr } from './components/Board';
 import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
@@ -8,8 +8,10 @@ import { Select } from './components/Select';
 import { Bell, ChartColumn, GanttChart, Keyboard, Moon, Plus, Sun, Trash2, X } from 'lucide-react';
 import { Drawer } from './components/Drawer';
 import { NewIssueDialog } from './components/NewIssueDialog';
+import { ProjectSessionDialog } from './components/ProjectSessionDialog';
 import { StatsPanel } from './components/StatsPanel';
 import { Timeline } from './components/Timeline';
+import { mergeSessionOptions, sessionProjectName, sessionWorkspacePath } from './logic/session';
 
 /** 从 location.hash 解析深链：#/issue/<id> → <id>，其余 → null。 */
 function issueIdFromHash(): string | null {
@@ -58,8 +60,19 @@ export default function App() {
   const [projName, setProjName] = useState('');
   const [projId, setProjId] = useState('');
   const [projLabels, setProjLabels] = useState('');
-  const [projWakePort, setProjWakePort] = useState('');
   const [projWorkspacePath, setProjWorkspacePath] = useState('');
+  // 新建项目：会话列表来自无状态端点；两个必填项齐备才允许提交。
+  const [projSessionId, setProjSessionId] = useState('');
+  const [projSessions, setProjSessions] = useState<OpenCodeSessionOption[]>([]);
+  const [projSessionsLoading, setProjSessionsLoading] = useState(false);
+  const [projSessionsError, setProjSessionsError] = useState<string | null>(null);
+  const [projError, setProjError] = useState<string | null>(null);
+  // 选中会话后自动回填工作区路径：标记该路径来自自动回填，
+  // 使随后的会话重取不会把刚选中的会话清掉。
+  const projSessionIdRef = useRef('');
+  const autoFilledWorkspaceRef = useRef<string | null>(null);
+  // 已有项目：配置默认会话的浮层开关。
+  const [configSessionOpen, setConfigSessionOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   // v0.4: 旧标签页检测 —— SPA 部署后旧标签页继续跑旧 bundle（多次坑用户的根源）。
   // 周期比对服务器最新 bundle 与当前运行版本，不一致则提示刷新。
@@ -147,6 +160,12 @@ export default function App() {
         const prev = localStorage.getItem('project');
         const pid = prev && list.some(p => p.id === prev) ? prev : list[0].id;
         setProjectId(pid);
+      } else {
+        // 没有任何项目：清空选中态，面板保持可用（侧栏显示“当前没有项目”）。
+        setProjectId(null);
+        setIssues([]);
+        setProgress(null);
+        setDeps([]);
       }
     }).catch(err => {
       if (isUnauthorized(err)) setNeedToken(true);
@@ -181,6 +200,60 @@ export default function App() {
     if (!statsOpen || !projectId) return;
     api_.stats(projectId).then(setStats).catch(err => { if (isUnauthorized(err)) setNeedToken(true); });
   }, [statsOpen, projectId]);
+
+  // 新建项目对话框：打开/工作区变化时防抖拉取会话列表（无状态端点）。
+  // 不传 url —— 服务端按环境变量 → 项目 wakeChannel → 默认地址解析。
+  // cancelled 标记丢弃过期响应；关闭对话框后不再请求。
+  useEffect(() => { projSessionIdRef.current = projSessionId; }, [projSessionId]);
+
+  useEffect(() => {
+    if (!projCreateOpen) return;
+    let cancelled = false;
+    setProjSessionsLoading(true);
+    setProjSessionsError(null);
+    const timer = setTimeout(() => {
+      api_.openCodeSessionsFor(undefined, projWorkspacePath.trim() || undefined)
+        .then(result => {
+          if (cancelled) return;
+          // 工作区路径若来自「选中会话自动回填」，重取列表后保留刚选中的会话；
+          // 若它因过滤条件未返回，用合成选项继续显示，避免静默丢选择。
+          const keepSelection = autoFilledWorkspaceRef.current !== null
+            && autoFilledWorkspaceRef.current === projWorkspacePath.trim();
+          const selected = projSessionIdRef.current;
+          setProjSessions(mergeSessionOptions(result.sessions, keepSelection ? selected : '').options);
+          setProjSessionId(prev => (keepSelection ? prev : result.sessions.some(s => s.id === prev) ? prev : ''));
+          if (keepSelection) autoFilledWorkspaceRef.current = null;
+          if (result.sessions.length === 0 && !(keepSelection && selected)) {
+            setProjSessionsError(result.workspacePath
+              ? '没有找到目录匹配项目工作区的会话：' + result.workspacePath
+              : '当前 OpenCode 服务没有可选会话，请先在 OpenCode 中创建或打开一个会话。');
+          }
+        })
+        .catch(err => {
+          if (cancelled) return;
+          setProjSessions([]);
+          setProjSessionId('');
+          setProjSessionsError((err as Error).message);
+        })
+        .finally(() => { if (!cancelled) setProjSessionsLoading(false); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [projCreateOpen, projWorkspacePath]);
+
+  const openProjectDialog = (): void => {
+    setProjName(''); setProjId(''); setProjLabels(''); setProjWorkspacePath('');
+    setProjSessionId(''); setProjSessions([]); setProjSessionsLoading(false);
+    setProjSessionsError(null); setProjError(null);
+    autoFilledWorkspaceRef.current = null;
+    setProjCreateOpen(true);
+  };
+
+  const closeProjectDialog = (): void => {
+    setProjCreateOpen(false);
+    setProjSessionId(''); setProjSessions([]); setProjSessionsLoading(false);
+    setProjSessionsError(null); setProjError(null);
+    autoFilledWorkspaceRef.current = null;
+  };
 
   // ---- 过滤 / 排序 ----
   const filtersActive = filters.text.trim() !== '' || filters.assignee !== '' || filters.label !== '' || filters.due !== '';
@@ -299,7 +372,7 @@ export default function App() {
         return;
       }
       if (e.key === '?') { setHelpOpen(true); return; }
-      if (e.key === 'n') { setDialogOpen(true); return; }
+      if (e.key === 'n') { if (projectId) setDialogOpen(true); return; }
       if (e.key === 'j' || e.key === 'k') {
         if (flatIds.length === 0) return;
         e.preventDefault();
@@ -317,7 +390,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [dialogOpen, projCreateOpen, openId, batchMode, selected, flatIds, cursorId, closeDrawer, openIssue, helpOpen]);
+  }, [dialogOpen, projCreateOpen, openId, batchMode, selected, flatIds, cursorId, closeDrawer, openIssue, helpOpen, projectId]);
 
   // 高亮卡片滚入可视区（j/k 移动可能超出视口）。
   useEffect(() => {
@@ -389,26 +462,6 @@ export default function App() {
     );
   }
 
-  if (!projects.length) {
-    return (
-      <div className="empty-state">
-        <p>还没有项目。<a href="#" onClick={async e => {
-          e.preventDefault();
-          try {
-            const p = await api_.createProject({ id: 'demo', name: 'Demo 项目' });
-            const parent = await api_.createIssue(p.id, { title: '搭建登录模块', priority: 'high', branch: 'feat/login', description: '示例父任务，包含可拆解的子任务。' });
-            for (const [title, priority] of [['登录表单 UI', 'medium'], ['JWT 鉴权接口', 'high'], ['会话刷新逻辑', 'medium']] as const) {
-              await api_.createIssue(p.id, { parentId: parent.id, title, priority });
-            }
-            setProjects([p]); setProjectId(p.id);
-          } catch (err) { showToast(`✗ ${(err as Error).message}`); }
-        }}>一键创建示例项目</a></p>
-        <pre>taskboard project create --id my-project --name "My project"
-taskboard issue create --project my-project --title "第一个任务"</pre>
-      </div>
-    );
-  }
-
   const pct = progress && progress.weightedTotal > 0
     ? Math.round((progress.weightedDone / progress.weightedTotal) * 100) : 0;
 
@@ -421,6 +474,7 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
             <h1>taskboard</h1>
           </div>
           <nav className="side-projects" aria-label="项目">
+            {projects.length === 0 && <p className="side-empty">当前没有项目</p>}
             {projects.map(p => (
               <button key={p.id} className={`side-item${p.id === projectId ? ' active' : ''}`}
                 title={`${p.name} (${p.id})`}
@@ -433,7 +487,7 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           </nav>
           <div className="side-actions">
             {/* v0.4: 项目管理 —— 新建对话框；删除需输入项目 id 确认（防误删）。 */}
-            <button className="side-btn" onClick={() => { setProjName(''); setProjId(''); setProjLabels(''); setProjWakePort(''); setProjWorkspacePath(''); setProjCreateOpen(true); }}>
+            <button className="side-btn" onClick={openProjectDialog}>
               <Plus size={14} /> 新建项目</button>
             <button className="side-btn" onClick={async () => {
               const pid = projectId ?? '';
@@ -469,6 +523,9 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
               } catch (err) { showToast('✗ ' + (err as Error).message); }
             }}>
               配置 OpenCode</button>
+            <button className="side-btn" disabled={!projectId} title="为当前项目选择默认 OpenCode 会话"
+              onClick={() => setConfigSessionOpen(true)}>
+              配置会话</button>
             <button className="side-btn danger" title="删除当前项目（输入 id 确认）"
               onClick={async () => {
                 const pid = projectId ?? '';
@@ -503,7 +560,9 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
                   {progress ? `${progress.weightedDone}/${progress.weightedTotal} · ${pct}%` : '–'}
                 </span>
               </div>
-              <button className="btn primary" onClick={() => setDialogOpen(true)}>
+              <button className="btn primary" disabled={!projectId}
+                title={projectId ? undefined : '先新建项目再创建任务'}
+                onClick={() => setDialogOpen(true)}>
                 <Plus size={14} /> 新任务</button>
               {/* T5-28 主题切换：图标显示将切换到的目标主题。 */}
               <button className="icon-btn" aria-label="切换主题" title="切换主题"
@@ -626,10 +685,11 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           statuses={STATUSES} />
       )}
 
-      <NewIssueDialog open={dialogOpen} projectId={projectId!}
+      {projectId && <NewIssueDialog open={dialogOpen} projectId={projectId}
+        defaultSessionId={projects.find(p => p.id === projectId)?.sessionId ?? ''}
         onClose={() => setDialogOpen(false)}
         onCreated={id => { void refresh(); if (id) openIssue(id); }}
-        onError={msg => showToast(`✗ ${msg}`)} />
+        onError={msg => showToast(`✗ ${msg}`)} />}
 
       {/* v0.4: 新建项目对话框（id 可选留空由后端定，name 必填）。 */}
       {projCreateOpen && (
@@ -637,54 +697,88 @@ taskboard issue create --project my-project --title "第一个任务"</pre>
           <form onSubmit={async e => {
             e.preventDefault();
             const name = projName.trim();
-            if (!name) return;
+            if (!name) { setProjError('请填写项目名称。'); return; }
             const id = projId.trim();
-            const port = projWakePort.trim();
-            if (port && (!/^\d{2,5}$/.test(port) || Number(port) > 65535)) { showToast('✗ 唤醒端口须为 1024-65535 的数字'); return; }
+            const sessionId = projSessionId.trim();
+            if (!sessionId) { setProjError('请先选择一个 OpenCode 会话。'); return; }
             const labels = projLabels.trim();
-            const wakeChannel = port ? `http://127.0.0.1:${port}` : undefined;
+            setProjError(null);
             try {
               const workspacePath = projWorkspacePath.trim();
-              const p = await api_.createProject({ ...(id ? { id } : {}), name, ...(workspacePath ? { workspacePath } : {}), ...(wakeChannel ? { wakeChannel } : {}), ...(labels ? { labels } : {}) });
-              setProjCreateOpen(false);
+              const p = await api_.createProject({
+                ...(id ? { id } : {}), name, sessionId,
+                ...(workspacePath ? { workspacePath } : {}), ...(labels ? { labels } : {})
+              });
+              closeProjectDialog();
               setProjects(prev => [...prev, p]);
               setProjectId(p.id);
-              showToast(`已创建项目 ${p.id}${p.wakeChannel ? `（唤醒 → ${p.wakeChannel}）` : ''}`);
-            } catch (err) { showToast(`✗ ${(err as Error).message}`); }
+              showToast(`已创建项目 ${p.id}（唤醒 → ${p.wakeChannel}）`);
+            } catch (err) { setProjError((err as Error).message); }
           }}>
             <h2>新建项目</h2>
+            <label>OpenCode 会话（必选）
+              <Select value={projSessionId} onChange={value => {
+                setProjSessionId(value);
+                setProjSessionsError(null);
+                setProjError(null);
+                const picked = projSessions.find(session => session.id === value);
+                // 选中会话后用会话标题回填项目名（标题为空则保留手填内容）。
+                const pickedName = sessionProjectName(picked);
+                if (pickedName) setProjName(pickedName);
+                // 目录非空时自动回填工作区路径；字段仍可手动修改。
+                const dir = sessionWorkspacePath(picked);
+                if (dir && dir !== projWorkspacePath.trim()) {
+                  autoFilledWorkspaceRef.current = dir;
+                  setProjWorkspacePath(dir);
+                } else {
+                  autoFilledWorkspaceRef.current = null;
+                }
+              }}
+                options={projSessions.map(session => ({
+                  value: session.id,
+                  label: session.title + ' · ' + session.id.slice(0, 12)
+                }))}
+                placeholder="选择会话"
+                emptyText={projSessionsLoading ? '正在读取会话…' : '当前没有OpenCode 会话，请先前往OpenCode创建会话'} />
+            </label>
+            {projSessionsLoading && <p className="session-hint">正在读取会话…</p>}
+            {projSessionsError && <p style={{ color: 'var(--danger)', fontSize: 12 }}>{projSessionsError}</p>}
+            <p className="session-hint">选择会话会自动填入项目名称与工作区路径（可修改）；OpenCode 服务地址由服务端配置或默认地址解析。</p>
             <div className="row">
               <label>名称
-                <input required autoFocus value={projName} placeholder="如 登录模块"
-                  onChange={e => setProjName(e.target.value)} />
+                <input required value={projName} placeholder="如 登录模块"
+                  onChange={e => { setProjName(e.target.value); setProjError(null); }} />
               </label>
               <label>id（可选）
                 <input value={projId} placeholder="留空自动生成"
                   onChange={e => setProjId(e.target.value)} />
               </label>
             </div>
-            <div className="row">
-              <label>唤醒端口（可选）
-                <input inputMode="numeric" value={projWakePort} placeholder="如 4097"
-                  onChange={e => setProjWakePort(e.target.value)} />
-              </label>
-              <label>标签（可选）
-                <input value={projLabels} placeholder="标签,逗号分隔"
-                  onChange={e => setProjLabels(e.target.value)} />
-              </label>
-            </div>
             <label>项目工作区路径（可选，建议填写）
               <input value={projWorkspacePath} placeholder="如 D:\\workspace\\projects\\my-app"
-                onChange={e => setProjWorkspacePath(e.target.value)} />
+                onChange={e => { autoFilledWorkspaceRef.current = null; setProjWorkspacePath(e.target.value); setProjSessionId(''); setProjError(null); }} />
             </label>
-            <p style={{ margin: '0 0 4px', fontSize: 11, color: 'var(--ink-dim)' }}>配置 OpenCode 服务后可选择已有会话；填写工作区路径后，会过滤掉其他目录的会话。</p>
+            <label>标签（可选）
+              <input value={projLabels} placeholder="标签,逗号分隔"
+                onChange={e => setProjLabels(e.target.value)} />
+            </label>
+            {projError && <p style={{ color: 'var(--danger)', fontSize: 12 }}>{projError}</p>}
             <menu>
-              <button type="button" className="btn" onClick={() => setProjCreateOpen(false)}>取消</button>
-              <button type="submit" className="btn primary">创建</button>
+              <button type="button" className="btn" onClick={closeProjectDialog}>取消</button>
+              <button type="submit" className="btn primary"
+                disabled={projSessionsLoading || projSessions.length === 0}>创建</button>
             </menu>
           </form>
         </dialog>
       )}
+
+      <ProjectSessionDialog open={configSessionOpen}
+        project={projects.find(p => p.id === projectId) ?? null}
+        onClose={() => setConfigSessionOpen(false)}
+        onSaved={updated => {
+          setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
+          showToast(updated.sessionId ? '已绑定默认会话：' + updated.sessionId : '已解除默认会话绑定');
+        }} />
 
       {/* v0.4: 快捷键帮助浮层（? 呼出，Esc / 点击遮罩关闭）。 */}
       {helpOpen && (

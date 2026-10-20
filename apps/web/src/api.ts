@@ -64,8 +64,8 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 
 export const api_ = {
   listProjects: () => api<Project[]>('GET', '/api/projects'),
-  createProject: (p: { id?: string; name: string; workspacePath?: string; wakeChannel?: string; labels?: string }) => api<Project>('POST', '/api/projects', p),
-  updateProject: (id: string, p: { name?: string; wakeChannel?: string }) => api<Project>('PATCH', `/api/projects/${id}`, p),
+  createProject: (p: { id?: string; name: string; workspacePath?: string; wakeChannel?: string; labels?: string; sessionId?: string }) => api<Project>('POST', '/api/projects', p),
+  updateProject: (id: string, p: { name?: string; wakeChannel?: string; labels?: string; sessionId?: string }) => api<Project>('PATCH', `/api/projects/${id}`, p),
   deleteProject: (id: string) => api<void>('DELETE', `/api/projects/${id}`),
   listIssues: (projectId: string) => api<Issue[]>('GET', `/api/projects/${projectId}/issues`),
   showIssue: (id: string) => api<IssueDetail>('GET', `/api/issues/${id}`),
@@ -121,6 +121,15 @@ export const api_ = {
   progress: (projectId: string) => api<Progress>('GET', `/api/projects/${projectId}/progress`),
   stats: (projectId: string) => api<Stats>('GET', `/api/projects/${projectId}/stats?weeks=8`),
   openCodeSessions: (projectId: string) => api<{ sessions: OpenCodeSessionOption[]; workspacePath: string; serverUrl: string }>('GET', `/api/projects/${encodeURIComponent(projectId)}/opencode-sessions`),
+  // 新建项目对话框用：无项目 id 的无状态查询，按服务地址 + 可选工作区过滤会话。
+  // url 省略时由服务端解析默认地址（环境变量 → 项目 wakeChannel → 127.0.0.1:4096）。
+  openCodeSessionsFor: (url?: string, workspacePath?: string) => {
+    const query = new URLSearchParams();
+    if (url) query.set('url', url);
+    if (workspacePath) query.set('workspacePath', workspacePath);
+    const qs = query.toString();
+    return api<{ sessions: OpenCodeSessionOption[]; workspacePath: string; serverUrl: string }>('GET', `/api/opencode/sessions${qs ? `?${qs}` : ''}`);
+  },
   gitRefs: (projectId: string) => api<GitRefs>('GET', `/api/projects/${projectId}/git-refs`),
   commits: (projectId: string, ref: string) =>
     api<{ commits: Commit[] }>('GET', `/api/projects/${projectId}/commits?ref=${encodeURIComponent(ref)}`)

@@ -9,7 +9,7 @@ export interface SelectOption {
   label: string;
 }
 
-export function Select({ value, options, onChange, placeholder, title, ariaLabel }: {
+export function Select({ value, options, onChange, placeholder, title, ariaLabel, emptyText }: {
   value: string;
   options: SelectOption[];
   onChange: (value: string) => void;
@@ -17,6 +17,8 @@ export function Select({ value, options, onChange, placeholder, title, ariaLabel
   placeholder?: string;
   title?: string;
   ariaLabel?: string;
+  /** 无选项且面板展开时显示的提示（如「当前没有会话」）。 */
+  emptyText?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
@@ -96,11 +98,16 @@ export function Select({ value, options, onChange, placeholder, title, ariaLabel
       </button>
       {open && (
         <div ref={panelRef} className="tb-select-panel" role="listbox">
+          {options.length === 0 && emptyText && (
+            <div className="tb-select-empty">{emptyText}</div>
+          )}
           {options.map((o, i) => (
             <div key={o.value} role="option" aria-selected={o.value === value}
               className={`tb-select-option${i === hi ? ' hi' : ''}${o.value === value ? ' selected' : ''}`}
               onMouseEnter={() => setHi(i)}
-              onClick={() => choose(o.value)}>
+              // 阻止 label 的默认激活行为：Select 常被包在 <label> 里，否则点击选项后
+              // label 会把点击转发给触发按钮，按钮在 open=false 的新闭包下又把面板打开。
+              onClick={e => { e.preventDefault(); choose(o.value); }}>
               {o.label}
             </div>
           ))}
