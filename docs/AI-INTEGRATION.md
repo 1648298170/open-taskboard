@@ -63,6 +63,7 @@ taskboard next --project my-project           # 智能取下一个该做的任�
 | 开工必绑（403 硬门禁） | claim/PATCH 流转 in_progress 必须带 `sessionId`+`branch`；被 403 拦了就按错误文案补齐重试 | 跳过绑定直接开工 |
 | 不可编辑 agent 评论 | 评论编辑权只属于创建它的网页用户；agent 评论永远原样（你也不可编辑自己的历史评论） | 事后篡改 agent 发言 |
 | 乐观锁 | 所有变更带 `show_issue` 返回的 `version` | 409 = 别人改过，重读再改一次，仍失败就停下报告，**绝不循环重试** |
+| 状态变更审计（403 硬门禁） | 每次实际状态变更都在 `update_issue` 同一请求传 `statusNote`，说明原因、验证证据、未覆盖项 | 服务端在同一个 SQLite 事务写入状态和审计评论；缺少说明即拒绝，不得拆成 `update_issue` + `add_comment` 两步 |
 | 认领冲突 | 409 = 他人持有有效租约 | 重读一次，条件不变才重试，否则放弃；**绝不抢他人的认领** |
 | done 需人类确认 | `in_review` 后停下等验收（`TASKBOARD_HUMAN_DONE` 默认开启） | 403；人类明确说"确认"后才可传 `confirm: true` |
 | 父任务人工关闭 | 子任务开工自动拉起 `todo` 父任务 → `in_progress`；所有子任务进入 `in_review`/`done` 时父任务自动进入 `in_review`；父任务最终 `done` 永远人工，全子 done 也不自动关父 | 不要代替人类关闭父任务 |
