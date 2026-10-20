@@ -369,7 +369,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no'
     });
-    res.write(`event: ready\\ndata: ${JSON.stringify({ issueId: issue.id, sessionId: issue.sessionId, at: new Date().toISOString() })}\\n\\n`);
+    res.write(`event: ready\ndata: ${JSON.stringify({ issueId: issue.id, sessionId: issue.sessionId, at: new Date().toISOString() })}\\n\\n`);
 
     const stop = (): void => { if (!controller.signal.aborted) controller.abort(); };
     res.on('close', stop);
@@ -383,17 +383,17 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
         let boundary = buffer.search(/\r?\n\r?\n/);
         while (boundary >= 0) {
           const frame = buffer.slice(0, boundary);
-          const delimiter = /^\\r?\\n\\r?\\n/.exec(buffer.slice(boundary))?.[0] ?? '\\n\\n';
+          const delimiter = /^\r?\n\r?\n/.exec(buffer.slice(boundary))?.[0] ?? '\n\n';
           buffer = buffer.slice(boundary + delimiter.length);
-          const data = frame.split(/\\r?\\n/)
+          const data = frame.split(/\r?\n/)
             .filter(line => line.startsWith('data:'))
             .map(line => line.slice(5).trimStart())
-            .join('\\n');
+            .join('\n');
           if (data) {
             try {
               const parsed: unknown = JSON.parse(data);
               if (openCodeEventBelongsToSession(parsed, issue.sessionId!)) {
-                res.write(`event: opencode\\ndata: ${JSON.stringify(parsed)}\\n\\n`);
+                res.write(`event: opencode\ndata: ${JSON.stringify(parsed)}\\n\\n`);
               }
             } catch {
               // Ignore malformed/non-JSON upstream frames; do not break the stream.
@@ -404,7 +404,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       }
     } catch (err) {
       if (!controller.signal.aborted && !res.destroyed) {
-        res.write(`event: upstream-error\\ndata: ${JSON.stringify({ error: (err as Error).message })}\\n\\n`);
+        res.write(`event: upstream-error\ndata: ${JSON.stringify({ error: (err as Error).message })}\\n\\n`);
       }
     } finally {
       res.off('close', stop);
