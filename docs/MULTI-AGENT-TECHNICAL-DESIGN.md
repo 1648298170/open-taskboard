@@ -597,7 +597,7 @@ Runner 负责：
 - [ ] 增加 Web Agent 选择、实时日志与执行详情。
 - [ ] 完成超时、取消请求、SSE 断线重连、Taskboard 重启后的 Session 状态恢复和路径权限测试。
 - [ ] 完成 OpenCode、Codex App、DSH App 的真实环境验收，并记录原生会话控制能力边界。
-- [ ] 再启动会话恢复与多 Agent 工作流阶段。
+- [ ] 将会话恢复能力扩展到 Codex App / DSH App 已验证的原生桥接接口，再启动多 Agent 工作流阶段。
 
 ## 16. 结论
 
