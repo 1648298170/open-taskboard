@@ -1502,7 +1502,7 @@
       "patch": {
         "operationId": "updateIssue",
         "summary": "Patch an issue (optimistic lock via optional version)",
-        "description": "Send the `version` from your last read to guard against concurrent overwrites — a mismatch → 409 with a re-read-and-retry message. REST keeps version optional (the MCP tool requires it).",
+        "description": "Send the `version` from your last read to guard against concurrent overwrites — a mismatch → 409. For every actual status change by an agent, include `statusNote` with reason, verification evidence and unchecked items; status and comment are committed atomically. Web actions may omit the note and receive an explicit automatic audit comment.",
         "tags": [
           "issues"
         ],
@@ -3245,7 +3245,7 @@
       },
       "UpdateIssueRequest": {
         "type": "object",
-        "description": "PATCH /api/issues/{id} body — all fields optional, version optional on REST (strict)",
+        "description": "PATCH /api/issues/{id} body — all fields optional, version optional on REST (strict); every actual non-web status transition must include statusNote; the status update and audit comment are committed atomically. Web status changes without a note receive an automatic labelled audit comment.",
         "properties": {
           "title": {
             "type": "string",
@@ -3313,6 +3313,12 @@
           "confirm": {
             "type": "boolean",
             "description": "T7-36 escape hatch: with TASKBOARD_HUMAN_DONE=1, an agent may set done after the user confirmed in conversation"
+          },
+          "statusNote": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000,
+            "description": "Required for an actual agent status transition. Explain reason, verification evidence, and unchecked items; saved as a comment in the same transaction as the status update."
           }
         },
         "additionalProperties": false
