@@ -2529,6 +2529,110 @@
           }
         }
       }
+    },
+    "/api/issues/{id}/opencode-session": {
+      "summary": "Create an OpenCode Session in the task execution directory",
+      "post": {
+        "tags": [
+          "Issues"
+        ],
+        "summary": "Create and bind a task Session",
+        "description": "Creates a Session in the task's bound worktreePath when present, otherwise in the project's workspacePath. Validates the OpenCode server's active directory before creating and binding the Session. Rejected while the task has an active claim lease.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session created and bound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "issue": {
+                      "$ref": "#/components/schemas/Issue"
+                    },
+                    "session": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "directory": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "title",
+                        "directory",
+                        "updatedAt"
+                      ]
+                    },
+                    "serverUrl": {
+                      "type": "string"
+                    },
+                    "workspacePath": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "issue",
+                    "session",
+                    "serverUrl",
+                    "workspacePath"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing workspace or OpenCode server URL"
+          },
+          "404": {
+            "description": "Task or project not found"
+          },
+          "409": {
+            "description": "Task has an active execution lease"
+          },
+          "502": {
+            "description": "OpenCode session creation or directory validation failed"
+          }
+        }
+      }
     }
   },
   "components": {
