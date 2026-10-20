@@ -7,6 +7,7 @@ import { spawn, ChildProcess } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { resolveClientConfig } from '@taskboard/core';
+import { rememberedSession } from './session.js';
 
 const require = createRequire(import.meta.url);
 const SERVER_JS = require.resolve('@taskboard/server'); // -> apps/server/dist/index.js (package main)
@@ -16,10 +17,12 @@ export const base = (): string => resolveClientConfig(process.env).baseUrl;
 export async function apiOnce(method: string, path: string, body?: unknown): Promise<unknown> {
   // T2-9: 服务端设置 TASKBOARD_TOKEN 时携带 Bearer 认证。
   const token = resolveClientConfig(process.env).token;
+  const session = rememberedSession();
   const res = await fetch(base() + path, {
     method,
     headers: {
       'x-taskboard-actor': 'mcp',
+      ...(session ? { 'x-taskboard-session': session } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {})
     },

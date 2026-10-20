@@ -20,7 +20,7 @@ export const show = (i: IssueLike): void => {
 export const issueCommands: Record<string, Command> = {
   'issue create': {
     summary: 'Create an issue',
-    usage: 'issue create --project ID --title T [--template NAME] [--parent ID] [--worktree W] [--start-date D] [--due-date D]',
+    usage: 'issue create --project ID --title T [--template NAME] [--parent ID] [--worktree W] [--session-id ID] [--start-date D] [--due-date D]',
     async run(ctx) {
       const { api, flags } = ctx;
       // T4-23: --template NAME prefills fields from <dataDir>/templates.json.
@@ -39,11 +39,12 @@ export const issueCommands: Record<string, Command> = {
         assignee: flags.assignee ?? ''
       };
       if (flags.worktree !== undefined) body.worktree = String(flags.worktree);
-      if (flags['session-id'] !== undefined) body.sessionId = String(flags['session-id']);
+      const sessionId = flags['session-id'] !== undefined ? String(flags['session-id']) : undefined;
+      if (sessionId !== undefined) body.sessionId = sessionId;
       if (flags['start-date'] !== undefined) body.startDate = String(flags['start-date']);
       if (flags['due-date'] !== undefined) body.dueDate = String(flags['due-date']);
       if (flags.confirm) body.confirm = true;
-      const i = await api('POST', `/api/projects/${seg(flags.project)}/issues`, body);
+      const i = await api('POST', `/api/projects/${seg(flags.project)}/issues`, body, { sessionId });
       console.log(`created #${i.id} [${i.status}] ${i.title}`);
     }
   },
@@ -141,7 +142,7 @@ export const issueCommands: Record<string, Command> = {
       // 允许 agent 在用户确认后代为设置 done。
       if (flags.confirm) body.confirm = true;
       if (flags['expected-version'] !== undefined) body.version = Number(flags['expected-version']);
-      const i = await api('PATCH', `/api/issues/${seg(rest[0])}`, body);
+      const i = await api('PATCH', `/api/issues/${seg(rest[0])}`, body, { sessionId: flags['session-id'] !== undefined ? String(flags['session-id']) : undefined });
       console.log(`#${i.id} updated (v${i.version})`);
     }
   },
@@ -202,7 +203,7 @@ export const issueCommands: Record<string, Command> = {
       if (flags.ttl !== undefined) body.ttlMinutes = Number(flags.ttl);
       // 认领即绑定：绑空位不抢绑（服务端裁决）。
       if (flags['session-id'] !== undefined) body.sessionId = String(flags['session-id']);
-      const i = await api('POST', `/api/issues/${seg(rest[0])}/claim`, body);
+      const i = await api('POST', `/api/issues/${seg(rest[0])}/claim`, body, { sessionId: flags['session-id'] !== undefined ? String(flags['session-id']) : undefined });
       console.log(`#${i.id} claimed by ${i.claimedBy} until ${i.leaseExpiresAt}`);
     }
   },

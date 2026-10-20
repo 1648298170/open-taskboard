@@ -9,19 +9,23 @@ import { join } from 'node:path';
 // 命令模块会触发 TDZ 环（watch.ts 头注释记载的同款坑，cli.ts 同序规避）。
 import { need } from '../src/commands/registry.js';
 import { issueCommands } from '../src/commands/issue.js';
+import { projectCommands } from '../src/commands/project.js';
 import { backupCommand } from '../src/commands/backup.js';
 import { importCommand } from '../src/commands/import.js';
+import { api } from '../src/http.js';
 import type { ApiClient, CommandContext, Flags } from '../src/commands/registry.js';
 
 void need;
 
-interface Call { method: string; path: string; body?: unknown }
+interface Call { method: string; path: string; body?: unknown; opts?: { sessionId?: string } }
 
 const makeCtx = (flags: Flags = {}, rest: string[] = []) => {
   const calls: Call[] = [];
   const ctx: CommandContext = {
-    api: (async (method: string, path: string, body?: unknown) => {
-      calls.push({ method, path, body });
+    api: (async (method: string, path: string, body?: unknown, opts?: { sessionId?: string }) => {
+      const call: Call = { method, path, body };
+      if (opts !== undefined) call.opts = opts;
+      calls.push(call);
       return { id: 'new1', path: '/data/backups/snap-0001.db' };
     }) as unknown as ApiClient,
     base: () => 'http://t',
@@ -56,7 +60,8 @@ describe('issue claim body construction', () => {
     assert.deepEqual(calls, [{
       method: 'POST',
       path: '/api/issues/ISSUE1/claim',
-      body: { agent: 'sisyphus', ttlMinutes: 45, sessionId: 'ses_x' }
+      body: { agent: 'sisyphus', ttlMinutes: 45, sessionId: 'ses_x' },
+      opts: { sessionId: 'ses_x' }
     }]);
   });
 
@@ -64,6 +69,82 @@ describe('issue claim body construction', () => {
     const { calls, ctx } = makeCtx({ agent: 'a' }, ['I2']);
     await quiet(() => issueCommands['issue claim']!.run(ctx));
     assert.deepEqual(calls[0]!.body, { agent: 'a' });
+  });
+});
+
+describe('api agent-session header', () => {
+  const origFetch = globalThis.fetch;
+  const origEnv = { ...process.env };
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    for (const key of ['TASKBOARD_SESSION_ID', 'TASKBOARD_URL'] as const) {
+      if (origEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = origEnv[key];
+    }
+  });
+
+  const captureHeaders = (): () => Record<string, string> | undefined => {
+    let headers: Record<string, string> | undefined;
+    globalThis.fetch = (async (_url: unknown, init?: { headers?: unknown }) => {
+      headers = init?.headers as Record<string, string>;
+      return new Response(JSON.stringify({ ok: 1 }), { status: 200 });
+    }) as typeof fetch;
+    return () => headers;
+  };
+
+  it('sends TASKBOARD_SESSION_ID as x-taskboard-session', async () => {
+    process.env.TASKBOARD_URL = 'http://127.0.0.1:49999';
+    process.env.TASKBOARD_SESSION_ID = 'ses_env';
+    const seen = captureHeaders();
+    await api('GET', '/api/projects');
+    assert.equal(seen()!['x-taskboard-session'], 'ses_env');
+  });
+
+  it('lets explicit opts.sessionId win over the env (trimmed)', async () => {
+    process.env.TASKBOARD_URL = 'http://127.0.0.1:49999';
+    process.env.TASKBOARD_SESSION_ID = 'ses_env';
+    const seen = captureHeaders();
+    await api('GET', '/api/projects', undefined, { sessionId: '  ses_opt  ' });
+    assert.equal(seen()!['x-taskboard-session'], 'ses_opt');
+  });
+
+  it('omits the header when neither env nor opt provides a non-empty session', async () => {
+    process.env.TASKBOARD_URL = 'http://127.0.0.1:49999';
+    delete process.env.TASKBOARD_SESSION_ID;
+    const seen = captureHeaders();
+    await api('GET', '/api/projects');
+    assert.equal(seen()!['x-taskboard-session'], undefined);
+  });
+});
+
+describe('project session flags', () => {
+  it('project create forwards --session-id in the body', async () => {
+    const { calls, ctx } = makeCtx({ name: 'P', 'session-id': 'p' });
+    await quiet(() => projectCommands['project create']!.run(ctx));
+    assert.deepEqual(calls[0]!.body, { id: undefined, name: 'P', workspacePath: '', sessionId: 'p' });
+  });
+
+  it('project set keeps an empty --session-id (clear default)', async () => {
+    const { calls, ctx } = makeCtx({ id: 'p', 'session-id': '' });
+    await quiet(() => projectCommands['project set']!.run(ctx));
+    assert.deepEqual(calls[0]!.body, { sessionId: '' });
+  });
+
+  it('project list appends the bound session only when non-empty', async () => {
+    const projects = [{ id: 'a', name: 'A', workspacePath: '', sessionId: 'ses_a' }, { id: 'b', name: 'B', workspacePath: '' }];
+    const ctx = { ...makeCtx().ctx, api: (async () => projects) as unknown as ApiClient };
+    const { logs } = await quiet(() => projectCommands['project list']!.run(ctx));
+    assert.match(logs[0]!, /session=ses_a/);
+    assert.doesNotMatch(logs[1]!, /session=/);
+  });
+});
+
+describe('issue create session propagation', () => {
+  it('forwards --session-id in both the body and the call opts', async () => {
+    const { calls, ctx } = makeCtx({ project: 'p', title: 'T', 'session-id': 'x' });
+    await quiet(() => issueCommands['issue create']!.run(ctx));
+    assert.equal((calls[0]!.body as Record<string, unknown>).sessionId, 'x');
+    assert.deepEqual(calls[0]!.opts, { sessionId: 'x' });
   });
 });
 

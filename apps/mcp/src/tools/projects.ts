@@ -3,6 +3,7 @@
 // core does not model are small local zod schemas, JSON-generated the same way.
 import { z, createProjectSchema } from '@taskboard/core/schemas';
 import { ensureServerOrThrow } from '../connection.js';
+import { rememberSession } from '../session.js';
 import { defineTool, type ToolTable } from './registry.js';
 
 export const projectTools: ToolTable = [
@@ -14,16 +15,29 @@ export const projectTools: ToolTable = [
   ['create_project', defineTool(
     createProjectSchema,
     '创建项目',
-    args => ensureServerOrThrow('POST', '/api/projects', {
-      id: args.id, name: args.name, workspacePath: args.workspacePath ?? '', ...(args.wakeChannel ? { wakeChannel: args.wakeChannel } : {}), ...(args.labels ? { labels: args.labels } : {}),
-    }),
+    args => {
+      if (args.sessionId) rememberSession(args.sessionId);
+      return ensureServerOrThrow('POST', '/api/projects', {
+        id: args.id, name: args.name, workspacePath: args.workspacePath ?? '', ...(args.wakeChannel ? { wakeChannel: args.wakeChannel } : {}), ...(args.labels ? { labels: args.labels } : {}), ...(args.sessionId !== undefined ? { sessionId: args.sessionId } : {}),
+      });
+    },
   )],
   ['update_project', defineTool(
-    z.object({ id: z.string(), name: z.string().min(1).optional(), wakeChannel: z.string().optional(), labels: z.string().optional() }).strict(),
-    '更新项目名称和/或唤醒通道绑定/标签（wakeChannel 传空串清除绑定；labels 逗号分隔）',
-    args => ensureServerOrThrow('PATCH', `/api/projects/${args.id}`, {
-      ...(args.name ? { name: args.name } : {}), ...(args.wakeChannel !== undefined ? { wakeChannel: args.wakeChannel } : {}), ...(args.labels !== undefined ? { labels: args.labels } : {}),
-    }),
+    z.object({
+      id: z.string(),
+      name: z.string().min(1).optional(),
+      wakeChannel: z.string().optional(),
+      labels: z.string().optional(),
+      // '' clears the project default session; whitespace-only is rejected.
+      sessionId: z.union([z.string().trim().min(1).max(200), z.literal('')]).optional(),
+    }).strict(),
+    '更新项目名称和/或唤醒通道绑定/标签/默认会话（wakeChannel 传空串清除绑定；sessionId 传空串清除默认会话；labels 逗号分隔）',
+    args => {
+      if (args.sessionId) rememberSession(args.sessionId);
+      return ensureServerOrThrow('PATCH', `/api/projects/${args.id}`, {
+        ...(args.name ? { name: args.name } : {}), ...(args.wakeChannel !== undefined ? { wakeChannel: args.wakeChannel } : {}), ...(args.labels !== undefined ? { labels: args.labels } : {}), ...(args.sessionId !== undefined ? { sessionId: args.sessionId } : {}),
+      });
+    },
   )],
   ['project_git_refs', defineTool(
     z.object({ projectId: z.string() }).strict(),

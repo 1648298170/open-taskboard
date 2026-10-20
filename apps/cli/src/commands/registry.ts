@@ -15,8 +15,11 @@ import { exportCommand } from './export.js';
 import { importCommand } from './import.js';
 import { templatesCommand } from './templates.js';
 
+/** Per-call options forwarded to `api()` (agent-session propagation). */
+export interface ApiOptions { sessionId?: string }
+
 /** Same signature as `api()` from ../http.js, injected via CommandContext. */
-export type ApiClient = (method: string, path: string, body?: unknown) => Promise<any>;
+export type ApiClient = (method: string, path: string, body?: unknown, opts?: ApiOptions) => Promise<any>;
 
 export interface CommandContext {
   api: ApiClient;

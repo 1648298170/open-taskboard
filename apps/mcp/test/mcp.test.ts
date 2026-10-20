@@ -6,6 +6,7 @@ import { z } from '@taskboard/core/schemas';
 import { handleMessage, runStdioServer } from '../src/jsonrpc.js';
 import { createRegistry, defineTool, toolsListResult } from '../src/tools/registry.js';
 import { ensureServerOrThrow, isNetworkFailure } from '../src/connection.js';
+import { projectTools } from '../src/tools/projects.js';
 
 const registry = createRegistry([
   ['echo', defineTool(z.object({ text: z.string() }), 'echo back', a => ({ echoed: a.text }))],
@@ -128,6 +129,71 @@ describe('connection policy', () => {
     process.env.TASKBOARD_NO_AUTOSTART = '1';
     globalThis.fetch = (async () => { throw Object.assign(new Error('x'), { cause: { code: 'ECONNREFUSED' } }); }) as typeof fetch;
     await assert.rejects(ensureServerOrThrow('GET', '/api/projects'), /TASKBOARD_NO_AUTOSTART=1 已禁用自动拉起/);
+  });
+});
+
+describe('MCP session propagation', () => {
+  const origFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = origFetch; });
+
+  interface Wire { headers: Record<string, string>; body?: Record<string, unknown> }
+
+  const stub = (): Wire[] => {
+    const wire: Wire[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: { headers?: unknown; body?: string }) => {
+      wire.push({
+        headers: init?.headers as Record<string, string>,
+        body: init?.body !== undefined ? JSON.parse(init.body) as Record<string, unknown> : undefined,
+      });
+      return new Response(JSON.stringify({ id: 'x', version: 2 }), { status: 200 });
+    }) as typeof fetch;
+    return wire;
+  };
+
+  it('remembers an explicit sessionId and sends it as a header on later calls', async () => {
+    process.env.TASKBOARD_URL = 'http://127.0.0.1:49999';
+    const wire = stub();
+    const { issueTools } = await import('../src/tools/issues.js');
+    const table = new Map(issueTools);
+    await table.get('create_issue')!.handler({ projectId: 'p', title: 'a', sessionId: 'ses_hdr' });
+    await table.get('create_issue')!.handler({ projectId: 'p', title: 'b' });
+    assert.equal(wire[0]!.headers['x-taskboard-session'], 'ses_hdr');
+    assert.equal(wire[1]!.headers['x-taskboard-session'], 'ses_hdr');
+  });
+
+  it('create_issue omits sessionId entirely when absent (never null)', async () => {
+    process.env.TASKBOARD_URL = 'http://127.0.0.1:49999';
+    const wire = stub();
+    const { issueTools } = await import('../src/tools/issues.js');
+    const table = new Map(issueTools);
+    await table.get('create_issue')!.handler({ projectId: 'p', title: 'no-session' });
+    assert.equal('sessionId' in (wire[0]!.body ?? {}), false);
+  });
+
+  it('claim_issue falls back to the remembered session', async () => {
+    process.env.TASKBOARD_URL = 'http://127.0.0.1:49999';
+    const wire = stub();
+    const { issueTools } = await import('../src/tools/issues.js');
+    const table = new Map(issueTools);
+    await table.get('create_issue')!.handler({ projectId: 'p', title: 'a', sessionId: 'ses_claim' });
+    await table.get('claim_issue')!.handler({ id: 'I1', agent: 'a' });
+    assert.equal(wire[1]!.body?.sessionId, 'ses_claim');
+  });
+
+  it('update_project forwards an empty sessionId (clear)', async () => {
+    process.env.TASKBOARD_URL = 'http://127.0.0.1:49999';
+    const wire = stub();
+    const table = new Map(projectTools);
+    await table.get('update_project')!.handler({ id: 'p', sessionId: '' });
+    assert.deepEqual(wire[0]!.body, { sessionId: '' });
+  });
+
+  it('create_project forwards a sessionId when present', async () => {
+    process.env.TASKBOARD_URL = 'http://127.0.0.1:49999';
+    const wire = stub();
+    const table = new Map(projectTools);
+    await table.get('create_project')!.handler({ name: 'P', sessionId: 'ses_p' });
+    assert.equal(wire[0]!.body?.sessionId, 'ses_p');
   });
 });
 
