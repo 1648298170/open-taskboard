@@ -47,8 +47,10 @@ const humanSize = (bytes: number): string =>
 // 规则同源；taskboard watch --on 可改运行时前缀，此处只反映默认值）。
 const MENTION_CANDIDATES: MentionCandidate[] = [{ value: WAKE_PREFIX, label: '唤醒 agent 干活（主进程忙时排队：收尾当前任务后接手 · Enter 选择）' }];
 
-export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, statuses, onClose, onChanged, onToast, onOpenIssue, issues }: {
+export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionServerUrl, statuses, onClose, onChanged, onToast, onOpenIssue, issues }: {
   issueId: string;
+  /** Incremented by the app-level SSE handler to refresh live execution history. */
+  refreshKey: number;
   /** 当前项目 id —— 抽屉打开时拉一次 git 分支/工作树列表（T2-8） */
   projectId: string | null;
   /** OpenCode directory + server used to build a direct session deep link. */
@@ -114,6 +116,7 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
     }
   };
   useEffect(() => { setDetail(null); setDesc(''); setEditingDesc(false); setLoadError(null); void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [issueId]);
+  useEffect(() => { if (refreshKey > 0) void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [refreshKey]);
 
   // 每次抽屉打开（组件挂载）拉一次 git-refs；失败静默回退为文本输入。
   useEffect(() => {
