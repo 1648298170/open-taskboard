@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor, isIgnoredAuthor, type IssueDetailLike } from '../src/commands/watch.js';
+import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor, sessionBaseCandidates, isIgnoredAuthor, type IssueDetailLike } from '../src/commands/watch.js';
 
 describe('makeSseParser', () => {
   it('reassembles events from split chunks', () => {
@@ -201,5 +201,21 @@ describe('channelFor（数据驱动 wake_channel 路由）', () => {
   it('normalizes trailing slashes before using the URL as an API base', () => {
     assert.equal(channelFor('http://127.0.0.1:4096/', undefined), 'http://127.0.0.1:4096');
     assert.equal(channelFor('', 'http://127.0.0.1:4096///'), 'http://127.0.0.1:4096');
+  });
+});
+
+describe('sessionBaseCandidates（唤醒服务地址回退）', () => {
+  it('保留显式参数优先级，但在其不可用时可探测项目地址作为备用', () => {
+    assert.deepEqual(
+      sessionBaseCandidates('http://127.0.0.1:4096', ' http://192.168.3.7:4097/ ', 'http://127.0.0.1:47825/'),
+      ['http://127.0.0.1:4096', 'http://192.168.3.7:4097', 'http://127.0.0.1:47825'],
+    );
+  });
+
+  it('去重规范化后的相同地址', () => {
+    assert.deepEqual(
+      sessionBaseCandidates('http://127.0.0.1:4097/', 'http://127.0.0.1:4097', undefined),
+      ['http://127.0.0.1:4097'],
+    );
   });
 });
