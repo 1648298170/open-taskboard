@@ -426,13 +426,18 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
             <span className="execution-history-title">最近 Agent 执行记录</span>
             {executionEvents.length
               ? <ul>
-                  {executionEvents.map(event => (
-                    <li key={event.id}>
-                      <time>{fmtWhen(event.createdAt)}</time>
-                      <strong>{event.detail.match(/^\\[([^\\]]+)\\]/)?.[1] ?? '记录'}</strong>
-                      <span>{event.detail.replace(/^\\[[^\\]]+\\]\\s*/, '')}</span>
-                    </li>
-                  ))}
+                  {executionEvents.map(event => {
+                    const separator = event.detail.indexOf('] ');
+                    const outcome = event.detail.startsWith('[') && separator > 1 ? event.detail.slice(1, separator) : '记录';
+                    const message = event.detail.startsWith('[') && separator > 1 ? event.detail.slice(separator + 2) : event.detail;
+                    return (
+                      <li key={event.id}>
+                        <time>{fmtWhen(event.createdAt)}</time>
+                        <strong>{outcome}</strong>
+                        <span>{message}</span>
+                      </li>
+                    );
+                  })}
                 </ul>
               : <p className="detail-empty">暂无执行记录。通过「唤醒」触发 Agent 后，这里会记录提交、重试和失败信息。</p>}
           </div>
