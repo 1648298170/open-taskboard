@@ -37,6 +37,7 @@ export default function App() {
   const [directoryName, setDirectoryName] = useState('');
   const [directoryWorkspacePath, setDirectoryWorkspacePath] = useState('');
   const [directoryServerUrl, setDirectoryServerUrl] = useState('');
+  const [directoryMenuOpen, setDirectoryMenuOpen] = useState<string | null>(null);
   const [defaultWorkspacePath, setDefaultWorkspacePath] = useState('');
   const [defaultOpenCodeServerUrl, setDefaultOpenCodeServerUrl] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -235,6 +236,18 @@ export default function App() {
       else showToast('✗ 读取全局设置失败：' + (err as Error).message);
     });
   }, [showToast]);
+
+  useEffect(() => {
+    if (!directoryMenuOpen) return;
+    const close = (): void => setDirectoryMenuOpen(null);
+    // Defer registration so the click that opened the menu does not immediately
+    // bubble to document and close it again.
+    const timer = window.setTimeout(() => document.addEventListener('click', close), 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener('click', close);
+    };
+  }, [directoryMenuOpen]);
 
   // v0.4: bundle 版本检测（挂载时 + 每分钟 + 回到标签页时）
   useEffect(() => {
@@ -544,32 +557,60 @@ export default function App() {
                       setProjectDirectoryId(directory.id); setProjCreateOpen(true);
                       setExpandedDirectories(prev => new Set(prev).add(directory.id));
                     }}><Plus size={14} /></button>
-                    <button className="icon-btn" title="配置目录工作目录" onClick={async () => {
-                      const workspacePath = await promptDialog({ title: '配置目录工作目录', lines: ['新建项目时会默认继承此路径；已创建项目的路径不会自动改变。'], placeholder: '例如：D:\\workspace\\projects', value: directory.workspacePath });
-                      if (workspacePath === null) return;
-                      try {
-                        const updated = await api_.updateDirectory(directory.id, { workspacePath: workspacePath.trim() });
-                        setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
-                        showToast('已更新目录工作目录');
-                      } catch (err) { showToast('✗ ' + (err as Error).message); }
-                    }}><Folder size={14} /></button>
-                    <button className="icon-btn" title="配置目录 OpenCode Server URL" onClick={async () => {
-                      const serverUrl = await promptDialog({ title: '配置目录 OpenCode Server URL', lines: ['新建项目时会默认继承此地址；已创建项目的地址不会自动改变。', '留空表示清除。'], placeholder: '例如：http://127.0.0.1:4096', value: directory.serverUrl });
-                      if (serverUrl === null) return;
-                      try {
-                        const updated = await api_.updateDirectory(directory.id, { serverUrl: serverUrl.trim() });
-                        setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
-                        showToast(serverUrl.trim() ? '已更新目录 OpenCode Server URL' : '已清除目录 OpenCode Server URL');
-                      } catch (err) { showToast('✗ ' + (err as Error).message); }
-                    }}><Settings size={14} /></button>
-                    <button className="icon-btn" title="重命名目录" onClick={async () => {
-                      const name = await promptDialog({ title: '重命名目录', lines: ['目录用于在左侧分组管理项目。'], placeholder: '目录名称', value: directory.name });
-                      if (name === null) return;
-                      try {
-                        const updated = await api_.updateDirectory(directory.id, { name: name.trim() });
-                        setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
-                      } catch (err) { showToast('✗ ' + (err as Error).message); }
-                    }}><MoreHorizontal size={14} /></button>
+                    <button className="icon-btn" title="目录操作" onClick={() => setDirectoryMenuOpen(prev => prev === directory.id ? null : directory.id)}><MoreHorizontal size={14} /></button>
+                    {directoryMenuOpen === directory.id && (
+                      <div className="side-directory-menu" role="menu">
+                        <button role="menuitem" onClick={async () => {
+                          setDirectoryMenuOpen(null);
+                          const name = await promptDialog({ title: '重命名目录', lines: ['目录用于在左侧分组管理项目。'], placeholder: '目录名称', value: directory.name });
+                          if (name === null) return;
+                          try {
+                            const updated = await api_.updateDirectory(directory.id, { name: name.trim() });
+                            setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
+                          } catch (err) { showToast('✗ ' + (err as Error).message); }
+                        }}>重命名目录</button>
+                        <button role="menuitem" onClick={async () => {
+                          setDirectoryMenuOpen(null);
+                          const workspacePath = await promptDialog({ title: '配置目录工作目录', lines: ['新建项目时会默认继承此路径；已创建项目的路径不会自动改变。'], placeholder: '例如：D:\\workspace\\projects', value: directory.workspacePath });
+                          if (workspacePath === null) return;
+                          try {
+                            const updated = await api_.updateDirectory(directory.id, { workspacePath: workspacePath.trim() });
+                            setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
+                            showToast('已更新目录工作目录');
+                          } catch (err) { showToast('✗ ' + (err as Error).message); }
+                        }}>修改工作目录</button>
+                        <button role="menuitem" onClick={async () => {
+                          setDirectoryMenuOpen(null);
+                          const serverUrl = await promptDialog({ title: '配置目录 OpenCode Server URL', lines: ['新建项目时会默认继承此地址；已创建项目的地址不会自动改变。', '留空表示清除。'], placeholder: '例如：http://127.0.0.1:4096', value: directory.serverUrl });
+                          if (serverUrl === null) return;
+                          try {
+                            const updated = await api_.updateDirectory(directory.id, { serverUrl: serverUrl.trim() });
+                            setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
+                            showToast(serverUrl.trim() ? '已更新目录 OpenCode Server URL' : '已清除目录 OpenCode Server URL');
+                          } catch (err) { showToast('✗ ' + (err as Error).message); }
+                        }}>修改 OpenCode Server URL</button>
+                        <button role="menuitem" className="danger" onClick={async () => {
+                          setDirectoryMenuOpen(null);
+                          const projectCount = projects.filter(project => project.directoryId === directory.id).length;
+                          const ok = await confirmDialog({
+                            title: `移除目录「${directoryLabel(directory.name)}」？`,
+                            lines: [
+                              `目录下的 ${projectCount} 个项目、全部任务与评论、附件将一并删除，不可恢复。`,
+                              '其他目录不受影响。'
+                            ],
+                            confirmText: '移除目录',
+                            danger: true
+                          });
+                          if (!ok) return;
+                          try {
+                            await api_.deleteDirectory(directory.id, { cascade: true });
+                            setDirectories(prev => prev.filter(item => item.id !== directory.id));
+                            loadProjects();
+                            showToast('已移除目录及其项目');
+                          } catch (err) { showToast('✗ ' + (err as Error).message); }
+                        }}>移除目录</button>
+                      </div>
+                    )}
                   </div>
                   <div className="side-directory-meta">{children.length} 个项目</div>
                   {expanded && (

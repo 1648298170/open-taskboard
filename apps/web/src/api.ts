@@ -70,7 +70,8 @@ export const api_ = {
     api<WorkspaceDirectory>('POST', '/api/directories', p),
   updateDirectory: (id: string, p: { name?: string; workspacePath?: string; serverUrl?: string }) =>
     api<WorkspaceDirectory>('PATCH', `/api/directories/${encodeURIComponent(id)}`, p),
-  deleteDirectory: (id: string) => api<{ ok: true }>('DELETE', `/api/directories/${encodeURIComponent(id)}`),
+  deleteDirectory: (id: string, options?: { cascade?: boolean }) =>
+    api<{ ok: true }>('DELETE', `/api/directories/${encodeURIComponent(id)}${options?.cascade ? '?cascade=1' : ''}`),
   openCodeSessionsForDirectory: (id: string, workspacePath: string, serverUrl: string) =>
     api<{ sessions: OpenCodeSessionOption[]; directoryId: string; directoryPath: string; serverUrl: string }>(
       'GET', `/api/directories/${encodeURIComponent(id)}/opencode-sessions?workspacePath=${encodeURIComponent(workspacePath)}&serverUrl=${encodeURIComponent(serverUrl)}`

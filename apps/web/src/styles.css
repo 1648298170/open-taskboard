@@ -60,7 +60,19 @@ html, body { height: 100%; overflow: hidden; }
 .side-projects { flex: 1; overflow-y: auto; padding: 4px 8px; display: grid; gap: 2px; align-content: start; }
 .sidebar-heading { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 4px; color: var(--ink-dim); font-size: 10px; text-transform: uppercase; letter-spacing: .12em; }
 .side-directory { min-width: 0; }
-.side-directory-row { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.side-directory-row { display: flex; align-items: center; gap: 2px; min-width: 0; position: relative; }
+.side-directory-menu {
+  position: absolute; top: calc(100% + 4px); right: 4px; z-index: 80;
+  display: grid; gap: 1px; min-width: 190px; padding: 4px;
+  background: var(--bg-raised); border: 1px solid var(--line); border-radius: 6px;
+  box-shadow: 0 10px 24px #0009;
+}
+.side-directory-menu button {
+  text-align: left; padding: 6px 8px; border: 0; border-radius: 4px;
+  background: none; color: var(--ink); font: inherit; font-size: 11px; cursor: pointer;
+}
+.side-directory-menu button:hover { background: var(--bg-deep); }
+.side-directory-menu button.danger { color: var(--danger); }
 .side-directory-toggle { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; padding: 7px 5px; border: 0; border-radius: 3px; background: transparent; color: var(--ink); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .side-directory-toggle:hover { background: var(--bg-raised); }
 .side-directory-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
