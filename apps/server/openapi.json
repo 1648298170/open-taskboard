@@ -2430,7 +2430,7 @@
           "Issues"
         ],
         "summary": "Append an Agent execution event",
-        "description": "Used by the watch process to persist dispatch, retry, success, and failure events. For bound OpenCode sessions, running/idle entries are observational session-level status only; prompt_async does not provide a completion receipt, so idle must not be interpreted as task success.",
+        "description": "Used by the watch process to persist dispatch, retry, success, and failure events. For bound OpenCode sessions, running/idle are observational session-level states. The watcher correlates a unique marker in the injected user message with a subsequent Assistant reply; only a correlated reply followed by Session idle is reported as succeeded. Idle by itself is never proof of task completion.",
         "parameters": [
           {
             "name": "id",
