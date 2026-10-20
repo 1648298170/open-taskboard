@@ -117,7 +117,7 @@ export const issueCommands: Record<string, Command> = {
   },
   'issue update': {
     summary: 'Update issue fields (optimistic lock via --expected-version)',
-    usage: 'issue update ID [flags] [--start-date D] [--due-date D]',
+    usage: 'issue update ID [flags] [--start-date D] [--due-date D] [--status-note NOTE]',
     async run(ctx) {
       const { api, flags, rest } = ctx;
       need(!!rest[0], 'issue update ID [flags]');
@@ -126,7 +126,7 @@ export const issueCommands: Record<string, Command> = {
         ['title', 'title'], ['status', 'status'], ['priority', 'priority'], ['branch', 'branch'],
         ['worktree', 'worktree'], ['session-id', 'sessionId'],
         ['labels', 'labels'], ['assignee', 'assignee'], ['description', 'description'],
-        ['start-date', 'startDate'], ['due-date', 'dueDate']
+        ['start-date', 'startDate'], ['due-date', 'dueDate'], ['status-note', 'statusNote']
       ];
       const body: Record<string, unknown> = Object.fromEntries(
         fields.filter(([f]) => flags[f] !== undefined).map(([f, k]) => [k, flags[f]])
@@ -148,11 +148,13 @@ export const issueCommands: Record<string, Command> = {
   },
   'issue done': {
     summary: 'Mark an issue done (optimistic lock via --expected-version)',
-    usage: 'issue done ID [flags]',
+    usage: 'issue done ID [flags] [--status-note NOTE]',
     async run(ctx) {
       const { api, flags, rest } = ctx;
       need(!!rest[0], 'issue done ID [flags]');
       const body: Record<string, unknown> = { status: 'done' };
+      if (flags['status-note'] !== undefined) body.statusNote = String(flags['status-note']);
+      if (flags['status-note'] === true) need(false, 'issue done ID --status-note "reason; verification; unchecked items"');
       if (flags['expected-version'] !== undefined) body.version = Number(flags['expected-version']);
       // T7-36 逃生舱：--confirm 在人工确认后代为设置 done。
       if (flags.confirm) body.confirm = true;
