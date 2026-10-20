@@ -18,6 +18,11 @@ const createIssueBodySchema = createIssueSchema.omit({ projectId: true });
 const validationMessage = (error: z.ZodError): string =>
   error.issues.map(i => (i.path.length > 0 ? `${i.path.map(String).join('.')}: ` : '') + i.message).join('; ');
 
+const normalizeGitPath = (value: string): string => {
+  const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+};
+
 const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerConfig }> = async (app, { store, config }) => {
   app.get('/api/projects/:projectId/issues', async (req: FastifyRequest<{ Params: ProjectParams; Querystring: { status?: Status; parentId?: string; includeDone?: string; archived?: string } }>, reply) => {
     if (!store.getProject(req.params.projectId)) {
@@ -152,7 +157,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
 
     const refs = await scanGitRefs(project.workspacePath);
-    if (issue.worktreePath && refs.worktrees.some(w => w.path === issue.worktreePath)) {
+    if (issue.worktreePath && refs.worktrees.some(w => normalizeGitPath(w.path) === normalizeGitPath(issue.worktreePath!))) {
       // Retry is idempotent when the task is already bound to its real worktree.
       return { issue, branch: issue.branch, worktree: issue.worktree, worktreePath: issue.worktreePath, alreadyBound: true };
     }
@@ -166,7 +171,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       const created = await createTaskWorktree(project.workspacePath, project.id, issue.id, issue.title);
       const siblings = store.listIssues(issue.projectId, { archived: 'all' });
       const collision = siblings.find(other => other.id !== issue.id &&
-        (other.worktreePath === created.path || other.branch === created.branch));
+        (normalizeGitPath(other.worktreePath) === normalizeGitPath(created.path) || other.branch === created.branch));
       if (collision) {
         // This should be rare (concurrent requests), but never bind one Git
         // execution context to multiple tasks. Keep the created path visible.
