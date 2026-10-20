@@ -20,18 +20,6 @@ import type { Command } from './registry.js';
 import { isWakeComment } from '@taskboard/core/types';
 
 
-/** All request/response calls must be bounded so one dead endpoint cannot stall the serial wake queue forever. */
-export const WATCH_REQUEST_TIMEOUT_MS = 10_000;
-
-export async function fetchWithTimeout(
-  url: string,
-  init: RequestInit = {},
-  timeoutMs = WATCH_REQUEST_TIMEOUT_MS,
-): Promise<Response> {
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
-  return fetch(url, { ...init, signal });
-}
 
 /** Try the explicit endpoint first, then project/TUI routes, deduplicating equivalent URLs. */
 export function sessionBaseCandidates(
@@ -212,7 +200,7 @@ export function acquireWatchLock(lockPath: string): { ok: true; release: () => v
 }
 
 interface CommentLike { id: string; body: string; status?: string; createdAt: string; author?: string }
-interface IssueDetailLike { id: string; title: string; comments: CommentLike[] }
+export interface IssueDetailLike { id: string; title: string; comments: CommentLike[] }
 
 /**
  * 断线补拉筛选：窗口内以 prefix 开头的评论且未在 processed 集合出现过的才补唤醒。
