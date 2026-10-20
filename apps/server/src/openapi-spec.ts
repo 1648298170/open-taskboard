@@ -66,8 +66,9 @@ export type ParameterRef = { $ref: string };
 
 export interface PathItemObject {
   summary?: string;
-  parameters?: ParameterRef[];
+  parameters?: Array<ParameterObject | ParameterRef>;
   get?: OperationObject;
+  put?: OperationObject;
   post?: OperationObject;
   patch?: OperationObject;
   delete?: OperationObject;
@@ -197,7 +198,7 @@ export const openApiSpec: OpenApiDocument = {
       },
       put: {
         operationId: 'updateAppSettings', summary: 'Update global application defaults', tags: ['settings'],
-        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { defaultWorkspacePath: { type: 'string' } }, required: ['defaultWorkspacePath'], additionalProperties: false } } },
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { defaultWorkspacePath: { type: 'string' } }, required: ['defaultWorkspacePath'], additionalProperties: false } } } },
         responses: { 200: { description: 'Updated settings', ...jsonResponse({ $ref: '#/components/schemas/AppSettings' }) }, 400: { $ref: '#/components/responses/BadRequest' }, ...commonResponses(true) }
       }
     },
@@ -274,7 +275,7 @@ export const openApiSpec: OpenApiDocument = {
         operationId: 'createDirectoryOpenCodeSession',
         summary: 'Create an OpenCode session in the directory path',
         tags: ['directories'],
-        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { title: { type: 'string', minLength: 1, maxLength: 200 } }, required: ['title'], additionalProperties: false } } },
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { title: { type: 'string', minLength: 1, maxLength: 200 } }, required: ['title'], additionalProperties: false } } } },
         responses: {
           201: { description: 'Created session', ...jsonResponse({ type: 'object', additionalProperties: true }) },
           400: { $ref: '#/components/responses/BadRequest' },

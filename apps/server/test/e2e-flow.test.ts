@@ -53,7 +53,7 @@ describe('API 级 E2E：验收链路（真实 HTTP + SSE）', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('建任务 → @agent 评论经 SSE 增强载荷实时送达 → claim 绑会话并自动流转 → done 门禁 403/200', async () => {
+  it('建任务 → @agent 评论经 SSE 增强载荷实时送达 → claim 绑会话并自动流转 → done 门禁 403/403', async () => {
     const json = { 'content-type': 'application/json', 'x-taskboard-actor': 'web' };
 
     // SSE 订阅先行（真实 TCP 流）
@@ -66,15 +66,19 @@ describe('API 级 E2E：验收链路（真实 HTTP + SSE）', () => {
     for (let i = 0; i < 50 && sseRes === undefined; i++) await new Promise(r => setTimeout(r, 20));
     assert.ok(sseRes, 'SSE 订阅未就绪');
 
-    // 建项目 + 任务（web 人工来源）。v0.4 起 web 创建必须带 sessionId
-    // （issues.ts 的 create 侧门禁），否则 400 且拿不到 issue。
-    await fetch(`${baseUrl}/api/projects`, {
-      method: 'POST', headers: json,
-      body: JSON.stringify({ id: 'e2e', name: 'E2E', wakeChannel: 'http://127.0.0.1:4096', sessionId: 'ses_e2e' })
+    // 建项目 + 任务（web 人工来源）。项目不绑定默认 Session（本条链路只验证
+    // web 建任务的显式 sessionId 与后续 claim 绑定）。
+    const projectRes = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'e2e', name: 'E2E', wakeChannel: 'http://127.0.0.1:4096' })
     });
-    const issue = await (await fetch(`${baseUrl}/api/projects/e2e/issues`, {
+    assert.equal(projectRes.status, 201, await projectRes.clone().text());
+    const issueRes = await fetch(`${baseUrl}/api/projects/e2e/issues`, {
       method: 'POST', headers: json, body: JSON.stringify({ title: '被唤醒的任务', sessionId: 'ses_e2e' })
-    })).json<{ id: string; status: string; version: number }>();
+    });
+    const issueText = await issueRes.text();
+    assert.equal(issueRes.status, 201, issueText);
+    const issue = JSON.parse(issueText) as { id: string; status: string; version: number };
     assert.equal(issue.status, 'todo');
 
     // @agent 评论 → SSE 必须实时推来增强载荷（author/body/issueTitle，
@@ -96,7 +100,7 @@ describe('API 级 E2E：验收链路（真实 HTTP + SSE）', () => {
     assert.equal(claimed.sessionId, 'ses_e2e');
     assert.equal(claimed.claimedBy, 'e2e-agent');
 
-    // done 门禁：默认开启——agent 无 confirm 403（不消耗版本），带 confirm 200
+    // done 门禁：默认开启——agent 无 confirm 403；客户端 confirm 不再被信任，同样 403
     const v = (await (await fetch(`${baseUrl}/api/issues/${issue.id}`)).json<{ version: number }>()).version;
     const denied = await fetch(`${baseUrl}/api/issues/${issue.id}`, {
       method: 'PATCH', headers: { 'content-type': 'application/json', 'x-taskboard-actor': 'cli' },
@@ -107,7 +111,7 @@ describe('API 级 E2E：验收链路（真实 HTTP + SSE）', () => {
       method: 'PATCH', headers: { 'content-type': 'application/json', 'x-taskboard-actor': 'cli' },
       body: JSON.stringify({ status: 'done', version: v, confirm: true })
     });
-    assert.equal(accepted.status, 200);
+    assert.equal(accepted.status, 403);
 
     controller.abort();
   });

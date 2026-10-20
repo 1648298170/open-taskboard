@@ -53,7 +53,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     // project default → unbound. The store applies the same resolver; doing it
     // here lets the web gate reject tasks that would land unbound.
     const agentSession = String(req.headers['x-taskboard-session'] ?? '').trim() || null;
-    const resolvedSession = resolveIssueSessionId(parsed.data.sessionId, agentSession, project.sessionId);
+    const resolvedSession = resolveIssueSessionId(parsed.data.sessionId, agentSession, project.defaultSessionId);
     // Web task creation must bind an OpenCode session before saving. A project
     // default session satisfies this without an explicit body value.
     // CLI/MCP can still create unbound tasks intentionally and bind them on claim.

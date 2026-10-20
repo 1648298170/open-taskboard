@@ -119,6 +119,387 @@
         }
       }
     },
+    "/api/settings": {
+      "summary": "Read and update global application defaults",
+      "get": {
+        "operationId": "getAppSettings",
+        "summary": "Read global application settings",
+        "tags": [
+          "settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "Global settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      },
+      "put": {
+        "operationId": "updateAppSettings",
+        "summary": "Update global application defaults",
+        "tags": [
+          "settings"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "defaultWorkspacePath": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "defaultWorkspacePath"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/directories": {
+      "summary": "List and create workspace directories",
+      "get": {
+        "operationId": "listDirectories",
+        "summary": "List workspace directories",
+        "tags": [
+          "directories"
+        ],
+        "responses": {
+          "200": {
+            "description": "Workspace directories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceDirectory"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createDirectory",
+        "summary": "Create a workspace directory with an optional default workspace path",
+        "tags": [
+          "directories"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDirectoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceDirectory"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/directories/{directoryId}": {
+      "summary": "Update or delete a workspace directory",
+      "parameters": [
+        {
+          "name": "directoryId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "updateDirectory",
+        "summary": "Update directory name or default workspace path",
+        "tags": [
+          "directories"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchDirectoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceDirectory"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteDirectory",
+        "summary": "Delete an empty workspace directory",
+        "tags": [
+          "directories"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ok"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/directories/{directoryId}/opencode-sessions": {
+      "summary": "List or create OpenCode sessions in a workspace directory",
+      "parameters": [
+        {
+          "name": "directoryId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listDirectoryOpenCodeSessions",
+        "summary": "List OpenCode sessions for the supplied project workspace path and server",
+        "tags": [
+          "directories"
+        ],
+        "parameters": [
+          {
+            "name": "workspacePath",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "serverUrl",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sessions in the directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createDirectoryOpenCodeSession",
+        "summary": "Create an OpenCode session in the directory path",
+        "tags": [
+          "directories"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "title"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects": {
       "summary": "List / create projects",
       "get": {
@@ -240,7 +621,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UpdateProjectRequest"
+                "$ref": "#/components/schemas/PatchProjectRequest"
               }
             }
           }
@@ -1841,487 +2222,6 @@
           }
         }
       }
-    },
-    "/api/projects/{projectId}/opencode-sessions": {
-      "summary": "OpenCode sessions available for task binding",
-      "get": {
-        "operationId": "listProjectOpenCodeSessions",
-        "summary": "List sessions from the configured OpenCode v1 server",
-        "description": "Uses the project wakeChannel as the OpenCode server origin. If workspacePath is configured, only sessions with the same directory are returned.",
-        "tags": [
-          "projects"
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/ProjectId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Compatible OpenCode sessions",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "sessions": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string"
-                          },
-                          "title": {
-                            "type": "string"
-                          },
-                          "directory": {
-                            "type": "string"
-                          },
-                          "updatedAt": {
-                            "type": [
-                              "integer",
-                              "null"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "title",
-                          "directory",
-                          "updatedAt"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "workspacePath": {
-                      "type": "string"
-                    },
-                    "serverUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "sessions",
-                    "workspacePath",
-                    "serverUrl"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          },
-          "502": {
-            "description": "OpenCode server is unreachable or returned an invalid response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/directories": {
-      "summary": "List and create workspace directories",
-      "get": {
-        "operationId": "listDirectories",
-        "summary": "List workspace directories",
-        "tags": [
-          "directories"
-        ],
-        "responses": {
-          "200": {
-            "description": "Workspace directories",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/WorkspaceDirectory"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        }
-      },
-      "post": {
-        "operationId": "createDirectory",
-        "summary": "Create a workspace directory with an optional default workspace path",
-        "tags": [
-          "directories"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateDirectoryRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Created directory",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceDirectory"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        }
-      }
-    },
-    "/api/directories/{directoryId}": {
-      "summary": "Update or delete a workspace directory",
-      "parameters": [
-        {
-          "name": "directoryId",
-          "in": "path",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "patch": {
-        "operationId": "updateDirectory",
-        "summary": "Update directory name or default workspace path",
-        "tags": [
-          "directories"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PatchDirectoryRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Updated directory",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceDirectory"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        }
-      },
-      "delete": {
-        "operationId": "deleteDirectory",
-        "summary": "Delete an empty workspace directory",
-        "tags": [
-          "directories"
-        ],
-        "responses": {
-          "200": {
-            "description": "Deleted directory",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Ok"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        }
-      }
-    },
-    "/api/directories/{directoryId}/opencode-sessions": {
-      "summary": "List or create OpenCode sessions for a project workspace",
-      "parameters": [
-        {
-          "name": "directoryId",
-          "in": "path",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "get": {
-        "operationId": "listDirectoryOpenCodeSessions",
-        "summary": "List OpenCode sessions for the supplied project workspace path and server",
-        "tags": [
-          "directories"
-        ],
-        "responses": {
-          "200": {
-            "description": "Sessions in the directory",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          },
-          "502": {
-            "description": "OpenCode server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "directoryId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspacePath",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "serverUrl",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uri"
-            }
-          }
-        ]
-      },
-      "post": {
-        "operationId": "createDirectoryOpenCodeSession",
-        "summary": "Create an OpenCode session in the supplied project workspace path",
-        "tags": [
-          "directories"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "title": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 200
-                  },
-                  "workspacePath": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "serverUrl": {
-                    "type": "string",
-                    "format": "uri"
-                  }
-                },
-                "required": [
-                  "title",
-                  "workspacePath",
-                  "serverUrl"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Created session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          },
-          "502": {
-            "description": "OpenCode server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/settings": {
-      "summary": "Read and update global application defaults",
-      "get": {
-        "operationId": "getAppSettings",
-        "summary": "Read global application settings",
-        "tags": [
-          "settings"
-        ],
-        "responses": {
-          "200": {
-            "description": "Global settings",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AppSettings"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          }
-        }
-      },
-      "put": {
-        "operationId": "updateAppSettings",
-        "summary": "Update global application defaults",
-        "tags": [
-          "settings"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "defaultWorkspacePath": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "defaultWorkspacePath"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Updated settings",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AppSettings"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          }
-        }
-      }
     }
   },
   "components": {
@@ -2359,6 +2259,48 @@
           "low"
         ]
       },
+      "AppSettings": {
+        "type": "object",
+        "description": "Persistent global application defaults",
+        "properties": {
+          "defaultWorkspacePath": {
+            "type": "string",
+            "description": "Default path prefilled when creating workspace directories"
+          }
+        },
+        "required": [
+          "defaultWorkspacePath"
+        ],
+        "additionalProperties": false
+      },
+      "WorkspaceDirectory": {
+        "type": "object",
+        "description": "Workspace directory grouping for projects",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "Sidebar grouping name; not a filesystem path"
+          },
+          "workspacePath": {
+            "type": "string",
+            "description": "Default filesystem workspace path inherited by new projects"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "workspacePath",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
       "Project": {
         "type": "object",
         "description": "A board project",
@@ -2369,6 +2311,19 @@
           },
           "name": {
             "type": "string"
+          },
+          "directoryId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "defaultSessionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional default session preselected for new tasks"
           },
           "workspacePath": {
             "type": "string",
@@ -2384,19 +2339,6 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
-          },
-          "directoryId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "defaultSessionId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Optional default session preselected for new tasks"
           }
         },
         "required": [
@@ -2407,7 +2349,6 @@
           "workspacePath",
           "wakeChannel",
           "labels",
-          "sessionId",
           "createdAt"
         ],
         "additionalProperties": false
@@ -2959,39 +2900,19 @@
           "at"
         ]
       },
-      "CreateProjectRequest": {
+      "CreateDirectoryRequest": {
         "type": "object",
-        "description": "POST /api/projects body (strict — unknown keys → 400)",
+        "description": "POST /api/directories body (strict)",
         "properties": {
           "id": {
-            "type": "string",
-            "description": "Omit for a generated 8-char id; an existing id → 409"
+            "type": "string"
           },
           "name": {
             "type": "string",
             "minLength": 1
           },
           "workspacePath": {
-            "type": "string",
-            "description": "Project filesystem workspace path"
-          },
-          "wakeChannel": {
-            "type": "string",
-            "description": "Project OpenCode Server URL"
-          },
-          "labels": {
             "type": "string"
-          },
-          "directoryId": {
-            "type": "string",
-            "description": "Workspace directory to create the project under"
-          },
-          "defaultSessionId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Selected OpenCode session for new tasks"
           }
         },
         "required": [
@@ -2999,7 +2920,21 @@
         ],
         "additionalProperties": false
       },
-      "UpdateProjectRequest": {
+      "PatchDirectoryRequest": {
+        "type": "object",
+        "description": "PATCH /api/directories/{directoryId} body (strict)",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "workspacePath": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PatchProjectRequest": {
         "type": "object",
         "description": "PATCH /api/projects/{projectId} body (strict)",
         "properties": {
@@ -3022,6 +2957,69 @@
           },
           "labels": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "description": "POST /api/projects body (strict — unknown keys → 400)",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Omit for a generated 8-char id; an existing id → 409"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "directoryId": {
+            "type": "string",
+            "description": "Workspace directory to create the project under"
+          },
+          "defaultSessionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Selected OpenCode session for new tasks"
+          },
+          "workspacePath": {
+            "type": "string",
+            "description": "Project filesystem workspace path"
+          },
+          "wakeChannel": {
+            "type": "string",
+            "description": "Project OpenCode Server URL"
+          },
+          "labels": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "UpdateProjectRequest": {
+        "type": "object",
+        "description": "PATCH /api/projects/{projectId} body — all fields optional (strict)",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "wakeChannel": {
+            "type": "string",
+            "description": "OpenCode/TUI wake URL; empty string = unbound"
+          },
+          "labels": {
+            "type": "string",
+            "description": "Comma-separated project labels"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Project default OpenCode session; empty string clears it"
           }
         },
         "additionalProperties": false
@@ -3279,83 +3277,6 @@
           "size",
           "actor",
           "createdAt"
-        ],
-        "additionalProperties": false
-      },
-      "WorkspaceDirectory": {
-        "type": "object",
-        "description": "Workspace directory grouping for projects",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string",
-            "description": "Sidebar grouping name; not a filesystem path"
-          },
-          "workspacePath": {
-            "type": "string",
-            "description": "Default filesystem workspace path inherited by new projects"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "workspacePath",
-          "createdAt"
-        ],
-        "additionalProperties": false
-      },
-      "CreateDirectoryRequest": {
-        "type": "object",
-        "description": "POST /api/directories body (strict)",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1
-          },
-          "workspacePath": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "additionalProperties": false
-      },
-      "PatchDirectoryRequest": {
-        "type": "object",
-        "description": "PATCH /api/directories/{directoryId} body (strict)",
-        "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1
-          },
-          "workspacePath": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false,
-        "required": []
-      },
-      "AppSettings": {
-        "type": "object",
-        "description": "Persistent global application defaults",
-        "properties": {
-          "defaultWorkspacePath": {
-            "type": "string",
-            "description": "Default path prefilled when creating workspace directories"
-          }
-        },
-        "required": [
-          "defaultWorkspacePath"
         ],
         "additionalProperties": false
       }

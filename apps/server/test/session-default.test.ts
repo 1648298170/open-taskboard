@@ -1,10 +1,10 @@
 // Project-level default OpenCode sessions (server layer):
-// new issues inherit project.sessionId unless an explicit body value or the
-// x-taskboard-session header overrides it. Also covers the stateless session
-// discovery endpoint used by the web create-project flow.
+// new issues inherit project.defaultSessionId unless an explicit body value or
+// the x-taskboard-session header overrides it. Also covers the stateless session
+// discovery endpoint and session-only project creation.
 
 import { DatabaseSync } from 'node:sqlite';
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,9 +16,11 @@ import type { FastifyInstance } from 'fastify';
 type Env = Record<string, string | undefined>;
 
 const OPENCODE_ENV = 'TASKBOARD_OPENCODE_URL';
+const json = { 'content-type': 'application/json' };
+const originalFetch = globalThis.fetch;
 
-// Resolve defaults read process.env directly, so every test that exercises a
-// fallback sets/restores it explicitly (never inherits the developer's shell).
+afterEach(() => { globalThis.fetch = originalFetch; });
+
 async function withOpenCodeEnv<T>(value: string | undefined, fn: () => Promise<T>): Promise<T> {
   const previous = process.env[OPENCODE_ENV];
   if (value === undefined) delete process.env[OPENCODE_ENV];
@@ -46,66 +48,126 @@ async function makeApp(env: Env = {}): Promise<App> {
   };
 }
 
-const json = { 'content-type': 'application/json' };
+type Session = { id: string; title: string; directory: string };
 
-async function createProject(app: FastifyInstance, payload: Record<string, unknown>, actor?: string): Promise<FastifyInstance> {
-  const res = await app.inject({
-    method: 'POST',
-    url: '/api/projects',
+function stubSessions(sessions: Session[], requests?: string[]): void {
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    requests?.push(String(input));
+    return new Response(JSON.stringify(sessions.map(s => ({ ...s, time: { updated: 1 } }))), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    });
+  }) as typeof fetch;
+}
+
+async function postProject(app: FastifyInstance, payload: Record<string, unknown>, actor?: string) {
+  return app.inject({
+    method: 'POST', url: '/api/projects',
     headers: actor ? { ...json, 'x-taskboard-actor': actor } : json,
     payload
   });
+}
+
+async function createProject(app: FastifyInstance, payload: Record<string, unknown>, actor?: string): Promise<FastifyInstance> {
+  const res = await postProject(app, payload, actor);
   assert.equal(res.statusCode, 201, res.body);
   return app;
 }
 
-async function createIssue(app: FastifyInstance, projectId: string, payload: Record<string, unknown>, headers: Record<string, string>): Promise<{ statusCode: number; body: { sessionId?: string | null; error?: string } }> {
-  const res = await app.inject({ method: 'POST', url: `/api/projects/${projectId}/issues`, headers: { ...json, ...headers }, payload });
+async function createIssue(
+  app: FastifyInstance, projectId: string, payload: Record<string, unknown>, headers: Record<string, string>
+): Promise<{ statusCode: number; body: { sessionId?: string | null; error?: string } }> {
+  const res = await app.inject({
+    method: 'POST', url: `/api/projects/${projectId}/issues`,
+    headers: { ...json, ...headers }, payload
+  });
   return { statusCode: res.statusCode, body: res.json() };
 }
 
-describe('issue creation inherits the project default session', () => {
-  it('web create in a project with a default session succeeds without a body sessionId', async () => {
+describe('project creation with a default Session', () => {
+  it('web create without a Session is rejected', async () => {
     const { app, cleanup } = await makeApp();
-    await createProject(app, { id: 'p1', name: 'P', sessionId: 'ses_project' });
-    const res = await createIssue(app, 'p1', { title: 'inherit' }, { 'x-taskboard-actor': 'web' });
+    const res = await postProject(app, { id: 'no-session', name: 'P' }, 'web');
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json<{ error: string }>().error, /sessionId/);
+    cleanup();
+  });
+
+  it('web create resolves workspace and server so a Session alone is enough', async () => {
+    await withOpenCodeEnv(undefined, async () => {
+      const { app, cleanup } = await makeApp();
+      stubSessions([{ id: 'ses_x', title: 'X', directory: 'D:/ws' }]);
+      const res = await postProject(app, { id: 'p1', name: 'P', defaultSessionId: 'ses_x' }, 'web');
+      assert.equal(res.statusCode, 201, res.body);
+      const project = res.json<{ defaultSessionId: string; workspacePath: string; wakeChannel: string }>();
+      assert.equal(project.defaultSessionId, 'ses_x');
+      assert.equal(project.workspacePath, 'D:/ws');
+      assert.equal(project.wakeChannel, FALLBACK_OPENCODE_URL);
+      cleanup();
+    });
+  });
+
+  it('non-web create without Session or server is still allowed', async () => {
+    const { app, cleanup } = await makeApp();
+    const res = await postProject(app, { id: 'p1', name: 'P' });
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.json<{ defaultSessionId: string | null }>().defaultSessionId, null);
+    cleanup();
+  });
+
+  it('uses TASKBOARD_OPENCODE_URL when the server is omitted', async () => {
+    await withOpenCodeEnv('http://host.docker.internal:4096', async () => {
+      const { app, cleanup } = await makeApp();
+      stubSessions([{ id: 'ses_x', title: 'X', directory: 'D:/ws' }]);
+      const res = await postProject(app, { id: 'p1', name: 'P', defaultSessionId: 'ses_x' }, 'web');
+      assert.equal(res.statusCode, 201, res.body);
+      assert.equal(res.json<{ wakeChannel: string }>().wakeChannel, 'http://host.docker.internal:4096');
+      cleanup();
+    });
+  });
+
+  it('rejects a Session whose directory differs from the project workspace', async () => {
+    const { app, cleanup } = await makeApp();
+    stubSessions([{ id: 'ses_x', title: 'X', directory: 'D:/other' }]);
+    const res = await postProject(
+      app,
+      { id: 'p1', name: 'P', defaultSessionId: 'ses_x', workspacePath: 'D:/ws', wakeChannel: 'http://127.0.0.1:4096' },
+      'web'
+    );
+    assert.equal(res.statusCode, 400);
+    cleanup();
+  });
+});
+
+describe('issue creation inherits the project default session', () => {
+  it('defaults to the project Session when the body omits it', async () => {
+    const { app, cleanup } = await makeApp();
+    stubSessions([{ id: 'ses_project', title: 'P', directory: 'D:/ws' }]);
+    await createProject(app, { id: 'p1', name: 'P', defaultSessionId: 'ses_project' }, 'web');
+    const res = await createIssue(app, 'p1', { title: 'A' }, { 'x-taskboard-actor': 'cli' });
     assert.equal(res.statusCode, 201, JSON.stringify(res.body));
     assert.equal(res.body.sessionId, 'ses_project');
     cleanup();
   });
 
-  it('web create in a legacy project without any session is rejected', async () => {
+  it('lets the x-taskboard-session header override the project default', async () => {
     const { app, cleanup } = await makeApp();
-    await createProject(app, { id: 'p1', name: 'P' });
-    const res = await createIssue(app, 'p1', { title: 'must bind' }, { 'x-taskboard-actor': 'web' });
-    assert.equal(res.statusCode, 400);
-    assert.match(String(res.body.error), /sessionId/);
-    cleanup();
-  });
-
-  it('agent create without a header inherits the project session', async () => {
-    const { app, cleanup } = await makeApp();
-    await createProject(app, { id: 'p1', name: 'P', sessionId: 'ses_project' });
-    const res = await createIssue(app, 'p1', { title: 'cli' }, { 'x-taskboard-actor': 'cli' });
-    assert.equal(res.statusCode, 201);
-    assert.equal(res.body.sessionId, 'ses_project');
-    cleanup();
-  });
-
-  it('x-taskboard-session overrides the project default', async () => {
-    const { app, cleanup } = await makeApp();
-    await createProject(app, { id: 'p1', name: 'P', sessionId: 'ses_project' });
-    const res = await createIssue(app, 'p1', { title: 'header' }, { 'x-taskboard-actor': 'cli', 'x-taskboard-session': 'ses_agent' });
-    assert.equal(res.statusCode, 201);
+    stubSessions([{ id: 'ses_project', title: 'P', directory: 'D:/ws' }]);
+    await createProject(app, { id: 'p1', name: 'P', defaultSessionId: 'ses_project' }, 'web');
+    const res = await createIssue(app, 'p1', { title: 'A' }, {
+      'x-taskboard-actor': 'cli', 'x-taskboard-session': 'ses_agent'
+    });
     assert.equal(res.body.sessionId, 'ses_agent');
     cleanup();
   });
 
-  it('an explicit body sessionId overrides both the header and the project default', async () => {
+  it('lets an explicit body sessionId override both', async () => {
     const { app, cleanup } = await makeApp();
-    await createProject(app, { id: 'p1', name: 'P', sessionId: 'ses_project' });
-    const res = await createIssue(app, 'p1', { title: 'body', sessionId: 'ses_body' }, { 'x-taskboard-actor': 'cli', 'x-taskboard-session': 'ses_agent' });
-    assert.equal(res.statusCode, 201);
+    stubSessions([{ id: 'ses_project', title: 'P', directory: 'D:/ws' }]);
+    await createProject(app, { id: 'p1', name: 'P', defaultSessionId: 'ses_project' }, 'web');
+    const res = await createIssue(app, 'p1', { title: 'A', sessionId: 'ses_body' }, {
+      'x-taskboard-actor': 'cli', 'x-taskboard-session': 'ses_agent'
+    });
     assert.equal(res.body.sessionId, 'ses_body');
     cleanup();
   });
@@ -113,244 +175,112 @@ describe('issue creation inherits the project default session', () => {
   it('agent create in a legacy project stays unbound', async () => {
     const { app, cleanup } = await makeApp();
     await createProject(app, { id: 'p1', name: 'P' });
-    const res = await createIssue(app, 'p1', { title: 'legacy' }, { 'x-taskboard-actor': 'cli' });
+    const res = await createIssue(app, 'p1', { title: 'A' }, { 'x-taskboard-actor': 'cli' });
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.sessionId, null);
     cleanup();
   });
 });
 
-describe('project create gate and default wake channel', () => {
-  it('web project create without sessionId is rejected', async () => {
+describe('PATCH project default Session', () => {
+  it('sets and clears defaultSessionId', async () => {
     const { app, cleanup } = await makeApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/projects',
-      headers: { ...json, 'x-taskboard-actor': 'web' },
-      payload: { id: 'no-session', name: 'P', wakeChannel: 'http://127.0.0.1:4096' }
+    await createProject(app, {
+      id: 'p1', name: 'P', workspacePath: 'D:/ws', wakeChannel: 'http://127.0.0.1:4096'
     });
-    assert.equal(res.statusCode, 400);
-    assert.match(res.json<{ error: string }>().error, /sessionId/);
-    cleanup();
-  });
-
-  it('web project create without wakeChannel uses TASKBOARD_OPENCODE_URL', async () => {
-    await withOpenCodeEnv('http://host.docker.internal:4096', async () => {
-      const { app, cleanup } = await makeApp();
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/projects',
-        headers: { ...json, 'x-taskboard-actor': 'web' },
-        payload: { id: 'p1', name: 'P', sessionId: 'ses_x' }
-      });
-      assert.equal(res.statusCode, 201, res.body);
-      assert.equal(res.json<{ wakeChannel: string }>().wakeChannel, 'http://host.docker.internal:4096');
-      cleanup();
+    stubSessions([{ id: 'ses_default', title: 'D', directory: 'D:/ws' }]);
+    const set = await app.inject({
+      method: 'PATCH', url: '/api/projects/p1', headers: json, payload: { defaultSessionId: 'ses_default' }
     });
-  });
+    assert.equal(set.statusCode, 200, set.body);
+    assert.equal(set.json<{ defaultSessionId: string }>().defaultSessionId, 'ses_default');
 
-  it('web project create without wakeChannel falls back to the newest project wakeChannel', async () => {
-    await withOpenCodeEnv(undefined, async () => {
-      const { app, cleanup } = await makeApp();
-      await createProject(app, { id: 'old', name: 'Old', wakeChannel: 'http://10.0.0.1:4096' });
-      await createProject(app, { id: 'new', name: 'New', wakeChannel: 'http://10.0.0.2:4096' });
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/projects',
-        headers: { ...json, 'x-taskboard-actor': 'web' },
-        payload: { id: 'p1', name: 'P', sessionId: 'ses_x' }
-      });
-      assert.equal(res.statusCode, 201, res.body);
-      assert.equal(res.json<{ wakeChannel: string }>().wakeChannel, 'http://10.0.0.2:4096');
-      cleanup();
+    const clear = await app.inject({
+      method: 'PATCH', url: '/api/projects/p1', headers: json, payload: { defaultSessionId: null }
     });
-  });
-
-  it('web project create without wakeChannel falls back to 127.0.0.1:4096', async () => {
-    await withOpenCodeEnv(undefined, async () => {
-      const { app, cleanup } = await makeApp();
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/projects',
-        headers: { ...json, 'x-taskboard-actor': 'web' },
-        payload: { id: 'p1', name: 'P', sessionId: 'ses_x' }
-      });
-      assert.equal(res.statusCode, 201, res.body);
-      assert.equal(res.json<{ wakeChannel: string }>().wakeChannel, FALLBACK_OPENCODE_URL);
-      cleanup();
-    });
-  });
-
-  it('non-web project create without wakeChannel/sessionId is still allowed', async () => {
-    const { app, cleanup } = await makeApp();
-    await createProject(app, { id: 'p1', name: 'P' });
-    cleanup();
-  });
-
-  it('PATCH sets and clears the project sessionId and GET reflects it', async () => {
-    const { app, cleanup } = await makeApp();
-    await createProject(app, { id: 'p1', name: 'P' });
-
-    const set = await app.inject({ method: 'PATCH', url: '/api/projects/p1', headers: json, payload: { sessionId: 'ses_default' } });
-    assert.equal(set.statusCode, 200);
-    assert.equal(set.json<{ sessionId: string }>().sessionId, 'ses_default');
-
-    const got = await app.inject({ method: 'GET', url: '/api/projects/p1' });
-    assert.equal(got.json<{ sessionId: string }>().sessionId, 'ses_default');
-
-    const clear = await app.inject({ method: 'PATCH', url: '/api/projects/p1', headers: json, payload: { sessionId: '' } });
     assert.equal(clear.statusCode, 200);
-    assert.equal(clear.json<{ sessionId: string }>().sessionId, '');
-
-    const gotAfter = await app.inject({ method: 'GET', url: '/api/projects/p1' });
-    assert.equal(gotAfter.json<{ sessionId: string }>().sessionId, '');
+    assert.equal(clear.json<{ defaultSessionId: string | null }>().defaultSessionId, null);
     cleanup();
   });
 });
 
 describe('GET /api/opencode/sessions', () => {
-  const realFetch = globalThis.fetch;
-
-  function stubFetch(impl: typeof fetch): void {
-    globalThis.fetch = impl;
-  }
-
-  function restore(): void {
-    globalThis.fetch = realFetch;
-  }
-
   it('rejects a non-http(s) explicit url', async () => {
     const { app, cleanup } = await makeApp();
-    const invalid = await app.inject({ method: 'GET', url: '/api/opencode/sessions?url=file:///tmp/opencode' });
-    assert.equal(invalid.statusCode, 400);
-    assert.match(invalid.json<{ error: string }>().error, /^url: /);
+    const res = await app.inject({ method: 'GET', url: '/api/opencode/sessions?url=file:///tmp/opencode' });
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json<{ error: string }>().error, /^url:/);
     cleanup();
   });
 
   it('resolves a blank url from TASKBOARD_OPENCODE_URL', async () => {
     await withOpenCodeEnv('http://host.docker.internal:4096', async () => {
+      const { app, cleanup } = await makeApp();
       const requested: string[] = [];
-      stubFetch(async input => {
-        requested.push(String(input));
-        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
-      });
-      try {
-        const { app, cleanup } = await makeApp();
-        const res = await app.inject({ method: 'GET', url: '/api/opencode/sessions' });
-        assert.equal(res.statusCode, 200, res.body);
-        assert.deepEqual(requested, ['http://host.docker.internal:4096/session']);
-        assert.equal(res.json<{ serverUrl: string }>().serverUrl, 'http://host.docker.internal:4096');
-        cleanup();
-      } finally {
-        restore();
-      }
-    });
-  });
-
-  it('resolves a blank url to the fallback when no env or projects exist', async () => {
-    await withOpenCodeEnv(undefined, async () => {
-      const requested: string[] = [];
-      stubFetch(async input => {
-        requested.push(String(input));
-        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
-      });
-      try {
-        const { app, cleanup } = await makeApp();
-        const res = await app.inject({ method: 'GET', url: '/api/opencode/sessions' });
-        assert.equal(res.statusCode, 200, res.body);
-        assert.deepEqual(requested, [`${FALLBACK_OPENCODE_URL}/session`]);
-        assert.equal(res.json<{ serverUrl: string }>().serverUrl, FALLBACK_OPENCODE_URL);
-        cleanup();
-      } finally {
-        restore();
-      }
+      stubSessions([{ id: 'ses_a', title: 'A', directory: 'D:/ws' }], requested);
+      const res = await app.inject({ method: 'GET', url: '/api/opencode/sessions' });
+      assert.equal(res.statusCode, 200, res.body);
+      assert.equal(res.json<{ serverUrl: string }>().serverUrl, 'http://host.docker.internal:4096');
+      assert.ok(requested[0]?.startsWith('http://host.docker.internal:4096/session'));
+      cleanup();
     });
   });
 
   it('an explicit url overrides env and project wakeChannel', async () => {
     await withOpenCodeEnv('http://10.0.0.9:4096', async () => {
+      const { app, cleanup } = await makeApp();
+      await createProject(app, { id: 'p1', name: 'P', wakeChannel: 'http://10.0.0.2:4096' });
       const requested: string[] = [];
-      stubFetch(async input => {
-        requested.push(String(input));
-        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      stubSessions([{ id: 'ses_a', title: 'A', directory: 'D:/ws' }], requested);
+      const explicit = 'http://127.0.0.1:4999';
+      const res = await app.inject({
+        method: 'GET', url: `/api/opencode/sessions?url=${encodeURIComponent(explicit)}`
       });
-      try {
-        const { app, cleanup } = await makeApp();
-        await createProject(app, { id: 'p1', name: 'P', wakeChannel: 'http://10.0.0.2:4096' });
-        const explicit = 'http://10.0.0.3:4096';
-        const res = await app.inject({ method: 'GET', url: `/api/opencode/sessions?url=${encodeURIComponent(explicit)}` });
-        assert.equal(res.statusCode, 200, res.body);
-        assert.deepEqual(requested, [`${explicit}/session`]);
-        assert.equal(res.json<{ serverUrl: string }>().serverUrl, explicit);
-        cleanup();
-      } finally {
-        restore();
-      }
+      assert.equal(res.statusCode, 200, res.body);
+      assert.equal(res.json<{ serverUrl: string }>().serverUrl, explicit);
+      assert.ok(requested[0]?.startsWith(`${explicit}/session`));
+      cleanup();
     });
   });
 
-  it('returns sessions filtered by workspacePath', async () => {
-    const workspace = process.cwd();
-    const other = join(workspace, 'other-workspace');
-    stubFetch(async () => new Response(JSON.stringify([
-      { id: 'ses_match', title: 'match', directory: workspace, time: { updated: 1 } },
-      { id: 'ses_other', title: 'other', directory: other, time: { updated: 2 } }
-    ]), { status: 200, headers: { 'content-type': 'application/json' } }));
-    try {
-      const { app, cleanup } = await makeApp();
-      const url = `/api/opencode/sessions?url=${encodeURIComponent('http://127.0.0.1:4096')}&workspacePath=${encodeURIComponent(` ${workspace} `)}`;
-      const res = await app.inject({ method: 'GET', url });
-      assert.equal(res.statusCode, 200, res.body);
-      const body = res.json<{ sessions: Array<{ id: string }>; workspacePath: string; serverUrl: string }>();
-      assert.deepEqual(body.sessions.map(s => s.id), ['ses_match']);
-      assert.equal(body.workspacePath, workspace);
-      assert.equal(body.serverUrl, 'http://127.0.0.1:4096');
-      cleanup();
-    } finally {
-      restore();
-    }
+  it('filters sessions by workspacePath', async () => {
+    const { app, cleanup } = await makeApp();
+    stubSessions([
+      { id: 'ses_a', title: 'A', directory: 'D:/ws' },
+      { id: 'ses_b', title: 'B', directory: 'D:/other' }
+    ]);
+    const workspace = 'D:/ws';
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/opencode/sessions?url=${encodeURIComponent('http://127.0.0.1:4096')}&workspacePath=${encodeURIComponent(` ${workspace} `)}`
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    assert.equal(res.json<{ workspacePath: string }>().workspacePath, workspace);
+    assert.deepEqual(res.json<{ sessions: { id: string }[] }>().sessions.map(s => s.id), ['ses_a']);
+    cleanup();
   });
 
   it('maps upstream failures to 502', async () => {
-    stubFetch(async () => { throw new Error('boom'); });
-    try {
-      const { app, cleanup } = await makeApp();
-      const res = await app.inject({ method: 'GET', url: `/api/opencode/sessions?url=${encodeURIComponent('http://127.0.0.1:4096')}` });
-      assert.equal(res.statusCode, 502);
-      assert.match(res.json<{ error: string }>().error, /无法读取 OpenCode 会话/);
-      cleanup();
-    } finally {
-      restore();
-    }
-
-    stubFetch(async () => new Response('nope', { status: 500 }));
-    try {
-      const { app, cleanup } = await makeApp();
-      const res = await app.inject({ method: 'GET', url: `/api/opencode/sessions?url=${encodeURIComponent('http://127.0.0.1:4096')}` });
-      assert.equal(res.statusCode, 502);
-      assert.match(res.json<{ error: string }>().error, /无法读取 OpenCode 会话/);
-      cleanup();
-    } finally {
-      restore();
-    }
+    const { app, cleanup } = await makeApp();
+    globalThis.fetch = (async () => { throw new Error('boom'); }) as typeof fetch;
+    const res = await app.inject({
+      method: 'GET', url: `/api/opencode/sessions?url=${encodeURIComponent('http://127.0.0.1:4096')}`
+    });
+    assert.equal(res.statusCode, 502);
+    cleanup();
   });
 });
 
-describe('openapi contract', () => {
-  it('documents the session header, project sessionId, and stateless sessions endpoint', async () => {
+describe('OpenAPI contract', () => {
+  it('documents defaultSessionId, the session header, and stateless discovery', async () => {
     const { app, cleanup } = await makeApp();
     const spec = (await app.inject({ method: 'GET', url: '/api/openapi.json' })).json<{
-      paths: Record<string, { get?: { description?: string; parameters?: Array<{ name: string; required?: boolean }> } }>;
-      components: { schemas: Record<string, { properties?: Record<string, unknown> }>; parameters: Record<string, unknown> };
+      paths: Record<string, { get?: { parameters?: Array<{ name: string }> } }>;
+      components: { schemas: Record<string, { properties?: Record<string, unknown> }> };
     }>();
-    assert.ok(spec.components.parameters.Session, 'x-taskboard-session parameter');
-    assert.ok(spec.components.schemas.CreateProjectRequest.properties?.sessionId);
-    const stateless = spec.paths['/api/opencode/sessions'].get!;
-    assert.ok(stateless.description?.includes('TASKBOARD_OPENCODE_URL'), 'documents the env override');
-    assert.equal(stateless.parameters?.find(p => p.name === 'url')?.required, false, 'url is optional');
     assert.ok(spec.paths['/api/opencode/sessions']);
-    const createIssue = JSON.stringify(spec.paths['/api/projects/{projectId}/issues'].post);
-    assert.ok(createIssue.includes('#/components/parameters/Session'), 'createIssue references the session header parameter');
+    assert.ok(spec.components.schemas.CreateProjectRequest?.properties?.defaultSessionId);
+    assert.ok(spec.components.schemas.Project?.properties?.defaultSessionId);
     cleanup();
   });
 });

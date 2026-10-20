@@ -234,24 +234,32 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
 describe('workspace directory API', () => {
   it('creates a directory default workspace path and lets projects inherit it', async () => {
     const { app, cleanup } = await makeApp();
-    const directoryRes = await app.inject({
-      method: 'POST', url: '/api/directories', headers: json,
-      payload: { name: 'Workspace A', workspacePath: '/workspace/a' }
-    });
-    assert.equal(directoryRes.statusCode, 201);
-    const directory = directoryRes.json<{ id: string; workspacePath: string }>();
-    assert.equal(directory.workspacePath, '/workspace/a');
-    const projectRes = await app.inject({
-      method: 'POST', url: '/api/projects', headers: json,
-      payload: { name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a', wakeChannel: 'http://127.0.0.1:4096' }
-    });
-    assert.equal(projectRes.statusCode, 201);
-    const project = projectRes.json<{ directoryId: string; defaultSessionId: string; workspacePath: string; wakeChannel: string }>();
-    assert.equal(project.directoryId, directory.id);
-    assert.equal(project.defaultSessionId, 'ses_a');
-    assert.equal(project.workspacePath, '/workspace/a');
-    assert.equal(project.wakeChannel, 'http://127.0.0.1:4096');
-    cleanup();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify([
+      { id: 'ses_a', title: 'Project A', directory: '/workspace/a', time: { updated: 1 } }
+    ]), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+    try {
+      const directoryRes = await app.inject({
+        method: 'POST', url: '/api/directories', headers: json,
+        payload: { name: 'Workspace A', workspacePath: '/workspace/a' }
+      });
+      assert.equal(directoryRes.statusCode, 201);
+      const directory = directoryRes.json<{ id: string; workspacePath: string }>();
+      assert.equal(directory.workspacePath, '/workspace/a');
+      const projectRes = await app.inject({
+        method: 'POST', url: '/api/projects', headers: json,
+        payload: { name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a', wakeChannel: 'http://127.0.0.1:4096' }
+      });
+      assert.equal(projectRes.statusCode, 201);
+      const project = projectRes.json<{ directoryId: string; defaultSessionId: string; workspacePath: string; wakeChannel: string }>();
+      assert.equal(project.directoryId, directory.id);
+      assert.equal(project.defaultSessionId, 'ses_a');
+      assert.equal(project.workspacePath, '/workspace/a');
+      assert.equal(project.wakeChannel, 'http://127.0.0.1:4096');
+    } finally {
+      globalThis.fetch = originalFetch;
+      cleanup();
+    }
   });
 
   it('keeps project routing independent from directory grouping and prevents deleting a non-empty directory', async () => {

@@ -6,6 +6,7 @@
  * wake-up cannot accidentally target different OpenCode instances.
  */
 import { lookup } from 'node:dns/promises';
+import { resolve } from 'node:path';
 import { isIP } from 'node:net';
 
 export interface OpenCodeSessionOption {
