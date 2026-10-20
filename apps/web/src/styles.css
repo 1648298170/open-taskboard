@@ -1778,3 +1778,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 @media (max-width: 520px) {
   .execution-history li { grid-template-columns: minmax(0, 1fr); gap: 3px; }
 }
+
+.execution-history .execution-outcome-failed { color: var(--danger); }
+.execution-history .execution-outcome-succeeded { color: var(--accent); }
+.execution-history .execution-outcome-retrying { color: var(--danger); }
