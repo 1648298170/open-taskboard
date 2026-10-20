@@ -6,7 +6,7 @@
  * wake-up cannot accidentally target different OpenCode instances.
  */
 import { lookup } from 'node:dns/promises';
-import { resolve } from 'node:path';
+import { posix, resolve, win32 } from 'node:path';
 import { isIP } from 'node:net';
 
 export interface OpenCodeSessionOption {
@@ -166,6 +166,63 @@ export async function listOpenCodeSessions(serverUrl: string, directory = ''): P
       updatedAt: typeof time.updated === 'number' ? time.updated : null
     }];
   });
+}
+
+export interface OpenCodeDirectoryEntry {
+  name: string;
+  path: string;
+}
+
+export interface OpenCodeDirectoryListing {
+  path: string;
+  parentPath: string | null;
+  entries: OpenCodeDirectoryEntry[];
+}
+
+function parentDirectoryPath(value: string): string | null {
+  // The Taskboard server may run on Linux while OpenCode serves a Windows path.
+  // Choose the path parser from the returned path, not from the server OS.
+  const windowsPath = /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
+  const parent = windowsPath ? win32.dirname(value) : posix.dirname(value);
+  return parent === value || parent === '.' ? null : parent;
+}
+
+/** Browse one directory on the OpenCode server's filesystem (GET /file). */
+export async function listOpenCodeDirectories(
+  serverUrl: string,
+  requestedPath = ''
+): Promise<OpenCodeDirectoryListing> {
+  const base = normalizeOpenCodeBase(serverUrl);
+  let directoryPath = requestedPath.trim();
+
+  // With no starting path, use the configured OpenCode server's current workspace.
+  if (!directoryPath) {
+    const current = await requestOpenCodeJson(`${base}/path`, '');
+    if (!isRecord(current) || typeof current.directory !== 'string' || !current.directory.trim()) {
+      throw new Error('OpenCode server did not return its current directory');
+    }
+    directoryPath = current.directory.trim();
+  }
+
+  const query = new URLSearchParams({ path: directoryPath });
+  const payload = await requestOpenCodeJson(`${base}/file?${query.toString()}`, '');
+  if (!Array.isArray(payload)) {
+    throw new Error('OpenCode GET /file returned an unexpected response');
+  }
+
+  const entries = payload.flatMap((item): OpenCodeDirectoryEntry[] => {
+    if (!isRecord(item) || item.type !== 'directory' || typeof item.name !== 'string') return [];
+    // FileNode.absolute is the absolute path. Do not fall back to its possibly
+    // workspace-relative "path" field, otherwise selection could save a bad path.
+    if (typeof item.absolute !== 'string' || !item.absolute.trim()) return [];
+    return [{ name: item.name, path: item.absolute }];
+  }).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+
+  return {
+    path: directoryPath,
+    parentPath: parentDirectoryPath(directoryPath),
+    entries
+  };
 }
 
 function normalizeDirectoryPath(value: string): string {
