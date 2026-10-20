@@ -7,6 +7,7 @@ import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
 import { Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings } from 'lucide-react';
 import { Drawer } from './components/Drawer';
+import { DirectoryPickerDialog } from './components/DirectoryPickerDialog';
 import { NewIssueDialog } from './components/NewIssueDialog';
 import { StatsPanel } from './components/StatsPanel';
 import { Timeline } from './components/Timeline';
@@ -26,6 +27,7 @@ function directoryLabel(name: string): string {
   return trimmed.split(/[\\/]/).filter(Boolean).at(-1) || trimmed;
 }
 
+type DirectoryPickerTarget = 'settings' | 'new-directory' | 'project' | 'directory-edit';
 type SortBy = 'priority' | 'created';
 type Theme = 'dark' | 'light';
 
@@ -44,6 +46,12 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPathInput, setSettingsPathInput] = useState('');
   const [settingsServerInput, setSettingsServerInput] = useState('');
+  const [directoryWorkspaceEditId, setDirectoryWorkspaceEditId] = useState<string | null>(null);
+  const [directoryWorkspaceEditPath, setDirectoryWorkspaceEditPath] = useState('');
+  const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
+  const [directoryPickerTarget, setDirectoryPickerTarget] = useState<DirectoryPickerTarget>('settings');
+  const [directoryPickerServerUrl, setDirectoryPickerServerUrl] = useState('');
+  const [directoryPickerInitialPath, setDirectoryPickerInitialPath] = useState('');
   const [projectDirectoryId, setProjectDirectoryId] = useState('');
   const [projInheritLocked, setProjInheritLocked] = useState(false);
   const [projDefaultSessionId, setProjDefaultSessionId] = useState('');
@@ -109,6 +117,43 @@ export default function App() {
     setToast({ msg, detail });
     setTimeout(() => setToast(null), 2600);
   }, []);
+
+  const openWorkspaceDirectoryPicker = (target: DirectoryPickerTarget): void => {
+    const editedDirectory = directories.find(directory => directory.id === directoryWorkspaceEditId);
+    const serverUrl = target === 'settings'
+      ? settingsServerInput.trim() || defaultOpenCodeServerUrl.trim()
+      : target === 'new-directory'
+        ? directoryServerUrl.trim() || defaultOpenCodeServerUrl.trim()
+        : target === 'project'
+          ? projServerUrl.trim() || directories.find(directory => directory.id === projectDirectoryId)?.serverUrl.trim() || defaultOpenCodeServerUrl.trim()
+          : editedDirectory?.serverUrl.trim() || defaultOpenCodeServerUrl.trim();
+    if (!serverUrl) {
+      showToast('请先填写 OpenCode Server URL，再选择服务器上的工作目录。');
+      return;
+    }
+
+    const initialPath = target === 'settings'
+      ? settingsPathInput
+      : target === 'new-directory'
+        ? directoryWorkspacePath || defaultWorkspacePath
+        : target === 'project'
+          ? projWorkspacePath
+          : directoryWorkspaceEditPath;
+    setDirectoryPickerTarget(target);
+    setDirectoryPickerServerUrl(serverUrl);
+    setDirectoryPickerInitialPath(initialPath);
+    setDirectoryPickerOpen(true);
+  };
+
+  const handleWorkspaceDirectorySelect = (path: string): void => {
+    if (directoryPickerTarget === 'settings') setSettingsPathInput(path);
+    else if (directoryPickerTarget === 'new-directory') setDirectoryWorkspacePath(path);
+    else if (directoryPickerTarget === 'project') {
+      setProjWorkspacePath(path);
+      setProjDefaultSessionId('');
+    } else setDirectoryWorkspaceEditPath(path);
+    setDirectoryPickerOpen(false);
+  };
 
   // T5-28: 主题同步到 <html data-theme>；默认（无值/暗色）走 :root 暗色变量。
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
@@ -546,15 +591,10 @@ export default function App() {
                             setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
                           } catch (err) { showToast('✗ ' + (err as Error).message); }
                         }}><Pencil size={13} /> 重命名目录</button>
-                        <button role="menuitem" onClick={async () => {
+                        <button role="menuitem" onClick={() => {
                           setDirectoryMenuOpen(null);
-                          const workspacePath = await promptDialog({ title: '配置目录工作目录', lines: ['新建项目时会默认继承此路径；已创建项目的路径不会自动改变。'], placeholder: '例如：D:\\workspace\\projects', value: directory.workspacePath });
-                          if (workspacePath === null) return;
-                          try {
-                            const updated = await api_.updateDirectory(directory.id, { workspacePath: workspacePath.trim() });
-                            setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
-                            showToast('已更新目录工作目录');
-                          } catch (err) { showToast('✗ ' + (err as Error).message); }
+                          setDirectoryWorkspaceEditId(directory.id);
+                          setDirectoryWorkspaceEditPath(directory.workspacePath);
                         }}><Folder size={13} /> 修改工作目录</button>
                         <button role="menuitem" onClick={async () => {
                           setDirectoryMenuOpen(null);
@@ -814,7 +854,12 @@ export default function App() {
           }}>
             <h2>新建目录</h2>
             <label>目录名称<input required autoFocus value={directoryName} placeholder="例如：前端项目" onChange={e => setDirectoryName(e.target.value)} /></label>
-            <label>默认工作目录地址<input value={directoryWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app" onChange={e => setDirectoryWorkspacePath(e.target.value)} /></label>
+            <label>默认工作目录地址
+              <div className="workspace-path-control">
+                <input value={directoryWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app" onChange={e => setDirectoryWorkspacePath(e.target.value)} />
+                <button type="button" className="btn" onClick={() => openWorkspaceDirectoryPicker('new-directory')}><FolderOpen size={13} /> 选择目录</button>
+              </div>
+            </label>
             <label>OpenCode Server URL<input value={directoryServerUrl} placeholder="例如：http://127.0.0.1:4096" onChange={e => setDirectoryServerUrl(e.target.value)} /></label>
             <p className="dialog-note">新建项目时会自动继承此工作目录与 OpenCode Server URL，且项目内不可修改；Session 在项目中绑定。全局设置可提供默认值。</p>
             <menu><button type="button" className="btn" onClick={() => setDirectoryCreateOpen(false)}>取消</button><button type="submit" className="btn primary">创建目录</button></menu>
@@ -841,7 +886,10 @@ export default function App() {
           }}>
             <h2>全局设置</h2>
             <label>默认工作目录地址
-              <input autoFocus value={settingsPathInput} placeholder="例如：D:\\workspace\\projects" onChange={e => setSettingsPathInput(e.target.value)} />
+              <div className="workspace-path-control">
+                <input autoFocus value={settingsPathInput} placeholder="例如：D:\\workspace\\projects" onChange={e => setSettingsPathInput(e.target.value)} />
+                <button type="button" className="btn" onClick={() => openWorkspaceDirectoryPicker('settings')}><FolderOpen size={13} /> 选择目录</button>
+              </div>
             </label>
             <label>默认 OpenCode Server URL
               <input value={settingsServerInput} placeholder="例如：http://127.0.0.1:4096" onChange={e => setSettingsServerInput(e.target.value)} />
@@ -883,8 +931,11 @@ export default function App() {
               </label>
             </div>
             <label>项目工作目录绝对路径
-              <input required disabled={projInheritLocked} value={projWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app"
-                onChange={e => { setProjWorkspacePath(e.target.value); setProjDefaultSessionId(''); }} />
+              <div className="workspace-path-control">
+                <input required disabled={projInheritLocked} value={projWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app"
+                  onChange={e => { setProjWorkspacePath(e.target.value); setProjDefaultSessionId(''); }} />
+                {!projInheritLocked && <button type="button" className="btn" onClick={() => openWorkspaceDirectoryPicker('project')}><FolderOpen size={13} /> 选择目录</button>}
+              </div>
             </label>
             <label>OpenCode Server URL
               <input required disabled={projInheritLocked} value={projServerUrl} placeholder="例如：http://127.0.0.1:4096"
@@ -948,6 +999,52 @@ export default function App() {
           </form>
         </dialog>
       )}
+
+      {directoryWorkspaceEditId && (() => {
+        const directory = directories.find(item => item.id === directoryWorkspaceEditId);
+        if (!directory) return null;
+        return (
+          <dialog open className="new-dialog">
+            <form onSubmit={async e => {
+              e.preventDefault();
+              const workspacePath = directoryWorkspaceEditPath.trim();
+              if (!workspacePath) { showToast('✗ 工作目录地址不能为空'); return; }
+              try {
+                const updated = await api_.updateDirectory(directory.id, { workspacePath });
+                setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
+                setDirectoryWorkspaceEditId(null);
+                showToast('已更新目录工作目录');
+              } catch (err) { showToast('✗ ' + (err as Error).message); }
+            }}>
+              <h2>修改目录工作目录</h2>
+              <label>目录
+                <input value={directoryLabel(directory.name)} disabled />
+              </label>
+              <label>工作目录地址
+                <div className="workspace-path-control">
+                  <input autoFocus required value={directoryWorkspaceEditPath}
+                    placeholder="例如：D:\\workspace\\projects\\my-app"
+                    onChange={e => setDirectoryWorkspaceEditPath(e.target.value)} />
+                  <button type="button" className="btn" onClick={() => openWorkspaceDirectoryPicker('directory-edit')}><FolderOpen size={13} /> 选择目录</button>
+                </div>
+              </label>
+              <p className="dialog-note">新建项目会默认继承此路径；已创建项目的工作目录不会自动改变。</p>
+              <menu>
+                <button type="button" className="btn" onClick={() => setDirectoryWorkspaceEditId(null)}>取消</button>
+                <button type="submit" className="btn primary">保存路径</button>
+              </menu>
+            </form>
+          </dialog>
+        );
+      })()}
+
+      <DirectoryPickerDialog
+        open={directoryPickerOpen}
+        serverUrl={directoryPickerServerUrl}
+        initialPath={directoryPickerInitialPath}
+        onClose={() => setDirectoryPickerOpen(false)}
+        onSelect={handleWorkspaceDirectorySelect}
+      />
 
       {projectMenu && <div className="context-menu-backdrop" onClick={() => setProjectMenu(null)} />}
       {projectMenu && (() => {
