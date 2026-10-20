@@ -37,6 +37,10 @@ export class IssueRepo {
     const priority = input.priority ?? 'medium';
     assertValidStatus(status);
     assertValidPriority(priority);
+    const reviewStatus = input.reviewStatus ?? 'pending';
+    if (!['pending', 'approved', 'changes_requested'].includes(reviewStatus)) {
+      throw new ValidationError(`invalid reviewStatus: ${reviewStatus}`);
+    }
     const id = shortId();
     const t = now();
     this.db.prepare(
@@ -44,7 +48,7 @@ export class IssueRepo {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, '', NULL, ?, ?)`
     ).run(id, input.projectId, input.parentId, input.title, input.description ?? '', status, priority,
       input.labels ?? '', input.branch ?? '', input.worktree ?? '', input.worktreePath ?? '', input.sessionId ?? null, input.assignee ?? '', input.startDate ?? null,
-      input.dueDate ?? null, input.acceptanceCriteria ?? '', input.reviewStatus ?? 'pending', input.reviewNotes ?? '', t, t);
+      input.dueDate ?? null, input.acceptanceCriteria ?? '', reviewStatus, input.reviewNotes ?? '', t, t);
     return id;
   }
 
