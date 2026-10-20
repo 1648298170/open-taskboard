@@ -729,6 +729,24 @@ export class Store {
     return this.activities.listByIssue(issueId);
   }
 
+  /** Persist an Agent/watch dispatch outcome in the task timeline. */
+  recordExecutionEvent(
+    issueId: string,
+    outcome: 'started' | 'queued' | 'retrying' | 'succeeded' | 'failed',
+    detail: string,
+    actor = 'watch'
+  ): Activity {
+    if (!this.issues.get(issueId)) throw new NotFoundError(`issue not found: ${issueId}`);
+    const normalized = detail.trim().slice(0, 2000);
+    if (!normalized) throw new ValidationError('execution event detail is required');
+    const activity = inTransaction(this.db, () => {
+      this.logActivity(issueId, actor, 'execution', `[${outcome}] ${normalized}`);
+      return this.activities.listByIssue(issueId, 1)[0]!;
+    });
+    this.emit('issue.updated', { id: issueId });
+    return activity;
+  }
+
   // ---- attachments (T7-39): metadata rows in sqlite, bodies on disk ----
 
   /**
