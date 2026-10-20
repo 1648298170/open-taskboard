@@ -397,13 +397,15 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
                 ? '任务已有 Git 绑定；为避免覆盖，请先确认并解除绑定'
                 : '创建独立 task 分支和 Git Worktree，并自动绑定到当前任务'}
               onClick={async () => {
+                const currentProjectId = projectId;
+                if (!currentProjectId) return;
                 setCreatingWorktree(true);
                 try {
                   const result = await api_.createTaskWorktree(detail.id);
                   onToast(result.alreadyBound
                     ? '该任务已经绑定有效 Worktree'
                     : `已创建并绑定 Worktree：${result.worktreePath}`);
-                  const freshRefs = await api_.gitRefs(projectId);
+                  const freshRefs = await api_.gitRefs(currentProjectId);
                   setRefs(freshRefs);
                   onChanged();
                   await load();
