@@ -372,7 +372,7 @@ export const watchCommand: Command = {
 
     const reportExecution = async (
       issueId: string,
-      outcome: 'started' | 'queued' | 'retrying' | 'succeeded' | 'failed',
+      outcome: 'started' | 'queued' | 'running' | 'idle' | 'retrying' | 'succeeded' | 'failed',
       detail: string
     ): Promise<void> => {
       try {
@@ -396,11 +396,9 @@ export const watchCommand: Command = {
     const monitorOpenCodeSession = async (
       issueId: string, sessionId: string, serverUrl: string, marker: string
     ): Promise<void> => {
-      if (monitoredSessions.has(sessionId)) {
-        console.log(`watch: Session ${sessionId} already has a completion monitor; correlation token ${marker} remains queued for history reconciliation`);
-        return;
-      }
-      monitoredSessions.add(sessionId);
+      const monitorKey = `${sessionId}:${marker}`;
+      if (monitoredSessions.has(monitorKey)) return;
+      monitoredSessions.add(monitorKey);
       let observedBusy = false;
       let reportedRunning = false;
       let matchedPrompt = false;
@@ -471,7 +469,7 @@ export const watchCommand: Command = {
       } catch (err) {
         console.error(`watch: session completion observation failed for ${sessionId}: ${(err as Error).message}`);
       } finally {
-        monitoredSessions.delete(sessionId);
+        monitoredSessions.delete(monitorKey);
       }
     };
 
