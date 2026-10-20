@@ -412,6 +412,24 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
               {creatingWorktree ? '正在创建…' : '自动创建 Worktree'}
             </button>
             <span>{creatingWorktree ? '正在创建分支和独立工作目录，请勿重复操作' : '创建到项目工作目录旁的 .taskboard-worktrees 目录'}</span>
+            {(detail.branch || detail.worktree || detail.worktreePath) && (
+              <button className="btn tiny" disabled={creatingWorktree} onClick={async () => {
+                if (!await confirmDialog({
+                  title: '解除 Git 绑定？',
+                  lines: ['只清除任务中的分支、工作树名称和路径绑定。', '不会删除本地 Git 分支或工作树目录。'],
+                  confirmText: '解除绑定'
+                })) return;
+                try {
+                  await api_.releaseGitBinding(detail.id);
+                  onToast('已解除 Git 绑定；本地分支和工作树已保留');
+                  if (projectId) setRefs(await api_.gitRefs(projectId));
+                  onChanged();
+                  await load();
+                } catch (err) {
+                  onToast(`解除 Git 绑定失败：${(err as Error).message}`);
+                }
+              }}>解除 Git 绑定</button>
+            )}
           </div>
           <div className="detail-context-item detail-context-wide">
             <span>OpenCode Session</span>
