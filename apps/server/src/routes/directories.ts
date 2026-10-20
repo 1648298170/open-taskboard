@@ -1,10 +1,10 @@
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { Store, ValidationError } from '@taskboard/core';
 import { createDirectorySchema, directoryPatchSchema, z } from '@taskboard/core/schemas';
-import { createOpenCodeSession, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
+import { createOpenCodeSession, listOpenCodeDirectories, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
 
 interface DirectoryParams { directoryId: string }
-interface DirectorySessionQuery { workspacePath?: string; serverUrl?: string }
+interface DirectorySessionQuery { workspacePath?: string; serverUrl?: string }\ninterface DirectoryBrowseQuery { path?: string; serverUrl?: string }
 const createSessionSchema = z.object({
   title: z.string().min(1).max(200),
   workspacePath: z.string().min(1),
@@ -16,6 +16,24 @@ const validationMessage = (error: z.ZodError): string =>
   error.issues.map(i => (i.path.length > 0 ? `${i.path.map(String).join('.')}: ` : '') + i.message).join('; ');
 
 const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }) => {
+  app.get('/api/directories/browse', async (
+    req: FastifyRequest<{ Querystring: DirectoryBrowseQuery }>,
+    reply
+  ) => {
+    const serverUrl = String(req.query.serverUrl ?? '').trim();
+    const path = String(req.query.path ?? '').trim();
+    if (!serverUrl) return reply.code(400).send({ error: '选择工作目录必须提供 OpenCode Server URL' });
+    if (serverUrl.length > 500 || path.length > 4096) {
+      return reply.code(400).send({ error: 'OpenCode Server URL 或目录路径过长' });
+    }
+    try {
+      // The OpenCode server, not the Taskboard container, owns this filesystem.
+      return await listOpenCodeDirectories(serverUrl, path);
+    } catch (err) {
+      return reply.code(502).send({ error: `无法读取 OpenCode 目录：${(err as Error).message}` });
+    }
+  });
+
   app.get('/api/directories', async () => store.listDirectories());
 
   app.post('/api/directories', async (req, reply) => {
