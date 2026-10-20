@@ -181,7 +181,7 @@ export interface OpenCodeDirectoryListing {
   drives: OpenCodeDirectoryEntry[];
 }
 
-function parentDirectoryPath(value: string): string | null {
+export function parentDirectoryPath(value: string): string | null {
   // The Taskboard server may run on Linux while OpenCode serves a Windows path.
   // Choose the path parser from the returned path, not from the server OS.
   const windowsPath = /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
