@@ -101,6 +101,7 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
   };
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refs, setRefs] = useState<GitRefs | null>(null);
+  const [creatingWorktree, setCreatingWorktree] = useState(false);
   // T6-36: 最近提交预览。null = 加载中/不可用。
   const [commits, setCommits] = useState<Commit[] | null>(null);
 
@@ -379,6 +380,32 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
                 if (value !== detail.worktreePath) void patch({ worktreePath: value });
               }} />
           </label>
+          <div className="worktree-action-row">
+            <button className="btn tiny" disabled={!projectId || creatingWorktree || !!(detail.branch || detail.worktree || detail.worktreePath)}
+              title={!projectId ? '当前任务没有所属项目' : (detail.branch || detail.worktree || detail.worktreePath)
+                ? '任务已有 Git 绑定；为避免覆盖，请先确认并解除绑定'
+                : '创建独立 task 分支和 Git Worktree，并自动绑定到当前任务'}
+              onClick={async () => {
+                setCreatingWorktree(true);
+                try {
+                  const result = await api_.createTaskWorktree(detail.id);
+                  onToast(result.alreadyBound
+                    ? '该任务已经绑定有效 Worktree'
+                    : `已创建并绑定 Worktree：${result.worktreePath}`);
+                  const freshRefs = await api_.gitRefs(projectId);
+                  setRefs(freshRefs);
+                  onChanged();
+                  await load();
+                } catch (err) {
+                  onToast(`Worktree 创建失败：${(err as Error).message}`);
+                } finally {
+                  setCreatingWorktree(false);
+                }
+              }}>
+              {creatingWorktree ? '正在创建…' : '自动创建 Worktree'}
+            </button>
+            <span>{creatingWorktree ? '正在创建分支和独立工作目录，请勿重复操作' : '创建到项目工作目录旁的 .taskboard-worktrees 目录'}</span>
+          </div>
           <div className="detail-context-item detail-context-wide">
             <span>OpenCode Session</span>
             {detail.sessionId
