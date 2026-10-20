@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor, isIgnoredAuthor, type IssueDetailLike } from '../src/commands/watch.js';
+import { makeSseParser, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor, isIgnoredAuthor, fetchWithTimeout, WATCH_REQUEST_TIMEOUT_MS, type IssueDetailLike } from '../src/commands/watch.js';
 
 describe('makeSseParser', () => {
   it('reassembles events from split chunks', () => {
@@ -201,5 +201,49 @@ describe('channelFor（数据驱动 wake_channel 路由）', () => {
   it('normalizes trailing slashes before using the URL as an API base', () => {
     assert.equal(channelFor('http://127.0.0.1:4096/', undefined), 'http://127.0.0.1:4096');
     assert.equal(channelFor('', 'http://127.0.0.1:4096///'), 'http://127.0.0.1:4096');
+  });
+});
+
+
+describe('fetchWithTimeout（防止唤醒队列永久阻塞）', () => {
+  it('exports a bounded default timeout', () => {
+    assert.equal(WATCH_REQUEST_TIMEOUT_MS, 30_000);
+  });
+
+  it('aborts a request that never settles', async () => {
+    const originalFetch = globalThis.fetch;
+    let observedSignal: AbortSignal | undefined;
+    globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        observedSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    }) as typeof fetch;
+    try {
+      await assert.rejects(fetchWithTimeout('http://127.0.0.1:4096/session/ses_test/prompt_async', {}, 10));
+      assert.equal(observedSignal?.aborted, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('preserves caller-provided abort signals', async () => {
+    const originalFetch = globalThis.fetch;
+    const upstream = new AbortController();
+    let observedSignal: AbortSignal | undefined;
+    globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        observedSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    }) as typeof fetch;
+    try {
+      const pending = fetchWithTimeout('http://127.0.0.1:4096/session/ses_test/prompt_async', { signal: upstream.signal }, 1_000);
+      upstream.abort();
+      await assert.rejects(pending);
+      assert.equal(observedSignal?.aborted, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
