@@ -466,7 +466,7 @@ export class Store {
     if (!child.parentId) return;
     const parent = this.issues.get(child.parentId);
     if (!parent || parent.status !== 'todo') return;
-    this.issues.update(parent.id, { status: 'in_progress' });
+    this.issues.update(parent.id, { status: 'in_progress', ...(parent.startedAt === null ? { startedAt: now() } : {}) });
     this.logActivity(parent.id, actor, 'status', 'todo → in_progress (child started)');
   }
 
@@ -518,7 +518,7 @@ export class Store {
       // dashi 语义：认领即开工 —— todo 单向自动流转，「进行中」列从此
       // 机器级真实（agent 想跳过都跳不掉）。in_review/done 不回退。
       if (issue.status === 'todo') {
-        this.issues.update(id, { status: 'in_progress' });
+        this.issues.update(id, { status: 'in_progress', ...(issue.startedAt === null ? { startedAt: t } : {}) });
         this.logActivity(id, actor, 'status', 'todo → in_progress (claim)');
       }
       // 认领即绑定：只绑空位，绝不接管他人会话的绑定（所有权语义）。
@@ -597,7 +597,11 @@ export class Store {
       // line and issue.updated event so every client notices immediately.
       if (isWakeComment(input.body)
         && (issue.status === 'in_review' || issue.status === 'done')) {
-        this.issues.update(issueId, { status: 'in_progress' });
+        this.issues.update(issueId, {
+          status: 'in_progress',
+          ...(issue.startedAt === null ? { startedAt: now() } : {}),
+          ...(issue.status === 'done' ? { completedAt: null } : {})
+        });
         this.logActivity(issueId, actor, 'updated', `status: ${issue.status}→in_progress (wake)`);
       }
       return commentId;
