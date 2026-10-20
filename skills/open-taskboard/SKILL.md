@@ -26,7 +26,7 @@ todo → in_progress → in_review → done
 - **done 只能由用户确认后设置**。完成工作并验证后，通过带 `statusNote` 的 `update_issue` 将任务置为 `in_review`，向用户报告，等用户明确认可（或明确要求标记完成）才置 `done`。
 - **收尾必推唤醒评论（硬性规则）**：TUI 注入通道下 watch 观测不到你何时干完（人工回车提交，headless 的 exit-0 自动标只属于 spawn 通道）；被 `@agent` 唤醒并处理完后，把该唤醒评论置 `processed`（`comment edit <commentId> --status processed` / MCP `update_comment`）——不落此步评论永远停在「唤醒中」，面板无法知道指令已被消化。
 - 每次修改任务用乐观锁：先 `issue show` 读取 `version`，更新时带上 `--expected-version N`。版本冲突说明别人改过，重新读取再操作。
-- **状态变更强制留痕（服务端硬门禁）**：Agent 每次实际改变状态都必须随 `update_issue` 传 `statusNote`，写明变更原因、验证证据与未覆盖项；CLI 传 `--status-note "原因；验证证据；未覆盖项"`。服务端会在同一个 SQLite 事务中保存状态和评论；缺少说明会被 403 拒绝。禁止把状态更新和 `add_comment` 拆成两步。状态更新成功后确认评论已存在，再执行 `release`。
+- **状态变更强制留痕（服务端硬门禁）**：Agent 通过 `update_issue` / PATCH 手动流转状态时，必须在同一请求传 `statusNote`，写明变更原因、验证证据与未覆盖项；CLI 传 `--status-note "原因；验证证据；未覆盖项"`。服务端会在同一个 SQLite 事务中保存状态和评论；缺少说明会被 403 拒绝。禁止把状态更新和 `add_comment` 拆成两步。`claim` 导致的自动开工流转是独立操作。手动状态更新成功后确认评论已存在，再执行 `release`。
 
 ## 常用命令
 
