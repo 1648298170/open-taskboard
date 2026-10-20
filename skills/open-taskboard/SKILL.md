@@ -23,7 +23,7 @@ todo → in_progress → in_review → done
 - **不流转不许开工**（dashi 语义）：服务端 `claim` 会把 `todo` 自动置为 `in_progress`（认领即开工）——开工必须先 claim，不存在"干着活但状态还在 todo"的合法状态。认领冲突（409）重读一次，条件不变才重试，绝不抢他人的认领。
 - **会话绑定**：Web 新建任务必须选择会话（项目已绑默认会话时自动预选）；agent 创建任务优先带自己的 `sessionId`（CLI `--session-id` / `TASKBOARD_SESSION_ID`，MCP 记住最近声明的会话并自动发送），省略时继承项目默认会话；认领未绑定任务时传 `claim_issue sessionId` / `claim --session-id`（认领即绑定，只绑空位）；已绑他人会话不抢绑——绑定即所有权，接管需显式解绑。Web 新建目录时可从全局设置自动填入工作目录与 OpenCode Server URL；在目录下新建项目时这两项自动继承且锁定，项目只需绑定 Session。新建任务直接继承并锁定项目的工作目录、Session 与 Server，服务端校验 Session 实际目录。修改项目会话只影响后续新建任务，不追溯改绑已有任务。
 - **同会话唤醒**：已绑定任务通过 OpenCode v1 `POST /session/:id/prompt_async` 继续原会话；投递失败不得 fallback 到当前 TUI 或新 headless session，修复连接后重试。
-- **done 只能由用户确认后设置**。完成工作并验证后，把任务置为 `in_review`，向用户报告，等用户明确认可（或明确要求标记完成）才置 `done`。
+- **done 只能由用户确认后设置**。完成工作并验证后，通过带 `statusNote` 的 `update_issue` 将任务置为 `in_review`，向用户报告，等用户明确认可（或明确要求标记完成）才置 `done`。
 - **收尾必推唤醒评论（硬性规则）**：TUI 注入通道下 watch 观测不到你何时干完（人工回车提交，headless 的 exit-0 自动标只属于 spawn 通道）；被 `@agent` 唤醒并处理完后，把该唤醒评论置 `processed`（`comment edit <commentId> --status processed` / MCP `update_comment`）——不落此步评论永远停在「唤醒中」，面板无法知道指令已被消化。
 - 每次修改任务用乐观锁：先 `issue show` 读取 `version`，更新时带上 `--expected-version N`。版本冲突说明别人改过，重新读取再操作。
 - **状态变更强制留痕（服务端硬门禁）**：Agent 每次实际改变状态都必须随 `update_issue` 传 `statusNote`，写明变更原因、验证证据与未覆盖项；CLI 传 `--status-note "原因；验证证据；未覆盖项"`。服务端会在同一个 SQLite 事务中保存状态和评论；缺少说明会被 403 拒绝。禁止把状态更新和 `add_comment` 拆成两步。状态更新成功后确认评论已存在，再执行 `release`。
@@ -47,9 +47,9 @@ taskboard issue create --project my-project --parent <父任务ID> --title "子�
 # 省略 --session-id 时继承项目默认会话（也可用 TASKBOARD_SESSION_ID）
 
 # 状态流转
-taskboard issue update <id> --status in_progress --expected-version <v>
-taskboard issue update <id> --status in_review --expected-version <v>
-taskboard issue done <id> --expected-version <v>
+taskboard issue update <id> --status in_progress --expected-version <v> --status-note "开始原因；已验证项；未覆盖项"
+taskboard issue update <id> --status in_review --expected-version <v> --status-note "完成原因；验证证据；未覆盖项"
+taskboard issue done <id> --expected-version <v> --status-note "确认原因；验证证据；未覆盖项"
 
 # 记录进展
 taskboard comment add <id> --author opencode --body "完成了 X，剩余 Y"
@@ -70,6 +70,6 @@ taskboard progress --project my-project
 
 1. 开始做某个任务前：`issue claim <id> --agent <名字>`（todo 任务认领即自动流转 `in_progress`；手动 `issue update --status in_progress` 等价）。认领未绑定任务时带 `--session-id`（或设置 `TASKBOARD_SESSION_ID`）绑定自己的 opencode 会话；MCP 会自动使用最近一次声明的 sessionId。
 2. 遇到阻塞或重要结论：写 `comment add`，而不是只留在对话里。
-3. 完成并自验后：任务 `--status in_review` + 评论写明验证方式，并把本次唤醒你的待处理评论置 `processed`（见上「收尾必推唤醒评论」），请用户验收。
+3. 完成并自验后：在同一次 `issue update --status in_review --status-note ...` 中提交验收说明（服务端会原子保存状态与评论），再把本次唤醒你的待处理评论置 `processed`（见上「收尾必推唤醒评论」），请用户验收。
 4. 用户确认后才 `issue done`。
 5. 顶层父任务在所有子任务 done 后进入待验收，最终 done 仍需人工确认，不要提前关闭父任务。
