@@ -1728,3 +1728,53 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   opacity: .45;
   cursor: not-allowed;
 }
+
+.execution-history {
+  min-width: 0;
+  padding-top: 4px;
+}
+.execution-history-title {
+  display: block;
+  color: var(--ink-dim);
+  font-size: 10px;
+  margin-bottom: 8px;
+}
+.execution-history ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.execution-history li {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+  padding: 7px 8px;
+  border-left: 2px solid var(--line);
+  background: var(--bg-raised);
+  font-size: 10px;
+}
+.execution-history li time {
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.execution-history li strong {
+  font-weight: 600;
+  color: var(--accent);
+}
+.execution-history li span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  line-height: 1.5;
+}
+.execution-history > p {
+  margin: 0;
+  font-size: 11px;
+}
+@media (max-width: 520px) {
+  .execution-history li { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+}
