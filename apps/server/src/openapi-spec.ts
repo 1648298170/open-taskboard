@@ -229,9 +229,18 @@ export const openApiSpec: OpenApiDocument = {
                     required: ['name', 'path'],
                     additionalProperties: false
                   }
+                },
+                drives: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: { name: { type: 'string' }, path: { type: 'string' } },
+                    required: ['name', 'path'],
+                    additionalProperties: false
+                  }
                 }
               },
-              required: ['path', 'parentPath', 'entries'],
+              required: ['path', 'parentPath', 'entries', 'drives'],
               additionalProperties: false
             })
           },
