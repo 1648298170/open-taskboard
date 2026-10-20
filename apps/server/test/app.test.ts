@@ -8,7 +8,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../src/app.js';
@@ -920,3 +921,73 @@ describe('project routing safety', () => {
     }
   });
 });
+
+describe('task Git worktree creation', () => {
+  it('creates and binds an isolated worktree, and retries idempotently', async () => {
+    const { app, cleanup } = await makeApp();
+    const root = mkdtempSync(join(tmpdir(), 'tb-worktree-test-'));
+    const workspacePath = join(root, 'repo');
+    mkdirSync(workspacePath);
+    const git = (args: string[]) => execFileSync('git', args, { cwd: workspacePath, stdio: 'pipe' });
+    try {
+      git(['init', '-b', 'main']);
+      git(['config', 'user.email', 'taskboard-test@example.invalid']);
+      git(['config', 'user.name', 'Taskboard Test']);
+      writeFileSync(join(workspacePath, 'README.md'), 'seed\n');
+      git(['add', 'README.md']);
+      git(['commit', '-m', 'initial commit']);
+
+      const project = await app.inject({
+        method: 'POST', url: '/api/projects', headers: json,
+        payload: { id: 'git-project', name: 'Git project', workspacePath }
+      });
+      assert.equal(project.statusCode, 201);
+      const issue = await app.inject({
+        method: 'POST', url: '/api/projects/git-project/issues', headers: json,
+        payload: { title: 'Implement calendar view' }
+      });
+      assert.equal(issue.statusCode, 201);
+      const issueId = issue.json<{ id: string }>().id;
+
+      const created = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/create-worktree`,
+        headers: { ...json, 'x-taskboard-actor': 'web' }, payload: {}
+      });
+      assert.equal(created.statusCode, 201, created.body);
+      const body = created.json<{ branch: string; worktree: string; worktreePath: string; alreadyBound: boolean; issue: { branch: string; worktreePath: string } }>();
+      assert.equal(body.alreadyBound, false);
+      assert.match(body.branch, /^task\\//);
+      assert.equal(body.issue.branch, body.branch);
+      assert.equal(body.issue.worktreePath, body.worktreePath);
+      assert.ok(existsSync(body.worktreePath));
+      assert.equal(git(['branch', '--list', body.branch]).toString().trim(), body.branch);
+
+      const retry = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/create-worktree`,
+        headers: { ...json, 'x-taskboard-actor': 'web' }, payload: {}
+      });
+      assert.equal(retry.statusCode, 200, retry.body);
+      assert.equal(retry.json<{ alreadyBound: boolean }>().alreadyBound, true);
+    } finally {
+      cleanup();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a clear client error when the project has no Git workspace', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      await seedProject(app);
+      const issueId = await seedIssue(app);
+      const response = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/create-worktree`,
+        headers: json, payload: {}
+      });
+      assert.equal(response.statusCode, 400);
+      assert.match(response.json<{ error: string }>().error, /工作目录/);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
