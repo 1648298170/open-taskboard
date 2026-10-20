@@ -21,6 +21,31 @@ import { isWakeComment } from '@taskboard/core/types';
 
 export interface SseEvent { name: string; data: string }
 
+/**
+ * Bound outbound HTTP waits so one stalled OpenCode/API request cannot hold the
+ * serialized wake queue forever. The timeout aborts the client request; for
+ * prompt_async, delivery can be ambiguous if the server accepted it just before
+ * the response stalled, so callers must not assume timeout means not delivered.
+ */
+export const WATCH_REQUEST_TIMEOUT_MS = 30_000;
+
+export function fetchWithTimeout(
+  input: string | URL,
+  init: RequestInit = {},
+  timeoutMs = WATCH_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const upstreamSignal = init.signal;
+  const abortFromUpstream = (): void => controller.abort(upstreamSignal?.reason);
+  if (upstreamSignal?.aborted) abortFromUpstream();
+  else upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true });
+  const timer = setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs);
+  return fetch(input, { ...init, signal: controller.signal }).finally(() => {
+    clearTimeout(timer);
+    upstreamSignal?.removeEventListener('abort', abortFromUpstream);
+  });
+}
+
 /** Incremental SSE parser: feed decoded chunks, get complete events. */
 export function makeSseParser(onEvent: (name: string, data: string) => void): { push: (chunk: string) => void } {
   let buf = '';
@@ -343,7 +368,7 @@ export const watchCommand: Command = {
           return false;
         }
         try {
-          const res = await fetch(`${sessionBase}/session/${encodeURIComponent(sessionId)}/prompt_async`, {
+          const res = await fetchWithTimeout(`${sessionBase}/session/${encodeURIComponent(sessionId)}/prompt_async`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
