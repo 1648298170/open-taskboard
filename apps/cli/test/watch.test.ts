@@ -45,6 +45,16 @@ describe('findCorrelatedAssistant（唤醒请求与 OpenCode 消息关联）', (
     ], marker);
     assert.deepEqual(result, { matchedPrompt: true });
   });
+
+  it('多个用户请求先入队时，优先通过 parentID 找到对应回复', () => {
+    const result = findCorrelatedAssistant([
+      { info: { id: 'user-current', role: 'user', time: { created: 20 } }, parts: [{ type: 'text', text: marker }] },
+      { info: { id: 'user-next', role: 'user', time: { created: 30 } }, parts: [{ type: 'text', text: '另一个请求' }] },
+      { info: { id: 'assistant-current', parentID: 'user-current', role: 'assistant', time: { created: 40 } }, parts: [{ type: 'text', text: '本次请求的回复' }] },
+      { info: { id: 'assistant-next', parentID: 'user-next', role: 'assistant', time: { created: 50 } }, parts: [{ type: 'text', text: '另一个请求的回复' }] },
+    ], marker);
+    assert.equal(result.assistant?.info?.id, 'assistant-current');
+  });
 });
 
 describe('makeSseParser', () => {
