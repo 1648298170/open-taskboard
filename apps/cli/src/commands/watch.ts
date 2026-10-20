@@ -391,13 +391,15 @@ export const watchCommand: Command = {
       // Session binding is authoritative. Never inject a bound task into the
       // currently selected TUI session, and never silently spawn a new session.
       let sessionId: string | null = null;
+      let taskWorktreePath = '';
       try {
         const res = await fetchWithTimeout(`${base()}/api/issues/${encodeURIComponent(issueId)}`, {
           headers: token() ? { Authorization: `Bearer ${token()}` } : {}
         });
         if (res.ok) {
-          const issue = await res.json() as { sessionId?: string | null; title?: string };
+          const issue = await res.json() as { sessionId?: string | null; title?: string; worktreePath?: string };
           sessionId = issue.sessionId ?? null;
+          taskWorktreePath = issue.worktreePath?.trim() ?? '';
         } else {
           console.error(`watch: cannot load task ${issueId} (HTTP ${res.status}); wake skipped`);
           return false;
@@ -426,6 +428,32 @@ export const watchCommand: Command = {
           console.error(`watch: task ${issueId} is bound to ${sessionId}, but no healthy OpenCode server is reachable (checked: ${sessionCandidates.join(', ') || 'none'}); refusing to start a new session`);
           await reportExecution(issueId, 'failed', reason);
           return false;
+        }
+        // A task bound to a worktree must not dispatch into a Session rooted at
+        // the project's main checkout. Query sessions in the target directory
+        // and fail closed when the bound Session cannot be found there.
+        if (taskWorktreePath) {
+          try {
+            const sessionsRes = await fetchWithTimeout(`${sessionBase}/session?directory=${encodeURIComponent(taskWorktreePath)}`);
+            if (!sessionsRes.ok) throw new Error(`OpenCode returned HTTP ${sessionsRes.status}`);
+            const sessions = await sessionsRes.json() as { id?: string; directory?: string }[];
+            const boundSession = Array.isArray(sessions) ? sessions.find(item => item?.id === sessionId) : undefined;
+            const normalizePath = (value: string): string => {
+              const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+              return /^[a-zA-Z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
+            };
+            if (!boundSession?.directory || normalizePath(boundSession.directory) !== normalizePath(taskWorktreePath)) {
+              const reason = `Session ${sessionId} 不在绑定的 Worktree 目录 ${taskWorktreePath} 中；请在任务详情中创建工作树 Session 后重试`;
+              console.error(`watch: refusing to dispatch task ${issueId}; session directory does not match worktree path`);
+              await reportExecution(issueId, 'failed', reason);
+              return false;
+            }
+          } catch (err) {
+            const reason = `无法验证 Session ${sessionId} 与 Worktree 目录的对应关系：${(err as Error).message}`;
+            await reportExecution(issueId, 'failed', reason);
+            console.error(`watch: ${reason}`);
+            return false;
+          }
         }
         try {
           const res = await fetchWithTimeout(`${sessionBase}/session/${encodeURIComponent(sessionId)}/prompt_async`, {
