@@ -206,8 +206,7 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
   font: inherit; font-size: 11.5px; background: var(--bg-panel); color: var(--ink-dim);
   border: 1px solid var(--line); padding: 4px 10px; cursor: pointer;
 }
-.sort-toggle button:first-child { border-radius: 3px 0 0 3px; }
-.sort-toggle button:last-child { border-radius: 0 3px 3px 0; border-left: none; }
+.sort-toggle button { border-radius: 3px 0 0 3px; }
 .sort-toggle button:hover { color: var(--ink); border-color: var(--accent-dim); }
 .sort-toggle button.active {
   background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600;
@@ -941,7 +940,6 @@ select:focus, input:focus, textarea:focus {
   border-color: #a1a1aa; box-shadow: 0 0 0 3px rgba(113,113,122,.12);
 }
 .toolbar select { padding: 6px 9px; font-size: 12px; min-height: 32px; }
-.sort-toggle { border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
 .sort-toggle button { border-radius: 6px; }
 .sort-toggle button.active { background: var(--bg-raised); color: var(--ink); }
 .bulk-bar { border-radius: 10px; }
