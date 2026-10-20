@@ -37,8 +37,26 @@ const isoDay = (d: Date): string =>
 // build the activity detail ("status,title", "startDate", ...).
 const PATCH_KEYS: (keyof IssuePatch)[] = [
   'title', 'description', 'status', 'priority', 'labels', 'branch', 'worktree',
-  'assignee', 'parentId', 'startDate', 'dueDate'
+  'sessionId', 'assignee', 'parentId', 'startDate', 'dueDate'
 ];
+
+/**
+ * Resolve the opencode session an issue is created with. Precedence:
+ * explicit body value → agentSessionId → project default → null. Every value
+ * is trimmed; '' / whitespace / null mean "absent" (never "force unbound"),
+ * so the first non-empty binding wins.
+ */
+export function resolveIssueSessionId(
+  explicit?: string | null,
+  agentSession?: string | null,
+  projectSession?: string | null
+): string | null {
+  for (const candidate of [explicit, agentSession, projectSession]) {
+    const trimmed = candidate?.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
 
 // Facade over the repo layer: owns transaction boundaries, event emission,
 // and cross-aggregate preconditions. Same public API as before, plus an
@@ -103,13 +121,13 @@ export class Store {
   }
 
   // ---- projects ----
-  createProject(input: { id?: string; name: string; workspacePath?: string; wakeChannel?: string; labels?: string }): Project {
+  createProject(input: { id?: string; name: string; workspacePath?: string; wakeChannel?: string; labels?: string; sessionId?: string }): Project {
     const id = this.projects.create(input);
     this.emit('project.created', { id });
     return this.projects.get(id)!;
   }
 
-  updateProject(id: string, patch: { name?: string; wakeChannel?: string; labels?: string }): Project {
+  updateProject(id: string, patch: { name?: string; wakeChannel?: string; labels?: string; sessionId?: string }): Project {
     if (!this.projects.get(id)) throw new NotFoundError(`project not found: ${id}`);
     if (patch.name !== undefined && patch.name.trim() === '') throw new ValidationError('name: must not be blank');
     inTransaction(this.db, () => this.projects.update(id, patch));
@@ -147,9 +165,12 @@ export class Store {
     labels?: string; branch?: string; worktree?: string | null; assignee?: string;
     sessionId?: string | null;
     startDate?: string | null; dueDate?: string | null;
-  }, actor = ''): Issue {
+  }, actor = '', agentSessionId: string | null = null): Issue {
     const parentId = input.parentId ?? null;
-    if (!this.projects.get(input.projectId)) throw new NotFoundError(`project not found: ${input.projectId}`);
+    const project = this.projects.get(input.projectId);
+    if (!project) throw new NotFoundError(`project not found: ${input.projectId}`);
+    // Explicit body → caller's agent session → project default → unbound.
+    const sessionId = resolveIssueSessionId(input.sessionId, agentSessionId, project.sessionId);
     const parent = parentId ? this.issues.get(parentId) : null;
     if (parentId && !parent) throw new NotFoundError(`parent issue not found: ${parentId}`);
     if (parent && parent.parentId) throw new ValidationError('only one level of nesting is supported (parent must be a top-level issue)');
@@ -159,7 +180,7 @@ export class Store {
         projectId: input.projectId, parentId, title: input.title,
         description: input.description, status: input.status, priority: input.priority,
         labels: input.labels, branch: input.branch, worktree: input.worktree,
-        sessionId: input.sessionId,
+        sessionId,
         assignee: input.assignee,
         startDate: input.startDate, dueDate: input.dueDate
       });

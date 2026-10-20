@@ -154,6 +154,11 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
   (db: DatabaseSync) => {
     db.exec("ALTER TABLE comments ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'");
   },
+  // v12 → v13: per-project default opencode session for new tasks. '' =
+  // unbound; createIssue inherits it when the caller supplies no session.
+  (db: DatabaseSync) => {
+    db.exec("ALTER TABLE projects ADD COLUMN session_id TEXT NOT NULL DEFAULT ''");
+  },
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after

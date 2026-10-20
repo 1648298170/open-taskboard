@@ -28,6 +28,8 @@ export const createProjectSchema = z
     // v0.4 wake routing: full TUI URL (http://127.0.0.1:4097); '' = unbound.
     wakeChannel: z.string().max(200).optional(),
     labels: z.string().optional(),
+    // v13: project default opencode session for new tasks.
+    sessionId: z.string().trim().min(1).max(200).optional(),
   })
   .strict();
 
@@ -36,6 +38,8 @@ export const projectPatchSchema = z
     name: z.string().min(1).optional(),
     wakeChannel: z.string().max(200).optional(),
     labels: z.string().optional(),
+    // '' clears the project default; whitespace-only is rejected.
+    sessionId: z.union([z.string().trim().min(1).max(200), z.literal('')]).optional(),
   })
   .strict();
 
