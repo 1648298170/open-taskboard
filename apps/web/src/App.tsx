@@ -535,10 +535,9 @@ export default function App() {
             <span className="glyph">▚</span>
             <h1>taskboard</h1>
           </div>
+          <button className="side-btn side-create-directory" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryServerUrl(defaultOpenCodeServerUrl); setDirectoryCreateOpen(true); }}><Plus size={14} /> 新建目录</button>
           <div className="sidebar-heading">
             <span>目录</span>
-            <button className="icon-btn" title="全局设置" aria-label="全局设置" onClick={() => { setSettingsPathInput(defaultWorkspacePath); setSettingsOpen(true); }}><Settings size={15} /></button>
-            <button className="icon-btn" title="新建目录" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryServerUrl(defaultOpenCodeServerUrl); setDirectoryCreateOpen(true); }}><Plus size={15} /></button>
           </div>
           <nav className="side-projects" aria-label="目录与项目">
             {directories.map(directory => {
@@ -642,39 +641,7 @@ export default function App() {
             {!directories.length && <div className="side-empty">还没有目录</div>}
           </nav>
           <div className="side-actions">
-            <button className="side-btn" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryServerUrl(defaultOpenCodeServerUrl); setDirectoryCreateOpen(true); }}><Plus size={14} /> 新建目录</button>
-            <button className="side-btn" disabled={!directories.length} onClick={() => {
-              const current = projects.find(project => project.id === projectId);
-              const directoryId = current?.directoryId ?? (directories.some(directory => directory.id === projectDirectoryId) ? projectDirectoryId : directories[0]?.id) ?? '';
-              const existing = projects.find(project => project.directoryId === directoryId);
-              setProjName(''); setProjId(''); setProjLabels('');
-              setProjWorkspacePath(existing?.workspacePath ?? directories.find(d => d.id === directoryId)?.workspacePath ?? '');
-              setProjServerUrl(existing?.wakeChannel ?? directories.find(d => d.id === directoryId)?.serverUrl ?? defaultOpenCodeServerUrl);
-              setProjInheritLocked(false);
-              setProjectDirectoryId(directoryId); setProjCreateOpen(true);
-            }}><Plus size={14} /> 新建项目</button>
-            <button className="side-btn" disabled={!projectId} onClick={async () => {
-              const project = projects.find(p => p.id === projectId);
-              if (!project) return;
-              const path = await promptDialog({ title: `配置「${project.name}」工作目录`, lines: ['修改后会影响此项目后续的 Session 查询和任务唤醒。'], placeholder: '绝对路径', value: project.workspacePath });
-              if (path === null) return;
-              const serverUrl = await promptDialog({ title: `配置「${project.name}」OpenCode Server`, lines: ['填写完整地址，例如 http://127.0.0.1:4096。'], placeholder: 'http://127.0.0.1:4096', value: project.wakeChannel });
-              if (serverUrl === null) return;
-              try {
-                const updated = await api_.updateProject(project.id, { workspacePath: path.trim(), wakeChannel: serverUrl.trim(), defaultSessionId: null });
-                setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
-                showToast('项目配置已更新；为避免误唤醒，原默认 Session 与现有任务的会话绑定已清除，请重新选择会话。');
-              } catch (err) { showToast('✗ ' + (err as Error).message); }
-            }}>配置当前项目</button>
-            <button className="side-btn danger" disabled={!projectId} title="删除当前项目（输入 id 确认）" onClick={async () => {
-              const pid = projectId ?? '';
-              const pname = projects.find(p => p.id === pid)?.name ?? pid;
-              const typed = await promptDialog({ title: `删除项目「${pname}」`, lines: [`项目 id：${pid}`, `${pid} 连同它的全部任务、评论和附件一起删除，不可恢复。`, '输入上面的项目 id 以确认：'], placeholder: pid, value: '' });
-              if (typed === null) return;
-              if (typed.trim() !== pid) { showToast('✗ 项目 id 不匹配，未删除'); return; }
-              try { await api_.deleteProject(pid); showToast(`已删除项目 ${pid}`); loadProjects(); }
-              catch (err) { showToast(`✗ ${(err as Error).message}`); }
-            }}><Trash2 size={14} /> 删除当前项目</button>
+            <button className="icon-btn" title="全局设置" aria-label="全局设置" onClick={() => { setSettingsPathInput(defaultWorkspacePath); setSettingsOpen(true); }}><Settings size={15} /></button>
           </div>
         </aside>
         <div className="main-col">
