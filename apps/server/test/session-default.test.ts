@@ -296,13 +296,20 @@ describe('directory server inheritance', () => {
     const directory = dirRes.json<{ id: string; serverUrl: string }>();
     assert.equal(directory.serverUrl, 'http://10.0.0.5:4096');
 
+    const patched = await app.inject({
+      method: 'PATCH', url: `/api/directories/${directory.id}`, headers: json,
+      payload: { serverUrl: 'http://10.0.0.6:4096' }
+    });
+    assert.equal(patched.statusCode, 200, patched.body);
+    assert.equal(patched.json<{ serverUrl: string }>().serverUrl, 'http://10.0.0.6:4096');
+
     stubSessions([{ id: 'ses_d', title: 'D', directory: 'D:/ws' }]);
     const res = await postProject(app, {
       name: 'P', directoryId: directory.id, defaultSessionId: 'ses_d'
     }, 'web');
     assert.equal(res.statusCode, 201, res.body);
     const project = res.json<{ wakeChannel: string; workspacePath: string }>();
-    assert.equal(project.wakeChannel, 'http://10.0.0.5:4096');
+    assert.equal(project.wakeChannel, 'http://10.0.0.6:4096');
     assert.equal(project.workspacePath, 'D:/ws');
     cleanup();
   });
