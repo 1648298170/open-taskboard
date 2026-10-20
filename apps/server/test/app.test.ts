@@ -959,7 +959,7 @@ describe('task Git worktree creation', () => {
 
       const issue = await app.inject({
         method: 'POST', url: '/api/projects/git-project/issues', headers: json,
-        payload: { title: 'Implement calendar view' }
+        payload: { title: 'Implement calendar view', sessionId: 'ses_main_checkout' }
       });
       assert.equal(issue.statusCode, 201);
       const issueId = issue.json<{ id: string }>().id;
@@ -974,6 +974,7 @@ describe('task Git worktree creation', () => {
       assert.ok(body.branch.startsWith('task/'));
       assert.equal(body.issue.branch, body.branch);
       assert.equal(body.issue.worktreePath, body.worktreePath);
+      assert.equal(body.issue.sessionId, null, 'a session bound to the main checkout must be cleared after creating a worktree');
       assert.ok(existsSync(body.worktreePath));
       assert.doesNotThrow(() => git(['show-ref', '--verify', `refs/heads/${body.branch}`]));
 
