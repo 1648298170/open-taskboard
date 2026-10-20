@@ -42,6 +42,7 @@ export interface WorkspaceDirectoryListing {
   path: string;
   parentPath: string | null;
   entries: WorkspaceDirectoryEntry[];
+  drives: WorkspaceDirectoryEntry[];
 }
 
 /** T2-9: API 错误，携带 HTTP status — App 据此识别 401 并弹出令牌输入。 */
