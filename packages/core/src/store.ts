@@ -484,7 +484,7 @@ export class Store {
     const children = this.issues.list(parent.projectId, { parentId: parent.id, archived: 'all' });
     if (children.length === 0) return;
     if (!children.every(item => item.status === 'in_review' || item.status === 'done')) return;
-    this.issues.update(parent.id, { status: 'in_review' });
+    this.issues.update(parent.id, { status: 'in_review', ...(parent.startedAt === null ? { startedAt: now() } : {}) });
     this.logActivity(parent.id, actor, 'status', `${parent.status} -> in_review (all children waiting for review)`);
   }
 
@@ -670,7 +670,11 @@ export class Store {
       if (patch.status === 'pending'
         && isWakeComment(patch.body ?? cur.body)
         && (before === 'in_review' || before === 'done')) {
-        this.issues.update(issueId, { status: 'in_progress' });
+        this.issues.update(issueId, {
+          status: 'in_progress',
+          ...(cur.startedAt === null ? { startedAt: now() } : {}),
+          ...(before === 'done' ? { completedAt: null } : {})
+        });
         this.logActivity(issueId, actor, 'updated', `status: ${before}→in_progress (wake)`);
       }
     });
