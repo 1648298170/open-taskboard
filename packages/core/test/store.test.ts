@@ -1661,3 +1661,51 @@ describe('isWakeComment', () => {
     assert.equal(isWakeComment('@agent 干活', '!bot'), false);
   });
 });
+
+// --- task execution lifecycle and acceptance metadata ---------------------
+
+describe('task execution lifecycle', () => {
+  it('records first start/completion and clears completion when reopened', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'lifecycle-project', name: 'Lifecycle' });
+    const created = store.createIssue({ projectId: 'lifecycle-project', title: 'Lifecycle task' });
+    assert.equal(created.startedAt, null);
+    assert.equal(created.completedAt, null);
+
+    const started = store.updateIssue(created.id, { status: 'in_progress' }, created.version, 'web');
+    assert.ok(started.startedAt);
+    assert.equal(started.completedAt, null);
+    const firstStartedAt = started.startedAt;
+
+    const renamed = store.updateIssue(created.id, { title: 'Still working' }, started.version, 'web');
+    assert.equal(renamed.startedAt, firstStartedAt);
+
+    const completed = store.updateIssue(created.id, { status: 'done' }, renamed.version, 'web');
+    assert.ok(completed.completedAt);
+    assert.equal(completed.startedAt, firstStartedAt);
+
+    const reopened = store.updateIssue(created.id, { status: 'in_progress' }, completed.version, 'web');
+    assert.equal(reopened.completedAt, null);
+    assert.equal(reopened.startedAt, firstStartedAt);
+  });
+
+  it('persists worktree path and acceptance/review fields through the detail model', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'context-project', name: 'Context' });
+    const created = store.createIssue({
+      projectId: 'context-project',
+      title: 'Context task',
+      worktree: 'task-context',
+      worktreePath: 'D:\\workspace\\task-context',
+      acceptanceCriteria: '- [ ] tests pass',
+      reviewStatus: 'changes_requested',
+      reviewNotes: 'Add a regression test'
+    });
+    const loaded = store.getIssue(created.id)!;
+    assert.equal(loaded.worktreePath, 'D:\\workspace\\task-context');
+    assert.equal(loaded.acceptanceCriteria, '- [ ] tests pass');
+    assert.equal(loaded.reviewStatus, 'changes_requested');
+    assert.equal(loaded.reviewNotes, 'Add a regression test');
+  });
+});
+
