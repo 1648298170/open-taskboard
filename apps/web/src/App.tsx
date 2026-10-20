@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUS_CN, STATUSES, OpenCodeSessionOption } from './api';
+import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUS_CN, STATUSES, WorkspaceDirectory } from './api';
 import { Board, buildBlockedByMap, flattenCardOrder, GroupBy, todayStr } from './components/Board';
 import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
 import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
-import { Bell, ChartColumn, GanttChart, Keyboard, Moon, Plus, Sun, Trash2, X } from 'lucide-react';
+import { Bell, ChartColumn, GanttChart, Keyboard, Moon, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings } from 'lucide-react';
 import { Drawer } from './components/Drawer';
 import { NewIssueDialog } from './components/NewIssueDialog';
 import { ProjectSessionDialog } from './components/ProjectSessionDialog';
@@ -19,11 +19,34 @@ function issueIdFromHash(): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+/** Legacy projects are migrated into groups named after their old workspace path.
+ * Show only the final path segment in the sidebar until the user renames it. */
+function directoryLabel(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed.includes('/') && !trimmed.includes('\\')) return trimmed;
+  return trimmed.split(/[\\/]/).filter(Boolean).at(-1) || trimmed;
+}
+
 type SortBy = 'priority' | 'created';
 type Theme = 'dark' | 'light';
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [directories, setDirectories] = useState<WorkspaceDirectory[]>([]);
+  const [expandedDirectories, setExpandedDirectories] = useState<Set<string>>(new Set());
+  const [directoryCreateOpen, setDirectoryCreateOpen] = useState(false);
+  const [directoryName, setDirectoryName] = useState('');
+  const [directoryWorkspacePath, setDirectoryWorkspacePath] = useState('');
+  const [defaultWorkspacePath, setDefaultWorkspacePath] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsPathInput, setSettingsPathInput] = useState('');
+  const [projectDirectoryId, setProjectDirectoryId] = useState('');
+  const [projDefaultSessionId, setProjDefaultSessionId] = useState('');
+  const [projSessions, setProjSessions] = useState<import('./api').OpenCodeSessionOption[]>([]);
+  const [projSessionsLoading, setProjSessionsLoading] = useState(false);
+  const [projSessionsError, setProjSessionsError] = useState<string | null>(null);
+  const [sessionCreateOpen, setSessionCreateOpen] = useState(false);
+  const [sessionTitle, setSessionTitle] = useState('');
   const [projectId, setProjectId] = useState<string | null>(null);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [deps, setDeps] = useState<DependencyEdge[]>([]);
@@ -44,7 +67,7 @@ export default function App() {
   // T5-27: 泳道分组。
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
   // T5-28: 主题（localStorage 持久化，默认暗色）。
-  const [theme, setTheme] = useState<Theme>(() => localStorage.getItem('taskboard-theme') === 'light' ? 'light' : 'dark');
+  const [theme, setTheme] = useState<Theme>(() => localStorage.getItem('taskboard-theme') === 'dark' ? 'dark' : 'light');
   // T6-35: 桌面通知开关（存储 '1' 且权限已授予才算开）。
   const [notify, setNotify] = useState(() =>
     localStorage.getItem('taskboard-notify') === '1' && 'Notification' in window && Notification.permission === 'granted');
@@ -61,18 +84,7 @@ export default function App() {
   const [projId, setProjId] = useState('');
   const [projLabels, setProjLabels] = useState('');
   const [projWorkspacePath, setProjWorkspacePath] = useState('');
-  // 新建项目：会话列表来自无状态端点；两个必填项齐备才允许提交。
-  const [projSessionId, setProjSessionId] = useState('');
-  const [projSessions, setProjSessions] = useState<OpenCodeSessionOption[]>([]);
-  const [projSessionsLoading, setProjSessionsLoading] = useState(false);
-  const [projSessionsError, setProjSessionsError] = useState<string | null>(null);
-  const [projError, setProjError] = useState<string | null>(null);
-  // 选中会话后自动回填工作区路径：标记该路径来自自动回填，
-  // 使随后的会话重取不会把刚选中的会话清掉。
-  const projSessionIdRef = useRef('');
-  const autoFilledWorkspaceRef = useRef<string | null>(null);
-  // 已有项目：配置默认会话的浮层开关。
-  const [configSessionOpen, setConfigSessionOpen] = useState(false);
+  const [projServerUrl, setProjServerUrl] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
   // v0.4: 旧标签页检测 —— SPA 部署后旧标签页继续跑旧 bundle（多次坑用户的根源）。
   // 周期比对服务器最新 bundle 与当前运行版本，不一致则提示刷新。
@@ -97,6 +109,38 @@ export default function App() {
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => { notifyRef.current = notify; }, [notify]);
   useEffect(() => { statsOpenRef.current = statsOpen; }, [statsOpen]);
+
+  useEffect(() => {
+    if (!projCreateOpen || !projectDirectoryId) {
+      setProjSessions([]);
+      setProjDefaultSessionId('');
+      setProjSessionsLoading(false);
+      setProjSessionsError(null);
+      return;
+    }
+    let cancelled = false;
+    setProjSessions([]);
+    setProjDefaultSessionId('');
+    if (!projWorkspacePath.trim() || !projServerUrl.trim()) {
+      setProjSessionsLoading(false);
+      setProjSessionsError('请先填写项目工作目录和 OpenCode Server URL，再选择或新建 Session。');
+      return;
+    }
+    setProjSessionsLoading(true);
+    setProjSessionsError(null);
+    const timer = window.setTimeout(() => {
+      api_.openCodeSessionsForDirectory(projectDirectoryId, projWorkspacePath.trim(), projServerUrl.trim())
+        .then(result => {
+          if (cancelled) return;
+          setProjSessions(result.sessions);
+          setProjSessionsError(result.sessions.length ? null : '该工作目录下还没有 Session，请点击右侧按钮创建。');
+        })
+        .catch(err => { if (!cancelled) setProjSessionsError((err as Error).message); })
+        .finally(() => { if (!cancelled) setProjSessionsLoading(false); });
+    }, 300);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [projCreateOpen, projectDirectoryId, projWorkspacePath, projServerUrl]);
+
 
   // ---- 深链 #/issue/<id> ----
   // 关闭→打开用 pushState 留一条历史（支持浏览器返回键）；抽屉内切换只 replace，历史不膨胀。
@@ -153,20 +197,22 @@ export default function App() {
   }, [projectId]);
 
   const loadProjects = useCallback(() => {
-    api_.listProjects().then(list => {
+    Promise.all([api_.listProjects(), api_.listDirectories()]).then(([list, directoryList]) => {
       setConnError(false);
       setProjects(list);
+      setDirectories(directoryList);
+      setExpandedDirectories(prev => {
+        const next = new Set(prev);
+        if (next.size === 0 && directoryList[0]) next.add(directoryList[0].id);
+        return next;
+      });
       if (list.length) {
         const prev = localStorage.getItem('project');
         const pid = prev && list.some(p => p.id === prev) ? prev : list[0].id;
         setProjectId(pid);
-      } else {
-        // 没有任何项目：清空选中态，面板保持可用（侧栏显示“当前没有项目”）。
-        setProjectId(null);
-        setIssues([]);
-        setProgress(null);
-        setDeps([]);
-      }
+        const selected = list.find(p => p.id === pid);
+        if (selected?.directoryId) setExpandedDirectories(old => new Set(old).add(selected.directoryId!));
+      } else setProjectId(null);
     }).catch(err => {
       if (isUnauthorized(err)) setNeedToken(true);
       else setConnError(true);
@@ -174,6 +220,16 @@ export default function App() {
   }, []);
 
   useEffect(() => { loadProjects(); }, [loadProjects]);
+
+  useEffect(() => {
+    api_.getSettings().then(settings => {
+      setDefaultWorkspacePath(settings.defaultWorkspacePath);
+      setSettingsPathInput(settings.defaultWorkspacePath);
+    }).catch(err => {
+      if (isUnauthorized(err)) setNeedToken(true);
+      else showToast('✗ 读取全局设置失败：' + (err as Error).message);
+    });
+  }, [showToast]);
 
   // v0.4: bundle 版本检测（挂载时 + 每分钟 + 回到标签页时）
   useEffect(() => {
@@ -194,7 +250,7 @@ export default function App() {
   }, []);
 
   useEffect(() => { if (projectId) { localStorage.setItem('project', projectId); void refresh(projectId); } }, [projectId, refresh]);
-  useEffect(() => connectSSE(() => void refresh()), [refresh]);
+  useEffect(() => connectSSE(() => { void loadProjects(); void refresh(); }), [loadProjects, refresh]);
   // T6-31: 面板打开（或切换项目）时立即拉取一次；开着期间的更新走 refresh 内的重取。
   useEffect(() => {
     if (!statsOpen || !projectId) return;
@@ -358,8 +414,10 @@ export default function App() {
       if (e.key === 'Escape') {
         // 优先级：帮助 > 对话框 > 抽屉 > 批量选择。输入框里也生效——通用逃生键。
         if (helpOpen) { setHelpOpen(false); return; }
+        if (sessionCreateOpen) { setSessionCreateOpen(false); return; }
+        if (directoryCreateOpen) { setDirectoryCreateOpen(false); return; }
         if (dialogOpen) { setDialogOpen(false); return; }
-        if (projCreateOpen) { setProjCreateOpen(false); return; }
+        if (projCreateOpen) { setProjCreateOpen(false); setSessionCreateOpen(false); return; }
         if (openId !== null) { closeDrawer(); return; }
         if (batchMode && selected.size > 0) setSelected(new Set());
         return;
@@ -372,7 +430,7 @@ export default function App() {
         return;
       }
       if (e.key === '?') { setHelpOpen(true); return; }
-      if (e.key === 'n') { if (projectId) setDialogOpen(true); return; }
+      if (e.key === 'n' && projectId) { setDialogOpen(true); return; }
       if (e.key === 'j' || e.key === 'k') {
         if (flatIds.length === 0) return;
         e.preventDefault();
@@ -390,7 +448,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [dialogOpen, projCreateOpen, openId, batchMode, selected, flatIds, cursorId, closeDrawer, openIssue, helpOpen, projectId]);
+  }, [dialogOpen, projCreateOpen, directoryCreateOpen, sessionCreateOpen, projectId, openId, batchMode, selected, flatIds, cursorId, closeDrawer, openIssue, helpOpen]);
 
   // 高亮卡片滚入可视区（j/k 移动可能超出视口）。
   useEffect(() => {
@@ -462,6 +520,38 @@ export default function App() {
     );
   }
 
+  if (!projects.length && !directories.length) {
+    return (
+      <div className="empty-state">
+        <p>还没有目录。先创建一个目录，再在目录下创建项目。</p>
+        <button className="btn primary" onClick={async () => {
+          const name = await promptDialog({ title: '新建目录', lines: ['目录用于在左侧分组管理项目。'], placeholder: '例如：前端项目', value: '' });
+          if (name === null) return;
+          const workspacePath = await promptDialog({
+            title: '设置目录工作目录',
+            lines: ['新建项目会默认继承此路径。也可以先在全局设置中配置默认工作目录。'],
+            placeholder: '例如：D:\\workspace\\projects',
+            value: defaultWorkspacePath
+          });
+          if (workspacePath === null || !workspacePath.trim()) { showToast('✗ 请填写工作目录后再创建目录'); return; }
+          try { await api_.createDirectory({ name: name.trim(), workspacePath: workspacePath.trim() }); loadProjects(); }
+          catch (err) { showToast('✗ ' + (err as Error).message); }
+        }}>＋ 新建目录</button>
+        <button className="btn" onClick={async () => {
+          const path = await promptDialog({ title: '全局设置：默认工作目录', lines: ['该路径会预填到以后新建的目录中，不会修改已有目录或项目。'], placeholder: '例如：D:\\workspace\\projects', value: defaultWorkspacePath });
+          if (path === null) return;
+          try {
+            const settings = await api_.updateSettings({ defaultWorkspacePath: path.trim() });
+            setDefaultWorkspacePath(settings.defaultWorkspacePath);
+            setSettingsPathInput(settings.defaultWorkspacePath);
+            showToast('已保存全局默认工作目录');
+          } catch (err) { showToast('✗ 保存全局设置失败：' + (err as Error).message); }
+        }}>全局设置</button>
+        <p className="dialog-note">创建目录后，在左侧目录节点下新建项目，并为项目配置工作目录、OpenCode Server 和 Session。</p>
+      </div>
+    );
+  }
+
   const pct = progress && progress.weightedTotal > 0
     ? Math.round((progress.weightedDone / progress.weightedTotal) * 100) : 0;
 
@@ -473,86 +563,114 @@ export default function App() {
             <span className="glyph">▚</span>
             <h1>taskboard</h1>
           </div>
-          <nav className="side-projects" aria-label="项目">
-            {projects.length === 0 && <p className="side-empty">当前没有项目</p>}
-            {projects.map(p => (
-              <button key={p.id} className={`side-item${p.id === projectId ? ' active' : ''}`}
-                title={`${p.name} (${p.id})`}
-                onClick={() => { setProjectId(p.id); closeDrawer(); }}>
-                <span className="side-name">{p.name}</span>
-                {p.labels && <span className="side-label" title={p.labels}>{p.labels}</span>}
-                <span className="side-id">{p.id}</span>
-              </button>
-            ))}
+          <div className="sidebar-heading">
+            <span>目录</span>
+            <button className="icon-btn" title="全局设置" aria-label="全局设置" onClick={() => { setSettingsPathInput(defaultWorkspacePath); setSettingsOpen(true); }}><Settings size={15} /></button>
+            <button className="icon-btn" title="新建目录" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryCreateOpen(true); }}><Plus size={15} /></button>
+          </div>
+          <nav className="side-projects" aria-label="目录与项目">
+            {directories.map(directory => {
+              const children = projects.filter(project => project.directoryId === directory.id);
+              const expanded = expandedDirectories.has(directory.id);
+              return (
+                <section className="side-directory" key={directory.id}>
+                  <div className="side-directory-row">
+                    <button className="side-directory-toggle" title={directory.name} onClick={() => setExpandedDirectories(prev => {
+                      const next = new Set(prev);
+                      if (next.has(directory.id)) next.delete(directory.id); else next.add(directory.id);
+                      return next;
+                    })}>
+                      {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      {expanded ? <FolderOpen size={15} /> : <Folder size={15} />}
+                      <span className="side-directory-name">{directoryLabel(directory.name)}</span>
+                    </button>
+                    <button className="icon-btn" title="在此目录下新建项目" onClick={() => {
+                      const existing = children[0];
+                      setProjName(''); setProjId(''); setProjLabels('');
+                      setProjWorkspacePath(directory.workspacePath || existing?.workspacePath || '');
+                      setProjServerUrl(existing?.wakeChannel ?? '');
+                      setProjectDirectoryId(directory.id); setProjCreateOpen(true);
+                      setExpandedDirectories(prev => new Set(prev).add(directory.id));
+                    }}><Plus size={14} /></button>
+                    <button className="icon-btn" title="配置目录工作目录" onClick={async () => {
+                      const workspacePath = await promptDialog({ title: '配置目录工作目录', lines: ['新建项目时会默认继承此路径；已创建项目的路径不会自动改变。'], placeholder: '例如：D:\\workspace\\projects', value: directory.workspacePath });
+                      if (workspacePath === null) return;
+                      try {
+                        const updated = await api_.updateDirectory(directory.id, { workspacePath: workspacePath.trim() });
+                        setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
+                        showToast('已更新目录工作目录');
+                      } catch (err) { showToast('✗ ' + (err as Error).message); }
+                    }}><Folder size={14} /></button>
+                    <button className="icon-btn" title="重命名目录" onClick={async () => {
+                      const name = await promptDialog({ title: '重命名目录', lines: ['目录用于在左侧分组管理项目。'], placeholder: '目录名称', value: directory.name });
+                      if (name === null) return;
+                      try {
+                        const updated = await api_.updateDirectory(directory.id, { name: name.trim() });
+                        setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
+                      } catch (err) { showToast('✗ ' + (err as Error).message); }
+                    }}><MoreHorizontal size={14} /></button>
+                  </div>
+                  <div className="side-directory-meta">{children.length} 个项目</div>
+                  {expanded && (
+                    <div className="side-directory-projects">
+                      {children.map(project => (
+                        <button key={project.id} className={`side-item side-project-item${project.id === projectId ? ' active' : ''}`}
+                          title={`${project.name}\n${project.workspacePath}\n${project.wakeChannel}`}
+                          onClick={() => { setProjectId(project.id); closeDrawer(); }}>
+                          <span className="side-name">{project.name}</span>
+                          {project.labels && <span className="side-label" title={project.labels}>{project.labels}</span>}
+                          <span className="side-project-path">{project.workspacePath || '未配置工作目录'}</span>
+                        </button>
+                      ))}
+                      {!children.length && <div className="side-empty">此目录下还没有项目</div>}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
+            {!directories.length && <div className="side-empty">还没有目录</div>}
           </nav>
           <div className="side-actions">
-            {/* v0.4: 项目管理 —— 新建对话框；删除需输入项目 id 确认（防误删）。 */}
-            <button className="side-btn" onClick={openProjectDialog}>
-              <Plus size={14} /> 新建项目</button>
-            <button className="side-btn" onClick={async () => {
-              const pid = projectId ?? '';
-              const project = projects.find(p => p.id === pid);
+            <button className="side-btn" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryCreateOpen(true); }}><Plus size={14} /> 新建目录</button>
+            <button className="side-btn" disabled={!directories.length} onClick={() => {
+              const current = projects.find(project => project.id === projectId);
+              const directoryId = current?.directoryId ?? (directories.some(directory => directory.id === projectDirectoryId) ? projectDirectoryId : directories[0]?.id) ?? '';
+              const existing = projects.find(project => project.directoryId === directoryId);
+              setProjName(''); setProjId(''); setProjLabels('');
+              setProjWorkspacePath(existing?.workspacePath ?? '');
+              setProjServerUrl(existing?.wakeChannel ?? '');
+              setProjectDirectoryId(directoryId); setProjCreateOpen(true);
+            }}><Plus size={14} /> 新建项目</button>
+            <button className="side-btn" disabled={!projectId} onClick={async () => {
+              const project = projects.find(p => p.id === projectId);
               if (!project) return;
-              const entered = await promptDialog({
-                title: `配置「${project.name}」的 OpenCode 服务`,
-                lines: [
-                  '填写当前项目对应的 OpenCode serve 地址。',
-                  '会用于读取会话列表，并确保任务唤醒发送到绑定的原会话。',
-                  '留空会解除绑定；示例：http://127.0.0.1:4096'
-                ],
-                placeholder: 'http://127.0.0.1:4096',
-                value: project.wakeChannel
-              });
-              if (entered === null) return;
-              const serverUrl = entered.trim();
-              if (serverUrl) {
-                try {
-                  const parsed = new URL(serverUrl);
-                  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) {
-                    throw new Error('请输入纯 HTTP(S) 服务地址，不要包含路径、查询参数或账号密码');
-                  }
-                } catch (err) {
-                  showToast('✗ ' + ((err as Error).message || 'OpenCode 地址无效'));
-                  return;
-                }
-              }
+              const path = await promptDialog({ title: `配置「${project.name}」工作目录`, lines: ['修改后会影响此项目后续的 Session 查询和任务唤醒。'], placeholder: '绝对路径', value: project.workspacePath });
+              if (path === null) return;
+              const serverUrl = await promptDialog({ title: `配置「${project.name}」OpenCode Server`, lines: ['填写完整地址，例如 http://127.0.0.1:4096。'], placeholder: 'http://127.0.0.1:4096', value: project.wakeChannel });
+              if (serverUrl === null) return;
               try {
-                const updated = await api_.updateProject(pid, { wakeChannel: serverUrl });
-                setProjects(prev => prev.map(p => p.id === pid ? updated : p));
-                showToast(serverUrl ? '已绑定 OpenCode 服务：' + serverUrl : '已解除 OpenCode 服务绑定');
+                const updated = await api_.updateProject(project.id, { workspacePath: path.trim(), wakeChannel: serverUrl.trim(), defaultSessionId: null });
+                setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
+                showToast('项目配置已更新；为避免误唤醒，原默认 Session 与现有任务的会话绑定已清除，请重新选择会话。');
               } catch (err) { showToast('✗ ' + (err as Error).message); }
-            }}>
-              配置 OpenCode</button>
-            <button className="side-btn" disabled={!projectId} title="为当前项目选择默认 OpenCode 会话"
-              onClick={() => setConfigSessionOpen(true)}>
-              配置会话</button>
-            <button className="side-btn danger" title="删除当前项目（输入 id 确认）"
-              onClick={async () => {
-                const pid = projectId ?? '';
-                const pname = projects.find(p => p.id === pid)?.name ?? pid;
-                const typed = await promptDialog({
-                  title: `删除项目「${pname}」`,
-                  lines: [
-                    `项目 id：${pid}`,
-                    `${pid} 连同它的全部任务、评论和附件一起删除，不可恢复。`,
-                    '输入上面的项目 id 以确认：'
-                  ],
-                  placeholder: pid,
-                  value: ''
-                });
-                if (typed === null) return;
-                if (typed.trim() !== pid) { showToast('✗ 项目 id 不匹配，未删除'); return; }
-                try {
-                  await api_.deleteProject(pid);
-                  showToast(`已删除项目 ${pid}`);
-                  loadProjects();
-                } catch (err) { showToast(`✗ ${(err as Error).message}`); }
-              }}>
-              <Trash2 size={14} /> 删除当前项目</button>
+            }}>配置当前项目</button>
+            <button className="side-btn danger" disabled={!projectId} title="删除当前项目（输入 id 确认）" onClick={async () => {
+              const pid = projectId ?? '';
+              const pname = projects.find(p => p.id === pid)?.name ?? pid;
+              const typed = await promptDialog({ title: `删除项目「${pname}」`, lines: [`项目 id：${pid}`, `${pid} 连同它的全部任务、评论和附件一起删除，不可恢复。`, '输入上面的项目 id 以确认：'], placeholder: pid, value: '' });
+              if (typed === null) return;
+              if (typed.trim() !== pid) { showToast('✗ 项目 id 不匹配，未删除'); return; }
+              try { await api_.deleteProject(pid); showToast(`已删除项目 ${pid}`); loadProjects(); }
+              catch (err) { showToast(`✗ ${(err as Error).message}`); }
+            }}><Trash2 size={14} /> 删除当前项目</button>
           </div>
         </aside>
         <div className="main-col">
           <header className="topbar">
+            <div className="topbar-context">
+              <strong>{projects.find(project => project.id === projectId)?.name ?? '选择项目'}</strong>
+              <span>{projects.find(project => project.id === projectId)?.workspacePath ?? '从左侧选择一个项目开始工作'}</span>
+            </div>
             <div className="controls">
               <div className="progress" title="weighted: 父任务等权统计">
                 <div className="progress-fill" style={{ width: `${pct}%` }} />
@@ -560,9 +678,7 @@ export default function App() {
                   {progress ? `${progress.weightedDone}/${progress.weightedTotal} · ${pct}%` : '–'}
                 </span>
               </div>
-              <button className="btn primary" disabled={!projectId}
-                title={projectId ? undefined : '先新建项目再创建任务'}
-                onClick={() => setDialogOpen(true)}>
+              <button className="btn primary" disabled={!projectId} onClick={() => setDialogOpen(true)}>
                 <Plus size={14} /> 新任务</button>
               {/* T5-28 主题切换：图标显示将切换到的目标主题。 */}
               <button className="icon-btn" aria-label="切换主题" title="切换主题"
@@ -582,6 +698,14 @@ export default function App() {
             </div>
           </header>
 
+      <section className="workspace-toolbar" aria-label="任务工作区">
+        <div className="workspace-toolbar-heading">
+          <div>
+            <h2>任务</h2>
+            <p>管理当前项目的任务、进度与优先级</p>
+          </div>
+          <span className="workspace-task-count">{visibleIssues.length} 项任务</span>
+        </div>
       <div className="toolbar">
         <input ref={searchInputRef} className="toolbar-search" placeholder="搜索标题/描述…" value={filters.text}
           onChange={e => setFilters(f => ({ ...f, text: e.target.value }))} />
@@ -609,6 +733,7 @@ export default function App() {
             onClick={() => setSortBy('priority')}>按优先级</button>
         </div>
       </div>
+      </section>
 
       {/* T6-31: 统计面板 —— toolbar 与看板之间的一个区段。 */}
       {statsOpen && <StatsPanel stats={stats} />}
@@ -627,7 +752,20 @@ export default function App() {
 
       {/* T7-37: 时间线激活时替代看板主体（纯前端视图，数据同 visibleIssues，
           过滤/排序工具栏照常生效）。 */}
-      {timelineOpen
+      {!projectId ? (
+        <div className="empty-state project-empty-state">
+          <p>先在左侧目录下创建或选择一个项目。</p>
+          <button className="btn primary" disabled={!directories.length} onClick={() => {
+            const directoryId = directories[0]?.id ?? '';
+            setProjectDirectoryId(directoryId);
+            setProjName(''); setProjId(''); setProjLabels('');
+            setProjWorkspacePath(directories[0]?.workspacePath ?? ''); setProjServerUrl('');
+            setProjDefaultSessionId(''); setProjSessions([]);
+            setProjCreateOpen(true);
+            setExpandedDirectories(prev => new Set(prev).add(directoryId));
+          }}>在目录下创建项目</button>
+        </div>
+      ) : timelineOpen
         ? <Timeline issues={visibleIssues} onOpen={openIssue} />
         : <Board issues={visibleIssues} onOpen={openIssue} blockedByMap={blockedByMap} onDrop={async (id, status) => {
           const issue = issues.find(i => i.id === id);
@@ -685,89 +823,144 @@ export default function App() {
           statuses={STATUSES} />
       )}
 
-      {projectId && <NewIssueDialog open={dialogOpen} projectId={projectId}
-        defaultSessionId={projects.find(p => p.id === projectId)?.sessionId ?? ''}
+      <NewIssueDialog open={dialogOpen} projectId={projectId!}
+        workspacePath={projects.find(project => project.id === projectId)?.workspacePath}
+        defaultSessionId={projects.find(project => project.id === projectId)?.defaultSessionId}
         onClose={() => setDialogOpen(false)}
         onCreated={id => { void refresh(); if (id) openIssue(id); }}
         onError={msg => showToast(`✗ ${msg}`)} />}
 
-      {/* v0.4: 新建项目对话框（id 可选留空由后端定，name 必填）。 */}
+      {directoryCreateOpen && (
+        <dialog open className="new-dialog">
+          <form onSubmit={async e => {
+            e.preventDefault();
+            const name = directoryName.trim();
+            const workspacePath = directoryWorkspacePath.trim() || defaultWorkspacePath.trim();
+            if (!name) { showToast('✗ 目录名称不能为空'); return; }
+            if (!workspacePath) { showToast('请先填写当前目录的工作目录，或在全局设置中配置默认工作目录。'); setSettingsPathInput(defaultWorkspacePath); setSettingsOpen(true); return; }
+            try {
+              const directory = await api_.createDirectory({ name, workspacePath });
+              setDirectories(prev => [...prev, directory]);
+              setExpandedDirectories(prev => new Set(prev).add(directory.id));
+              setDirectoryCreateOpen(false);
+              setProjectDirectoryId(directory.id);
+              setProjWorkspacePath(directory.workspacePath);
+              showToast('已创建目录：' + directory.name);
+            } catch (err) { showToast('✗ ' + (err as Error).message); }
+          }}>
+            <h2>新建目录</h2>
+            <label>目录名称<input required autoFocus value={directoryName} placeholder="例如：前端项目" onChange={e => setDirectoryName(e.target.value)} /></label>
+            <label>默认工作目录地址<input value={directoryWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app" onChange={e => setDirectoryWorkspacePath(e.target.value)} /></label>
+            <p className="dialog-note">新建项目时会自动继承此工作目录地址。需要时仍可在项目中单独修改；OpenCode Server 和 Session 由项目配置。若留空，将使用全局默认工作目录。</p>
+            <menu><button type="button" className="btn" onClick={() => setDirectoryCreateOpen(false)}>取消</button><button type="submit" className="btn primary">创建目录</button></menu>
+          </form>
+        </dialog>
+      )}
+
+      {settingsOpen && (
+        <dialog open className="new-dialog">
+          <form onSubmit={async e => {
+            e.preventDefault();
+            try {
+              const settings = await api_.updateSettings({ defaultWorkspacePath: settingsPathInput.trim() });
+              setDefaultWorkspacePath(settings.defaultWorkspacePath);
+              if (directoryCreateOpen && !directoryWorkspacePath.trim()) setDirectoryWorkspacePath(settings.defaultWorkspacePath);
+              setSettingsOpen(false);
+              showToast(settings.defaultWorkspacePath ? '已保存全局默认工作目录' : '已清空全局默认工作目录');
+            } catch (err) { showToast('✗ 保存全局设置失败：' + (err as Error).message); }
+          }}>
+            <h2>全局设置</h2>
+            <label>默认工作目录地址
+              <input autoFocus value={settingsPathInput} placeholder="例如：D:\\workspace\\projects" onChange={e => setSettingsPathInput(e.target.value)} />
+            </label>
+            <p className="dialog-note">新建目录时会默认填入此路径。留空不会影响已有目录或项目；新建目录时必须手动填写工作目录。修改此设置不会自动修改已创建的目录和项目。</p>
+            <menu><button type="button" className="btn" onClick={() => setSettingsOpen(false)}>取消</button><button type="submit" className="btn primary">保存设置</button></menu>
+          </form>
+        </dialog>
+      )}
+
       {projCreateOpen && (
         <dialog open className="new-dialog">
           <form onSubmit={async e => {
             e.preventDefault();
             const name = projName.trim();
-            if (!name) { setProjError('请填写项目名称。'); return; }
             const id = projId.trim();
-            const sessionId = projSessionId.trim();
-            if (!sessionId) { setProjError('请先选择一个 OpenCode 会话。'); return; }
             const labels = projLabels.trim();
-            setProjError(null);
+            if (!name) { showToast('✗ 项目名称不能为空'); return; }
+            if (!projectDirectoryId || !directories.some(directory => directory.id === projectDirectoryId)) { showToast('✗ 请先选择目录'); return; }
+            if (!projWorkspacePath.trim() || !projServerUrl.trim()) { showToast('✗ 请填写项目工作目录和 OpenCode Server URL'); return; }
+            if (!projDefaultSessionId) { showToast('✗ 请先选择或新建一个 OpenCode Session'); return; }
             try {
-              const workspacePath = projWorkspacePath.trim();
-              const p = await api_.createProject({
-                ...(id ? { id } : {}), name, sessionId,
-                ...(workspacePath ? { workspacePath } : {}), ...(labels ? { labels } : {})
-              });
-              closeProjectDialog();
-              setProjects(prev => [...prev, p]);
-              setProjectId(p.id);
-              showToast(`已创建项目 ${p.id}（唤醒 → ${p.wakeChannel}）`);
-            } catch (err) { setProjError((err as Error).message); }
+              const project = await api_.createProject({ ...(id ? { id } : {}), name, directoryId: projectDirectoryId, defaultSessionId: projDefaultSessionId, workspacePath: projWorkspacePath.trim(), wakeChannel: projServerUrl.trim(), ...(labels ? { labels } : {}) });
+              setProjCreateOpen(false);
+              setProjects(prev => [...prev, project]);
+              setProjectId(project.id);
+              setExpandedDirectories(prev => new Set(prev).add(projectDirectoryId));
+              showToast('已创建项目 ' + project.name);
+              void refresh(project.id);
+            } catch (err) { showToast('✗ ' + (err as Error).message); }
           }}>
             <h2>新建项目</h2>
-            <label>OpenCode 会话（必选）
-              <Select value={projSessionId} onChange={value => {
-                setProjSessionId(value);
-                setProjSessionsError(null);
-                setProjError(null);
-                const picked = projSessions.find(session => session.id === value);
-                // 选中会话后用会话标题回填项目名（标题为空则保留手填内容）。
-                const pickedName = sessionProjectName(picked);
-                if (pickedName) setProjName(pickedName);
-                // 目录非空时自动回填工作区路径；字段仍可手动修改。
-                const dir = sessionWorkspacePath(picked);
-                if (dir && dir !== projWorkspacePath.trim()) {
-                  autoFilledWorkspaceRef.current = dir;
-                  setProjWorkspacePath(dir);
-                } else {
-                  autoFilledWorkspaceRef.current = null;
-                }
-              }}
-                options={projSessions.map(session => ({
-                  value: session.id,
-                  label: session.title + ' · ' + session.id.slice(0, 12)
-                }))}
-                placeholder="选择会话"
-                emptyText={projSessionsLoading ? '正在读取会话…' : '当前没有OpenCode 会话，请先前往OpenCode创建会话'} />
-            </label>
-            {projSessionsLoading && <p className="session-hint">正在读取会话…</p>}
-            {projSessionsError && <p style={{ color: 'var(--danger)', fontSize: 12 }}>{projSessionsError}</p>}
-            <p className="session-hint">选择会话会自动填入项目名称与工作区路径（可修改）；OpenCode 服务地址由服务端配置或默认地址解析。</p>
+            <label>项目名称<input required autoFocus value={projName} placeholder="例如：登录模块" onChange={e => setProjName(e.target.value)} /></label>
             <div className="row">
-              <label>名称
-                <input required value={projName} placeholder="如 登录模块"
-                  onChange={e => { setProjName(e.target.value); setProjError(null); }} />
-              </label>
-              <label>id（可选）
-                <input value={projId} placeholder="留空自动生成"
-                  onChange={e => setProjId(e.target.value)} />
+              <label>项目 ID（可选）<input value={projId} placeholder="留空自动生成" onChange={e => setProjId(e.target.value)} /></label>
+              <label>目录
+                <Select value={projectDirectoryId} onChange={value => { const existing = projects.find(project => project.directoryId === value); setProjectDirectoryId(value); setProjWorkspacePath(directories.find(directory => directory.id === value)?.workspacePath || existing?.workspacePath || ''); setProjServerUrl(existing?.wakeChannel ?? ''); setProjDefaultSessionId(''); setProjSessions([]); }}
+                  options={directories.map(directory => ({ value: directory.id, label: directory.name }))} placeholder="选择目录" />
               </label>
             </div>
-            <label>项目工作区路径（可选，建议填写）
-              <input value={projWorkspacePath} placeholder="如 D:\\workspace\\projects\\my-app"
-                onChange={e => { autoFilledWorkspaceRef.current = null; setProjWorkspacePath(e.target.value); setProjSessionId(''); setProjError(null); }} />
+            <label>项目工作目录绝对路径
+              <input required value={projWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app"
+                onChange={e => { setProjWorkspacePath(e.target.value); setProjDefaultSessionId(''); }} />
             </label>
-            <label>标签（可选）
-              <input value={projLabels} placeholder="标签,逗号分隔"
-                onChange={e => setProjLabels(e.target.value)} />
+            <label>OpenCode Server URL
+              <input required value={projServerUrl} placeholder="例如：http://127.0.0.1:4096"
+                onChange={e => { setProjServerUrl(e.target.value); setProjDefaultSessionId(''); }} />
             </label>
-            {projError && <p style={{ color: 'var(--danger)', fontSize: 12 }}>{projError}</p>}
-            <menu>
-              <button type="button" className="btn" onClick={closeProjectDialog}>取消</button>
-              <button type="submit" className="btn primary"
-                disabled={projSessionsLoading || projSessions.length === 0}>创建</button>
-            </menu>
+            <label>默认 OpenCode Session（必选）
+              <div className="session-select-row">
+                <div className="session-select-control">
+                  <Select value={projDefaultSessionId} onChange={setProjDefaultSessionId}
+                    options={projSessions.map(session => ({ value: session.id, label: session.title + ' · ' + session.id.slice(0, 12) }))}
+                    placeholder={projSessionsLoading ? '正在读取 Session…' : '选择已有 Session'} />
+                </div>
+                <button type="button" className="btn" disabled={!projectDirectoryId || !projWorkspacePath.trim() || !projServerUrl.trim() || projSessionsLoading}
+                  onClick={() => { setSessionTitle(projName.trim() || '新项目'); setSessionCreateOpen(true); }}><Plus size={13} /> 新建 Session</button>
+              </div>
+            </label>
+            {projSessionsError && <p className="form-error">{projSessionsError}</p>}
+            <label>标签（可选）<input value={projLabels} placeholder="标签,逗号分隔" onChange={e => setProjLabels(e.target.value)} /></label>
+            <p className="dialog-note">目录工作目录仅是默认值；项目实际工作目录、OpenCode Server 和默认 Session 必须配置。服务端会校验 Session 的实际目录。新建任务自动继承项目的工作目录和默认 Session。</p>
+            <menu><button type="button" className="btn" onClick={() => { setProjCreateOpen(false); setSessionCreateOpen(false); }}>取消</button><button type="submit" className="btn primary" disabled={projSessionsLoading || !projSessions.some(session => session.id === projDefaultSessionId)}>创建项目</button></menu>
+          </form>
+        </dialog>
+      )}
+
+      {sessionCreateOpen && (
+        <dialog open className="new-dialog">
+          <form onSubmit={async e => {
+            e.preventDefault();
+            if (!projectDirectoryId || !projWorkspacePath.trim() || !projServerUrl.trim()) { showToast('✗ 请先选择目录并填写工作目录和 Server URL'); return; }
+            const title = sessionTitle.trim();
+            if (!title) { showToast('✗ Session 标题不能为空'); return; }
+            try {
+              const result = await api_.createOpenCodeSession(projectDirectoryId, title, projWorkspacePath.trim(), projServerUrl.trim());
+              setProjSessions(prev => [result.session, ...prev.filter(session => session.id !== result.session.id)]);
+              setProjDefaultSessionId(result.session.id);
+              setProjSessionsError(null);
+              setSessionCreateOpen(false);
+              showToast('已创建并选中 Session：' + result.session.id);
+            } catch (err) { showToast('✗ ' + (err as Error).message); }
+          }}>
+            <h2>新建 OpenCode Session</h2>
+            <label>Session 标题<input required autoFocus value={sessionTitle} onChange={e => setSessionTitle(e.target.value)} placeholder="例如：登录模块开发" /></label>
+            <div className="directory-config-summary">
+              <div><span>目录分组</span><code>{directories.find(directory => directory.id === projectDirectoryId)?.name ?? ''}</code></div>
+              <div><span>工作目录</span><code>{projWorkspacePath}</code></div>
+              <div><span>Server</span><code>{projServerUrl}</code></div>
+            </div>
+            <p className="dialog-note">Session 将在指定的项目工作目录中创建；创建成功后自动选为项目默认 Session。</p>
+            <menu><button type="button" className="btn" onClick={() => setSessionCreateOpen(false)}>取消</button><button type="submit" className="btn primary">创建 Session</button></menu>
           </form>
         </dialog>
       )}

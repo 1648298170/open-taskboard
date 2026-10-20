@@ -10,6 +10,7 @@ import type { StoreEvent, TaskboardServerConfig, TaskboardEnv } from '@taskboard
 import { registerErrorHandler } from './error-handler.js';
 import eventsRoutes from './routes/events.js';
 import projectsRoutes from './routes/projects.js';
+import directoriesRoutes from './routes/directories.js';
 import issuesRoutes from './routes/issues.js';
 import commentsRoutes from './routes/comments.js';
 import dependencyRoutes from './routes/dependencies.js';
@@ -77,6 +78,17 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   // One env resolution for the whole app assembly — hooks, webhooks and the
   // issue routes all read from this object (defaults live in core/config.ts).
   const config = resolveServerConfig(opts.env ?? process.env);
+  const effectiveHost = opts.host ?? config.host;
+  // The actor header is a workflow label, not an authentication mechanism.
+  // Without a token the API is safe to expose only on a loopback interface.
+  // Refuse accidental LAN/public exposure instead of silently serving an
+  // unauthenticated API when TASKBOARD_HOST is changed for deployment.
+  const normalizedHost = effectiveHost.toLowerCase().replace(/^\[|\]$/g, '');
+  const loopback = normalizedHost === 'localhost' || normalizedHost === '::1'
+    || /^127(?:\.\d{1,3}){3}$/.test(normalizedHost);
+  if (!config.token && !loopback) {
+    throw new Error('Refusing to bind Taskboard to a non-loopback host without TASKBOARD_TOKEN. Configure a strong token or bind to 127.0.0.1.');
+  }
   const dataDir = opts.dataDir ?? config.dataDir;
   const store = opts.store ?? new Store(dataDir);
 
@@ -135,10 +147,21 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
     });
   }
 
+  // Persistent global defaults are shared across browser clients and survive restarts.
+  app.get('/api/settings', async () => store.getAppSettings());
+  app.put('/api/settings', async (req, reply) => {
+    const body = req.body as { defaultWorkspacePath?: unknown } | null;
+    if (!body || typeof body.defaultWorkspacePath !== 'string' || Object.keys(body).some(key => key !== 'defaultWorkspacePath')) {
+      return reply.code(400).send({ error: 'defaultWorkspacePath must be a string' });
+    }
+    return store.updateAppSettings({ defaultWorkspacePath: body.defaultWorkspacePath });
+  });
+
   // ---- meta ----
   app.get('/api/meta', async () => ({ statuses: STATUSES, priorities: PRIORITIES }));
 
   await app.register(eventsRoutes, { store });
+  await app.register(directoriesRoutes, { store });
   await app.register(projectsRoutes, { store });
   await app.register(issuesRoutes, { store, config });
   await app.register(commentsRoutes, { store });

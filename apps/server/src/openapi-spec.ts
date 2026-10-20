@@ -22,6 +22,7 @@ export type JsonSchemaObject = {
   required?: string[];
   additionalProperties?: boolean;
   minLength?: number;
+  maxLength?: number;
   minimum?: number;
   maximum?: number;
   allOf?: JsonSchemaObject[];
@@ -188,6 +189,101 @@ export const openApiSpec: OpenApiDocument = {
         }
       }
     },
+    '/api/settings': {
+      summary: 'Read and update global application defaults',
+      get: {
+        operationId: 'getAppSettings', summary: 'Read global application settings', tags: ['settings'],
+        responses: { 200: { description: 'Global settings', ...jsonResponse({ $ref: '#/components/schemas/AppSettings' }) }, ...commonResponses(false) }
+      },
+      put: {
+        operationId: 'updateAppSettings', summary: 'Update global application defaults', tags: ['settings'],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { defaultWorkspacePath: { type: 'string' } }, required: ['defaultWorkspacePath'], additionalProperties: false } } },
+        responses: { 200: { description: 'Updated settings', ...jsonResponse({ $ref: '#/components/schemas/AppSettings' }) }, 400: { $ref: '#/components/responses/BadRequest' }, ...commonResponses(true) }
+      }
+    },
+    '/api/directories': {
+      summary: 'List and create workspace directories',
+      get: {
+        operationId: 'listDirectories',
+        summary: 'List workspace directories',
+        tags: ['directories'],
+        responses: {
+          200: { description: 'Workspace directories', ...jsonResponse({ type: 'array', items: { $ref: '#/components/schemas/WorkspaceDirectory' } }) },
+          ...commonResponses(false)
+        }
+      },
+      post: {
+        operationId: 'createDirectory',
+        summary: 'Create a workspace directory with an optional default workspace path',
+        tags: ['directories'],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateDirectoryRequest' } } } },
+        responses: {
+          201: { description: 'Created directory', ...jsonResponse({ $ref: '#/components/schemas/WorkspaceDirectory' }) },
+          400: { $ref: '#/components/responses/BadRequest' },
+          ...commonResponses(true)
+        }
+      }
+    },
+    '/api/directories/{directoryId}': {
+      summary: 'Update or delete a workspace directory',
+      parameters: [{ name: 'directoryId', in: 'path', required: true, schema: { type: 'string' } }],
+      patch: {
+        operationId: 'updateDirectory',
+        summary: 'Update directory name or default workspace path',
+        tags: ['directories'],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PatchDirectoryRequest' } } } },
+        responses: {
+          200: { description: 'Updated directory', ...jsonResponse({ $ref: '#/components/schemas/WorkspaceDirectory' }) },
+          400: { $ref: '#/components/responses/BadRequest' },
+          404: { $ref: '#/components/responses/NotFound' },
+          ...commonResponses(true)
+        }
+      },
+      delete: {
+        operationId: 'deleteDirectory',
+        summary: 'Delete an empty workspace directory',
+        tags: ['directories'],
+        responses: {
+          200: { description: 'Deleted directory', ...jsonResponse({ $ref: '#/components/schemas/Ok' }) },
+          400: { $ref: '#/components/responses/BadRequest' },
+          404: { $ref: '#/components/responses/NotFound' },
+          ...commonResponses(true)
+        }
+      }
+    },
+    '/api/directories/{directoryId}/opencode-sessions': {
+      summary: 'List or create OpenCode sessions in a workspace directory',
+      parameters: [{ name: 'directoryId', in: 'path', required: true, schema: { type: 'string' } }],
+      get: {
+        operationId: 'listDirectoryOpenCodeSessions',
+        summary: 'List OpenCode sessions for the supplied project workspace path and server',
+        tags: ['directories'],
+        parameters: [
+          { name: 'workspacePath', in: 'query', required: true, schema: { type: 'string' } },
+          { name: 'serverUrl', in: 'query', required: true, schema: { type: 'string', format: 'uri' } }
+        ],
+        responses: {
+          200: { description: 'Sessions in the directory', ...jsonResponse({ type: 'object', additionalProperties: true }) },
+          400: { $ref: '#/components/responses/BadRequest' },
+          404: { $ref: '#/components/responses/NotFound' },
+          502: { description: 'OpenCode server error', ...jsonResponse({ $ref: '#/components/schemas/Error' }) },
+          ...commonResponses(false)
+        }
+      },
+      post: {
+        operationId: 'createDirectoryOpenCodeSession',
+        summary: 'Create an OpenCode session in the directory path',
+        tags: ['directories'],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { title: { type: 'string', minLength: 1, maxLength: 200 } }, required: ['title'], additionalProperties: false } } },
+        responses: {
+          201: { description: 'Created session', ...jsonResponse({ type: 'object', additionalProperties: true }) },
+          400: { $ref: '#/components/responses/BadRequest' },
+          404: { $ref: '#/components/responses/NotFound' },
+          502: { description: 'OpenCode server error', ...jsonResponse({ $ref: '#/components/schemas/Error' }) },
+          ...commonResponses(true)
+        }
+      }
+    },
     '/api/projects': {
       summary: 'List / create projects',
       get: {
@@ -201,11 +297,7 @@ export const openApiSpec: OpenApiDocument = {
       },
       post: {
         operationId: 'createProject',
-        summary: 'Create a project',
-        description:
-          'The web actor (x-taskboard-actor: web) must provide sessionId; a blank wakeChannel is filled by the server ' +
-          'from the default OpenCode resolution order — explicit value → TASKBOARD_OPENCODE_URL → newest project ' +
-          'wakeChannel → http://127.0.0.1:4096. Other actors may create projects without a wake channel or default session.',
+        summary: 'Create a project; when a default Session is supplied, its actual directory is validated against workspacePath',
         tags: ['projects'],
         requestBody: {
           required: true,
@@ -233,18 +325,15 @@ export const openApiSpec: OpenApiDocument = {
         }
       },
       patch: {
-        operationId: 'updateProject',
-        summary: 'Update a project (name / wake channel / labels / default session)',
-        description:
-          'All fields optional (strict body). `sessionId: ""` clears the project default session; a non-empty value ' +
-          'sets it (and is inherited by newly created issues).',
+        operationId: 'patchProject',
+        summary: 'Update project configuration; an explicitly bound default Session is validated against the effective workspace path and Server URL',
         tags: ['projects'],
         requestBody: {
           required: true,
-          content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateProjectRequest' } } }
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/PatchProjectRequest' } } }
         },
         responses: {
-          200: { description: 'The updated project', ...jsonResponse({ $ref: '#/components/schemas/Project' }) },
+          200: { description: 'Updated project', ...jsonResponse({ $ref: '#/components/schemas/Project' }) },
           400: { $ref: '#/components/responses/BadRequest' },
           404: { $ref: '#/components/responses/NotFound' },
           ...commonResponses(true)
@@ -990,19 +1079,37 @@ export const openApiSpec: OpenApiDocument = {
         description: 'Issue priority (list order: urgent first)',
         enum: [...PRIORITIES]
       },
+      AppSettings: {
+        type: 'object', description: 'Persistent global application defaults',
+        properties: { defaultWorkspacePath: { type: 'string', description: 'Default path prefilled when creating workspace directories' } },
+        required: ['defaultWorkspacePath'], additionalProperties: false
+      },
+      WorkspaceDirectory: {
+        type: 'object',
+        description: 'Workspace directory grouping for projects',
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string', description: 'Sidebar grouping name; not a filesystem path' },
+          workspacePath: { type: 'string', description: 'Default filesystem workspace path inherited by new projects' },
+          createdAt: { type: 'string', format: 'date-time' }
+        },
+        required: ['id', 'name', 'workspacePath', 'createdAt'],
+        additionalProperties: false
+      },
       Project: {
         type: 'object',
         description: 'A board project',
         properties: {
           id: { type: 'string', description: 'Client-supplied id or a generated 8-char id' },
           name: { type: 'string' },
-          workspacePath: { type: 'string', description: 'Bound git workspace; empty string = unbound' },
-          wakeChannel: { type: 'string', description: 'OpenCode/TUI wake URL for this project; empty string = unbound' },
-          labels: { type: 'string', description: 'Comma-separated project labels' },
-          sessionId: { type: 'string', description: 'Default OpenCode session inherited by newly created issues; empty string = no default' },
+          directoryId: { type: ['string', 'null'] },
+          defaultSessionId: { type: ['string', 'null'], description: 'Optional default session preselected for new tasks' },
+          workspacePath: { type: 'string', description: 'Project-specific filesystem workspace path' },
+          wakeChannel: { type: 'string', description: 'Project-specific OpenCode Server URL' },
+          labels: { type: 'string' },
           createdAt: { type: 'string', format: 'date-time' }
         },
-        required: ['id', 'name', 'workspacePath', 'wakeChannel', 'labels', 'sessionId', 'createdAt'],
+        required: ['id', 'name', 'directoryId', 'defaultSessionId', 'workspacePath', 'wakeChannel', 'labels', 'createdAt'],
         additionalProperties: false
       },
       Issue: {
@@ -1219,21 +1326,49 @@ export const openApiSpec: OpenApiDocument = {
         },
         required: ['type', 'payload', 'revision', 'at']
       },
+      CreateDirectoryRequest: {
+        type: 'object',
+        description: 'POST /api/directories body (strict)',
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string', minLength: 1 },
+          workspacePath: { type: 'string' }
+        },
+        required: ['name'],
+        additionalProperties: false
+      },
+      PatchDirectoryRequest: {
+        type: 'object',
+        description: 'PATCH /api/directories/{directoryId} body (strict)',
+        properties: {
+          name: { type: 'string', minLength: 1 },
+          workspacePath: { type: 'string' }
+        },
+        additionalProperties: false
+      },
+      PatchProjectRequest: {
+        type: 'object',
+        description: 'PATCH /api/projects/{projectId} body (strict)',
+        properties: {
+          name: { type: 'string', minLength: 1 },
+          workspacePath: { type: 'string' },
+          wakeChannel: { type: 'string', maxLength: 200 },
+          defaultSessionId: { type: ['string', 'null'] },
+          labels: { type: 'string' }
+        },
+        additionalProperties: false
+      },
       CreateProjectRequest: {
         type: 'object',
         description: 'POST /api/projects body (strict — unknown keys → 400)',
         properties: {
           id: { type: 'string', description: 'Omit for a generated 8-char id; an existing id → 409' },
           name: { type: 'string', minLength: 1 },
-          workspacePath: { type: 'string' },
-          wakeChannel: {
-            type: 'string',
-            description:
-              'OpenCode/TUI wake URL. Optional for the web actor (blank → server-filled from TASKBOARD_OPENCODE_URL → ' +
-              'newest project wakeChannel → http://127.0.0.1:4096).'
-          },
-          labels: { type: 'string', description: 'Comma-separated project labels' },
-          sessionId: { type: 'string', minLength: 1, description: 'Default OpenCode session for new issues; required for the web actor' }
+          directoryId: { type: 'string', description: 'Workspace directory to create the project under' },
+          defaultSessionId: { type: ['string', 'null'], description: 'Selected OpenCode session for new tasks' },
+          workspacePath: { type: 'string', description: 'Project filesystem workspace path' },
+          wakeChannel: { type: 'string', description: 'Project OpenCode Server URL' },
+          labels: { type: 'string' }
         },
         required: ['name'],
         additionalProperties: false

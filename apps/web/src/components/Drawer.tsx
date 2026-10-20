@@ -152,7 +152,7 @@ export function Drawer({ issueId, projectId, statuses, onClose, onChanged, onToa
         <span className="issue-id">#{detail.id} · v{detail.version}</span>
         <button className="icon-btn" onClick={onClose}><X size={16} /></button>
       </div>
-      <h2 contentEditable suppressContentEditableWarning
+      <h2 className="task-detail-title" contentEditable suppressContentEditableWarning
         onBlur={e => { const v = e.currentTarget.textContent?.trim(); if (v && v !== detail.title) void patch({ title: v }); }}>
         {detail.title}
       </h2>

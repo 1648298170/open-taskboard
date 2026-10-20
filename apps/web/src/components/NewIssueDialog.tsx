@@ -4,11 +4,11 @@ import { api_, OpenCodeSessionOption, PRIORITIES, Priority } from '../api';
 import { initialSessionId, mergeSessionOptions } from '../logic/session';
 import { WAKE_PREFIX } from '@taskboard/core/types';
 
-export function NewIssueDialog({ open, projectId, defaultSessionId = '', onClose, onCreated, onError }: {
+export function NewIssueDialog({ open, projectId, workspacePath, defaultSessionId, onClose, onCreated, onError }: {
   open: boolean;
   projectId: string;
-  /** 项目绑定的默认会话；为空时仍需人工选择。 */
-  defaultSessionId?: string;
+  workspacePath?: string;
+  defaultSessionId?: string | null;
   onClose: () => void;
   onCreated: (parentId?: string) => void;
   onError: (msg: string) => void;
@@ -33,10 +33,9 @@ export function NewIssueDialog({ open, projectId, defaultSessionId = '', onClose
     api_.openCodeSessions(projectId)
       .then(result => {
         if (cancelled) return;
-        const merged = mergeSessionOptions(result.sessions, defaultSessionId);
-        setSessions(merged.options);
-        setMissingDefault(merged.missingDefault);
-        if (result.sessions.length === 0 && !merged.missingDefault) {
+        setSessions(result.sessions);
+        if (defaultSessionId && result.sessions.some(session => session.id === defaultSessionId)) setSessionId(defaultSessionId);
+        if (result.sessions.length === 0) {
           setSessionsError(result.workspacePath
             ? '没有找到目录匹配项目工作区的会话：' + result.workspacePath
             : '当前 OpenCode 服务没有可选会话，请先在 OpenCode 中创建或打开一个会话。');
@@ -95,9 +94,14 @@ export function NewIssueDialog({ open, projectId, defaultSessionId = '', onClose
   };
 
   return (
-    <dialog open className="new-dialog">
-      <form onSubmit={submit}>
-        <h2>新任务</h2>
+    <dialog open className="new-dialog new-issue-dialog">
+      <form className="new-issue-form" onSubmit={submit}>
+        <div className="dialog-heading">
+          <span className="dialog-eyebrow">TASK</span>
+          <h2>新建任务</h2>
+          <p>为当前项目创建一个任务，并绑定对应的 OpenCode 会话。</p>
+        </div>
+        {workspacePath && <p className="session-hint">工作目录继承自所属项目：{workspacePath}</p>}
         <label>标题<input name="title" required autoFocus placeholder="一句话讲清楚要做什么" /></label>
         <label>父任务 ID（可选，留空为顶层任务）<input name="parent" placeholder="填父任务 id，如 a1b2c3d4" /></label>
         <label>OpenCode 会话（必选）

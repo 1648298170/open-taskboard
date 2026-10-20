@@ -66,10 +66,11 @@ taskboard project delete skill-test --yes
 ## 5 分钟上手（人类视角）
 
 1. `pnpm install && pnpm start` → 浏览器打开 `http://127.0.0.1:47824`
-2. 首次打开直接进入面板（侧栏显示「当前没有项目」）；点「＋ 新建项目」建第一个项目：只需选择一个已有会话（首个字段「OpenCode 会话（必选）」，占满整行的下拉，占位「选择会话」）；选中后自动用会话标题填入项目名称、用会话 `directory` 填入工作区路径（两者仍可改），OpenCode 服务地址由服务端解析
-3. 「＋ 新任务」建任务——勾选「创建后唤醒 agent 编排」可直接召唤 AI 接手
-4. 拖卡片流转状态；拖**父任务**时会询问是否整组移动（子任务跟随）
-5. 点卡片开抽屉：改状态/负责人/分支/会话绑定、拆子任务、排依赖、传附件、写评论（输入 @ 唤醒 agent）
+2. 首次使用可在左侧「全局设置」配置默认工作目录；该设置保存在 taskboard 数据库中，供所有浏览器客户端共享。新建目录时自动预填，也可以单独填写当前目录路径；两者都为空时不允许创建。更改全局默认值不会改动已有目录或项目
+3. 在目录下创建项目时自动继承默认工作目录（目录路径可选）；项目必须配置实际工作目录、OpenCode Server URL，并选择已有 Session 或新建 Session。服务端校验所选 Session 的实际目录后才允许绑定
+4. 「＋ 新任务」建任务——默认预选项目 Session，也可以选择同一项目目录下的其他会话；勾选「创建后唤醒 agent 编排」可直接召唤 AI 接手
+5. 拖卡片流转状态；拖**父任务**时会询问是否整组移动（子任务跟随）
+6. 点卡片开抽屉：改状态/负责人/分支/会话绑定、拆子任务、排依赖、传附件、写评论（输入 @ 唤醒 agent）
 
 ## 任务流转与协作规则（人话版）
 
@@ -134,7 +135,7 @@ todo → in_progress → in_review → done
 - 时间线视图 📅（甘特 lite）、统计面板 📊（周吞吐/平均周期/贡献榜）
 - 快捷键：`/` 搜索 · `n` 新建 · `j/k` 上下移动 · `Enter` 打开 · `?` 全部帮助
 - 附件上传下载（每任务 ≤20 个/总量 ≤50MB）、桌面通知、暗/亮主题
-- 新建任务仍需选择会话：项目有默认会话时自动预选；无默认会话的旧项目保持旧行为（手动从项目绑定的 OpenCode 服务选择）。保存后写入 `sessionId`，后续唤醒直达同一会话上下文
+- 全局设置保存新建目录默认工作目录（跨浏览器共享）；左侧目录用于分组管理项目，并可单独覆盖默认继承的工作目录地址；项目保存必需的实际工作目录（可覆盖目录默认值）、OpenCode Server URL 和默认 Session；绑定 Session 时服务端会校验该 Session 的实际目录。新建任务自动使用项目工作目录与默认 Session，不必重复填写路径；任务保存实际执行的 `sessionId`，唤醒时继续原会话上下文
 
 ## 评论唤醒 agent（watch 侧车）
 
@@ -157,7 +158,7 @@ taskboard watch                                        # opencode run（默认�
 
 > 模型注意：`--model` 走 opencode 的 `-m` 约定；Claude/Codex 用自家 `--model` 参数时直接写进 `--exec`（如 `--exec "claude --model sonnet -p"`），不要混用 `--model`。
 
-**绑定即路由（推荐）**：面板新建项目只需选择一个已有会话（存为 `project.sessionId`），没有服务地址/唤醒端口输入框；服务地址由服务端按「显式 `url` query（仅 API）→ `TASKBOARD_OPENCODE_URL` → 最近创建项目的 `wakeChannel` → `http://127.0.0.1:4096`」解析，并写入新项目的 `wakeChannel`。选中会话会自动用会话标题填入项目名称、用会话 `directory` 填入工作区路径（两者均可改）。项目内的新任务默认继承该会话，创建时也可显式覆盖；工作区路径已配置时仅显示目录匹配的会话。无默认会话的旧项目仍按旧行为：新建任务时手动选择会话。`@agent` 评论对已绑定任务直接发往该 session 的 `prompt_async`，未绑定任务才注入 TUI。项目路由存在数据里，改绑即时生效，**一只 watch 覆盖所有项目**；修改项目会话只影响后续新建任务，已有任务不会追溯改绑。项目配置对话框使用无状态 `GET /api/opencode/sessions?url=<可选>&workspacePath=<可选>` 获取会话（`url` 省略时按上述默认顺序解析；返回 `{ sessions, workspacePath, serverUrl }`）；项目内配置沿用 `GET /api/projects/{id}/opencode-sessions`。CLI 等价：`taskboard project create --wake-port 4097 --session-id <会话ID>`、`taskboard project set --id demo --wake-port 4099 --session-id <新会话ID>`（`--session-id ''` 清除）；CLI 的显式 `--wake-port` 与 Web 面板的自动解析相互独立。项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时，服务地址仍需用于会话路由。
+**目录分组 + 项目会话绑定**：左侧目录是项目分组并保存默认工作目录；项目继承该路径（可单独覆盖），并保存 OpenCode Server URL 和默认 Session。创建项目时可选择已有 Session，或通过「新建 Session」按钮在指定工作目录中创建。任务默认预选项目 Session，也可以选择同一工作目录下的其他会话。`@agent` 评论对已绑定任务直接发往对应 Server 的 `prompt_async`，未绑定任务才注入 TUI。项目路由存在数据里，改绑即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时留空即可。
 
 ### 先把 opencode 终端跑起来（watch 的目的地）
 

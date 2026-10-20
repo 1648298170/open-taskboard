@@ -22,33 +22,24 @@ describe('normalizeOpenCodeBase', () => {
   });
 });
 
-describe('filterSessionsByWorkspace', () => {
-  const session = (id: string, directory: string): OpenCodeSessionOption => ({ id, title: id, directory, updatedAt: null });
 
-  it('returns every session when the workspace path is empty', () => {
-    const sessions = [session('a', '/one'), session('b', '/two')];
-    assert.deepEqual(filterSessionsByWorkspace(sessions, ''), sessions);
-    assert.deepEqual(filterSessionsByWorkspace(sessions, '   '), sessions);
+describe('OpenCode metadata destination guard', () => {
+  it('rejects common cloud metadata and link-local destinations', () => {
+    for (const url of [
+      'http://169.254.169.254',
+      'http://169.254.12.34:4096',
+      'http://metadata.google.internal',
+      'http://100.100.100.200',
+      'http://[fd00:ec2::254]'
+    ]) {
+      assert.throws(
+        () => normalizeOpenCodeBase(url),
+        /metadata address/
+      );
+    }
   });
 
-  it('matches normalized directories and drops sessions without a directory', () => {
-    const workspace = process.cwd();
-    const trailing = `${workspace}${process.platform === 'win32' ? '\\' : '/'}`;
-    const sessions = [
-      session('match', workspace),
-      session('trailing', trailing),
-      session('other', join(workspace, 'other')),
-      session('none', '')
-    ];
-    const ids = filterSessionsByWorkspace(sessions, workspace).map(s => s.id);
-    assert.deepEqual(ids, ['match', 'trailing']);
-  });
-
-  it('is case-insensitive on win32 only', () => {
-    const workspace = process.cwd();
-    const sessions = [session('upper', workspace.toUpperCase())];
-    const ids = filterSessionsByWorkspace(sessions, workspace).map(s => s.id);
-    if (process.platform === 'win32') assert.deepEqual(ids, ['upper']);
-    else assert.deepEqual(ids, []);
+  it('continues to allow a local OpenCode server', () => {
+    assert.equal(normalizeOpenCodeBase('http://127.0.0.1:4096'), 'http://127.0.0.1:4096');
   });
 });

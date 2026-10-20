@@ -2,11 +2,11 @@
 // one definition shared by server / cli / mcp / web. Imported via the
 // './types' subpath so the Node-only SQLite Store stays out of the bundle.
 import type {
-  Activity, Attachment, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Stats, Status
+  Activity, Attachment, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Stats, Status, WorkspaceDirectory
 } from '@taskboard/core/types';
 
 export type {
-  Activity, Attachment, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Stats, Status
+  Activity, Attachment, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Stats, Status, WorkspaceDirectory
 };
 export { STATUSES, PRIORITIES, activeClaim } from '@taskboard/core/types';
 /** 中文状态名映射（列头/下拉/统计 chip 显示用；数据层存英文枚举不变） */
@@ -63,9 +63,25 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 export const api_ = {
+  getSettings: () => api<{ defaultWorkspacePath: string }>('GET', '/api/settings'),
+  updateSettings: (p: { defaultWorkspacePath: string }) => api<{ defaultWorkspacePath: string }>('PUT', '/api/settings', p),
+  listDirectories: () => api<WorkspaceDirectory[]>('GET', '/api/directories'),
+  createDirectory: (p: { id?: string; name: string; workspacePath?: string }) =>
+    api<WorkspaceDirectory>('POST', '/api/directories', p),
+  updateDirectory: (id: string, p: { name?: string; workspacePath?: string }) =>
+    api<WorkspaceDirectory>('PATCH', `/api/directories/${encodeURIComponent(id)}`, p),
+  deleteDirectory: (id: string) => api<{ ok: true }>('DELETE', `/api/directories/${encodeURIComponent(id)}`),
+  openCodeSessionsForDirectory: (id: string, workspacePath: string, serverUrl: string) =>
+    api<{ sessions: OpenCodeSessionOption[]; directoryId: string; directoryPath: string; serverUrl: string }>(
+      'GET', `/api/directories/${encodeURIComponent(id)}/opencode-sessions?workspacePath=${encodeURIComponent(workspacePath)}&serverUrl=${encodeURIComponent(serverUrl)}`
+    ),
+  createOpenCodeSession: (id: string, title: string, workspacePath: string, serverUrl: string) =>
+    api<{ session: OpenCodeSessionOption; directoryId: string; serverUrl: string }>(
+      'POST', `/api/directories/${encodeURIComponent(id)}/opencode-sessions`, { title, workspacePath, serverUrl }
+    ),
   listProjects: () => api<Project[]>('GET', '/api/projects'),
-  createProject: (p: { id?: string; name: string; workspacePath?: string; wakeChannel?: string; labels?: string; sessionId?: string }) => api<Project>('POST', '/api/projects', p),
-  updateProject: (id: string, p: { name?: string; wakeChannel?: string; labels?: string; sessionId?: string }) => api<Project>('PATCH', `/api/projects/${id}`, p),
+  createProject: (p: { id?: string; name: string; directoryId?: string; defaultSessionId?: string | null; workspacePath?: string; wakeChannel?: string; labels?: string }) => api<Project>('POST', '/api/projects', p),
+  updateProject: (id: string, p: { name?: string; workspacePath?: string; wakeChannel?: string; defaultSessionId?: string | null }) => api<Project>('PATCH', `/api/projects/${id}`, p),
   deleteProject: (id: string) => api<void>('DELETE', `/api/projects/${id}`),
   listIssues: (projectId: string) => api<Issue[]>('GET', `/api/projects/${projectId}/issues`),
   showIssue: (id: string) => api<IssueDetail>('GET', `/api/issues/${id}`),

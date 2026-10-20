@@ -20,9 +20,26 @@ export const PRIORITIES = ['urgent', 'high', 'medium', 'low'] as const;
 export type Status = (typeof STATUSES)[number];
 export type Priority = (typeof PRIORITIES)[number];
 
+export interface AppSettings {
+  /** Default workspace path prefilled for newly created directories. */
+  defaultWorkspacePath: string;
+}
+
+export interface WorkspaceDirectory {
+  id: string;
+  name: string;
+  /** Default filesystem workspace inherited by newly created projects in this directory. */
+  workspacePath: string;
+  createdAt: string;
+}
+
 export interface Project {
   id: string;
   name: string;
+  /** Parent workspace directory shown in the sidebar. */
+  directoryId: string | null;
+  /** Optional session preselected when creating tasks in this project. */
+  defaultSessionId: string | null;
   workspacePath: string;
   /** TUI URL (e.g. http://127.0.0.1:4097) the watch delivers this project's wakes to; '' = unbound. */
   wakeChannel: string;

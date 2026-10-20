@@ -35,8 +35,8 @@ function Column({ status, laneIssues, boardEmpty, onOpen, onDrop, blockedByMap, 
     (blockedByMap?.get(id) ?? []).some(dep => statusById.get(dep) !== 'done');
   return (
     <section ref={setNodeRef} className={`column${isOver ? ' drag-over' : ''}`} data-status={status}>
-      <h2>
-        <span className={`dot ${status}`} />{STATUS_CN[status] ?? status}
+      <h2 className="column-heading">
+        <span className={`dot ${status}`} aria-hidden="true" />{STATUS_CN[status] ?? status}
         {/* v0.4: 计数 = 顶层卡片组数（子任务嵌在父卡下，不计入本列）——
             数字与所见严格一致，杜绝「有数字没卡片」。 */}
         <span className="count">{list.filter(i => !i.parentId).length}</span>
@@ -197,6 +197,7 @@ function CardView({ issue, child, locked, childProgress, active, overlay,
 }) {
   return (
     <article ref={domRef}
+      aria-label={`任务：${issue.title}`}
       className={`card${active ? ' card-active' : ''}${className ?? ''}${overlay ? ' overlay' : ''}`}
       data-status={issue.status}
       data-card-id={issue.id}

@@ -3,13 +3,18 @@ import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { Store, ValidationError } from '@taskboard/core';
 import { createProjectSchema, projectPatchSchema, z } from '@taskboard/core/schemas';
 import { listCommits, scanGitRefs } from '../git-refs.js';
-import { filterSessionsByWorkspace, listOpenCodeSessions, normalizeOpenCodeBase, resolveOpenCodeBase } from '../opencode.js';
+import { listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
 
 interface ProjectParams { projectId: string }
 interface CommitsQuery { ref?: string }
 interface StatsQuery { weeks?: string }
 
 // One readable line per zod issue: "field: message; field: message".
+function normalizeDirectoryPath(value: string): string {
+  const trimmed = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^[a-zA-Z]:\//.test(trimmed) ? trimmed.toLowerCase() : trimmed;
+}
+
 const validationMessage = (error: z.ZodError): string =>
   error.issues.map(i => (i.path.length > 0 ? `${i.path.map(String).join('.')}: ` : '') + i.message).join('; ');
 
@@ -30,17 +35,30 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
   app.post('/api/projects', async (req, reply) => {
     const parsed = createProjectSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
-    // The web UI must bind a default OpenCode session when it creates a
-    // project. The wake channel is optional: a blank one is filled from the
-    // shared default resolution (env → recent project → 127.0.0.1:4096).
-    // CLI/MCP may still create projects without a session (legacy/headless).
-    const isWeb = String(req.headers['x-taskboard-actor'] ?? '') === 'web';
-    if (isWeb && !parsed.data.sessionId?.trim()) {
-      return reply.code(400).send({ error: '新建项目必须先选择一个 OpenCode 会话（sessionId 不能为空）' });
+    const input = parsed.data;
+
+    // When a project binds a default Session, verify the binding against the
+    // authoritative OpenCode server response. Legacy API clients may still
+    // create an unbound project, but a supplied Session can never be accepted
+    // without a workspace path and Server URL.
+    if (input.defaultSessionId) {
+      const workspacePath = input.workspacePath?.trim() ?? '';
+      const serverUrl = input.wakeChannel?.trim() ?? '';
+      if (!workspacePath || !serverUrl) {
+        return reply.code(400).send({ error: '绑定默认 Session 必须同时提供项目工作目录和 OpenCode Server URL' });
+      }
+      try {
+        const base = normalizeOpenCodeBase(serverUrl);
+        const sessions = await listOpenCodeSessions(base, workspacePath);
+        const expectedPath = normalizeDirectoryPath(workspacePath);
+        const session = sessions.find(item => item.id === input.defaultSessionId);
+        if (!session || !session.directory || normalizeDirectoryPath(session.directory) !== expectedPath) {
+          return reply.code(400).send({ error: '默认 Session 不存在，或其实际工作目录与项目工作目录不一致；未创建项目' });
+        }
+      } catch (err) {
+        return reply.code(502).send({ error: `无法验证 OpenCode Session：${(err as Error).message}` });
+      }
     }
-    const input = isWeb && !parsed.data.wakeChannel?.trim()
-      ? { ...parsed.data, wakeChannel: resolveOpenCodeBase(undefined, recentProjectChannels(store)) }
-      : parsed.data;
     return reply.code(201).send(store.createProject(input));
   });
 
@@ -51,10 +69,34 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
 
   // Partial project update — name and/or the wake-channel binding. No version
   // guard (projects have no optimistic lock); last write wins like the web UI.
-  app.patch('/api/projects/:projectId', async (req: FastifyRequest<{ Params: ProjectParams }>) => {
+  app.patch('/api/projects/:projectId', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
     const parsed = projectPatchSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
-    return store.updateProject(req.params.projectId, parsed.data);
+    const patch = parsed.data;
+    const current = store.getProject(req.params.projectId);
+    if (!current) return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
+
+    // Validate every explicit default-Session binding against the effective
+    // workspace/server pair before persisting it.
+    if (typeof patch.defaultSessionId === 'string') {
+      const workspacePath = (patch.workspacePath ?? current.workspacePath).trim();
+      const serverUrl = (patch.wakeChannel ?? current.wakeChannel).trim();
+      if (!workspacePath || !serverUrl) {
+        return reply.code(400).send({ error: '绑定默认 Session 必须同时配置项目工作目录和 OpenCode Server URL' });
+      }
+      try {
+        const base = normalizeOpenCodeBase(serverUrl);
+        const sessions = await listOpenCodeSessions(base, workspacePath);
+        const expectedPath = normalizeDirectoryPath(workspacePath);
+        const session = sessions.find(item => item.id === patch.defaultSessionId);
+        if (!session || !session.directory || normalizeDirectoryPath(session.directory) !== expectedPath) {
+          return reply.code(400).send({ error: '默认 Session 不存在，或其实际工作目录与项目工作目录不一致；未更新项目' });
+        }
+      } catch (err) {
+        return reply.code(502).send({ error: `无法验证 OpenCode Session：${(err as Error).message}` });
+      }
+    }
+    return store.updateProject(req.params.projectId, patch);
   });
 
   // OpenCode v1 sessions available to bind to a task. Sessions are read from
@@ -63,37 +105,19 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     const project = store.getProject(req.params.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
     if (!project.wakeChannel) {
-      return reply.code(400).send({ error: '先在项目设置中配置 OpenCode 唤醒端口，再选择会话' });
+      return reply.code(400).send({ error: '先在项目设置中配置 OpenCode Server URL，再选择会话' });
+    }
+    if (!project.workspacePath.trim()) {
+      return reply.code(400).send({ error: '先在项目设置中配置工作目录，再查询 Session' });
     }
     try {
       const base = normalizeOpenCodeBase(project.wakeChannel);
-      const sessions = await listOpenCodeSessions(base);
+      const sessions = await listOpenCodeSessions(base, project.workspacePath);
       const workspace = project.workspacePath.trim();
-      return { sessions: filterSessionsByWorkspace(sessions, workspace), workspacePath: workspace, serverUrl: base };
-    } catch (err) {
-      return reply.code(502).send({ error: `无法读取 OpenCode 会话：${(err as Error).message}` });
-    }
-  });
-
-  // Stateless session discovery for the create-project flow (the project does
-  // not exist yet, so workspacePath comes from the query string). `url` is
-  // optional: blank resolves through the shared default order (env →
-  // newest project wakeChannel → 127.0.0.1:4096). Shares normalization +
-  // workspace filtering with the project-scoped endpoint.
-  app.get('/api/opencode/sessions', async (req: FastifyRequest<{ Querystring: { url?: string; workspacePath?: string } }>, reply) => {
-    const rawUrl = String(req.query.url ?? '').trim();
-
-    let base: string;
-    try {
-      base = resolveOpenCodeBase(rawUrl || undefined, recentProjectChannels(store));
-    } catch (err) {
-      return reply.code(400).send({ error: `url: ${(err as Error).message}` });
-    }
-
-    try {
-      const sessions = await listOpenCodeSessions(base);
-      const workspace = String(req.query.workspacePath ?? '').trim();
-      return { sessions: filterSessionsByWorkspace(sessions, workspace), workspacePath: workspace, serverUrl: base };
+      const compatible = workspace
+        ? sessions.filter(session => session.directory && normalizeDirectoryPath(session.directory) === normalizeDirectoryPath(workspace))
+        : sessions;
+      return { sessions: compatible, workspacePath: workspace, serverUrl: base };
     } catch (err) {
       return reply.code(502).send({ error: `无法读取 OpenCode 会话：${(err as Error).message}` });
     }

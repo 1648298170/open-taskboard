@@ -1,6 +1,6 @@
 // T7-39 attachment routes. sqlite carries metadata rows only (core repo);
-// file bodies live on disk under <dataDir>/attachments/<issueId>/, written
-// by this plugin right after the row is recorded.
+// file bodies live on disk under <dataDir>/attachments/<issueId>/, persisted
+// atomically with metadata through Store.addAttachmentWithBody.
 //
 // Endpoints:
 //   POST /api/issues/:id/attachments          multipart upload (1 file, ≤10MB)
@@ -11,7 +11,7 @@
 // app.ts rejects the POST with 403 before this handler runs — uploads are
 // covered by the same gate as every other mutating endpoint. Auth
 // (TASKBOARD_TOKEN) likewise applies to all three via the /api/* hook.
-import { createReadStream, existsSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import multipart from '@fastify/multipart';
@@ -53,8 +53,7 @@ const attachmentsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
     const body = await file.toBuffer();
     if (body.byteLength === 0) throw new ValidationError('attachment file must not be empty');
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
-    const attachment = store.addAttachment(issueId, filename, body.byteLength, actor);
-    writeFileSync(store.attachmentPathFor(issueId, attachment.id, filename), body);
+    const attachment = store.addAttachmentWithBody(issueId, filename, body, actor);
     return reply.code(201).send(attachment);
   });
 

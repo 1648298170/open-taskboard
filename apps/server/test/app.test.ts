@@ -50,7 +50,70 @@ async function seedProject(app: FastifyInstance): Promise<string> {
   return 'p1';
 }
 
+describe('global application settings', () => {
+  it('persists the default workspace path and validates updates', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      const initial = await app.inject({ method: 'GET', url: '/api/settings' });
+      assert.equal(initial.statusCode, 200);
+      assert.equal(initial.json<{ defaultWorkspacePath: string }>().defaultWorkspacePath, '');
+
+      const updated = await app.inject({
+        method: 'PUT', url: '/api/settings', headers: json,
+        payload: { defaultWorkspacePath: 'D:/workspace/projects' }
+      });
+      assert.equal(updated.statusCode, 200);
+      assert.equal(updated.json<{ defaultWorkspacePath: string }>().defaultWorkspacePath, 'D:/workspace/projects');
+
+      const reread = await app.inject({ method: 'GET', url: '/api/settings' });
+      assert.equal(reread.json<{ defaultWorkspacePath: string }>().defaultWorkspacePath, 'D:/workspace/projects');
+
+      const invalid = await app.inject({
+        method: 'PUT', url: '/api/settings', headers: json,
+        payload: { defaultWorkspacePath: 123 }
+      });
+      assert.equal(invalid.statusCode, 400);
+    } finally { cleanup(); }
+  });
+});
+
 // --- auth (T2-9) -------------------------------------------------------------
+
+describe('project default Session workspace validation', () => {
+  it('rejects a Session whose actual directory differs from the project workspace', async () => {
+    const { app, cleanup } = await makeApp();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify([
+      { id: 'ses_expected', title: 'Expected', directory: 'D:/workspace/project-a', time: { updated: 10 } },
+      { id: 'ses_other', title: 'Other', directory: 'D:/workspace/project-b', time: { updated: 20 } }
+    ]), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+    try {
+      const mismatch = await app.inject({
+        method: 'POST', url: '/api/projects', headers: json,
+        payload: {
+          id: 'p-mismatch', name: 'Mismatch', workspacePath: 'D:/workspace/project-a',
+          wakeChannel: 'http://127.0.0.1:4096', defaultSessionId: 'ses_other'
+        }
+      });
+      assert.equal(mismatch.statusCode, 400);
+      const afterMismatch = await app.inject({ method: 'GET', url: '/api/projects' });
+      assert.ok(!afterMismatch.json<{ id: string }[]>().some(project => project.id === 'p-mismatch'));
+
+      const matching = await app.inject({
+        method: 'POST', url: '/api/projects', headers: json,
+        payload: {
+          id: 'p-matching', name: 'Matching', workspacePath: 'D:/workspace/project-a',
+          wakeChannel: 'http://127.0.0.1:4096', defaultSessionId: 'ses_expected'
+        }
+      });
+      assert.equal(matching.statusCode, 201);
+      assert.equal(matching.json<{ defaultSessionId: string }>().defaultSessionId, 'ses_expected');
+    } finally {
+      globalThis.fetch = originalFetch;
+      cleanup();
+    }
+  });
+});
 
 describe('TASKBOARD_TOKEN auth', () => {
   it('rejects tokenless requests with 401', async () => {
@@ -106,6 +169,11 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
     const bare = await t.app.inject({ method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json, payload: { agent: 'bot' } });
     assert.equal(bare.statusCode, 403);
     assert.match(bare.json<{ error: string }>().error, /sessionId/);
+    const fakeApproval = await t.app.inject({
+      method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json,
+      payload: { agent: 'bot', confirm: true }
+    });
+    assert.equal(fakeApproval.statusCode, 403, 'confirm:true must not bypass session binding');
 
     const bound = await t.app.inject({
       method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json,
@@ -133,6 +201,11 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
       payload: { status: 'in_progress', version: 1 }
     });
     assert.equal(bare.statusCode, 403);
+    const fakeApproval = await t.app.inject({
+      method: 'PATCH', url: `/api/issues/${freshId}`, headers: json,
+      payload: { status: 'in_progress', version: 1, confirm: true }
+    });
+    assert.equal(fakeApproval.statusCode, 403, 'confirm:true must not bypass session binding');
 
     const withBind = await t.app.inject({
       method: 'PATCH', url: `/api/issues/${freshId}`, headers: json,
@@ -143,7 +216,7 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
     t.cleanup();
   });
 
-  it('web actor and confirm:true are exempt; disabled env restores old behavior', async () => {
+  it('web actor is exempt; disabled env restores old behavior', async () => {
     const t = await gated();
     const web = await t.app.inject({ method: 'PATCH', url: `/api/issues/${t.issueId}`, headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { status: 'in_progress', version: 1 } });
     assert.equal(web.statusCode, 200, 'web is exempt');
@@ -155,6 +228,178 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
     const claim2 = await app2.app.inject({ method: 'POST', url: `/api/issues/${id2}/claim`, headers: json, payload: { agent: 'bot' } });
     assert.equal(claim2.statusCode, 200, 'opt-out restores open flow');
     app2.cleanup();
+  });
+});
+
+describe('workspace directory API', () => {
+  it('creates a directory default workspace path and lets projects inherit it', async () => {
+    const { app, cleanup } = await makeApp();
+    const directoryRes = await app.inject({
+      method: 'POST', url: '/api/directories', headers: json,
+      payload: { name: 'Workspace A', workspacePath: '/workspace/a' }
+    });
+    assert.equal(directoryRes.statusCode, 201);
+    const directory = directoryRes.json<{ id: string; workspacePath: string }>();
+    assert.equal(directory.workspacePath, '/workspace/a');
+    const projectRes = await app.inject({
+      method: 'POST', url: '/api/projects', headers: json,
+      payload: { name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a', wakeChannel: 'http://127.0.0.1:4096' }
+    });
+    assert.equal(projectRes.statusCode, 201);
+    const project = projectRes.json<{ directoryId: string; defaultSessionId: string; workspacePath: string; wakeChannel: string }>();
+    assert.equal(project.directoryId, directory.id);
+    assert.equal(project.defaultSessionId, 'ses_a');
+    assert.equal(project.workspacePath, '/workspace/a');
+    assert.equal(project.wakeChannel, 'http://127.0.0.1:4096');
+    cleanup();
+  });
+
+  it('keeps project routing independent from directory grouping and prevents deleting a non-empty directory', async () => {
+    const { app, cleanup } = await makeApp();
+    const created = await app.inject({
+      method: 'POST', url: '/api/directories', headers: json,
+      payload: { name: 'Workspace' }
+    });
+    const directoryId = created.json<{ id: string }>().id;
+    const project = await app.inject({
+      method: 'POST', url: '/api/projects', headers: json,
+      payload: { name: 'Project', directoryId, workspacePath: '/workspace', wakeChannel: 'http://127.0.0.1:4096' }
+    });
+    const projectId = project.json<{ id: string }>().id;
+    const updated = await app.inject({
+      method: 'PATCH', url: `/api/projects/${projectId}`, headers: json,
+      payload: { workspacePath: '/workspace/renamed', wakeChannel: 'http://127.0.0.1:4097' }
+    });
+    assert.equal(updated.statusCode, 200);
+    const projectAfter = (await app.inject({ method: 'GET', url: `/api/projects/${projectId}` })).json<{ workspacePath: string; wakeChannel: string }>();
+    assert.equal(projectAfter.workspacePath, '/workspace/renamed');
+    assert.equal(projectAfter.wakeChannel, 'http://127.0.0.1:4097');
+    const deletion = await app.inject({ method: 'DELETE', url: `/api/directories/${directoryId}` });
+    assert.equal(deletion.statusCode, 400);
+    cleanup();
+  });
+});
+
+describe('directory OpenCode session routes', () => {
+  it('queries sessions in the requested workspace and filters out other directories', async () => {
+    const { app, cleanup } = await makeApp();
+    const created = await app.inject({
+      method: 'POST', url: '/api/directories', headers: json, payload: { name: 'Workspace' }
+    });
+    const directoryId = created.json<{ id: string }>().id;
+    const originalFetch = globalThis.fetch;
+    const requestedPath = 'D:\\workspace\\project-a';
+    let requestedUrl = '';
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      requestedUrl = String(input);
+      assert.equal(init?.method ?? 'GET', 'GET');
+      return new Response(JSON.stringify([
+        { id: 'ses_a', title: 'Project A', directory: 'D:/workspace/project-a', time: { updated: 10 } },
+        { id: 'ses_b', title: 'Project B', directory: 'D:/workspace/project-b', time: { updated: 20 } }
+      ]), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/directories/${directoryId}/opencode-sessions?workspacePath=${encodeURIComponent(requestedPath)}&serverUrl=${encodeURIComponent('http://127.0.0.1:4096')}`
+      });
+      assert.equal(response.statusCode, 200);
+      assert.equal(new URL(requestedUrl).searchParams.get('directory'), requestedPath);
+      assert.deepEqual(response.json<{ sessions: { id: string }[] }>().sessions.map(session => session.id), ['ses_a']);
+    } finally {
+      globalThis.fetch = originalFetch;
+      cleanup();
+    }
+  });
+
+  it('creates a session with the requested directory context', async () => {
+    const { app, cleanup } = await makeApp();
+    const created = await app.inject({
+      method: 'POST', url: '/api/directories', headers: json, payload: { name: 'Workspace' }
+    });
+    const directoryId = created.json<{ id: string }>().id;
+    const originalFetch = globalThis.fetch;
+    const requestedPath = 'D:\\workspace\\project-a';
+    let requestedUrl = '';
+    const requestedUrls: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      requestedUrl = String(input);
+      requestedUrls.push(requestedUrl);
+      if ((init?.method ?? 'GET') === 'GET') {
+        return new Response(JSON.stringify({ directory: requestedPath }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      assert.equal(init?.method, 'POST');
+      return new Response(JSON.stringify({
+        id: 'ses_new',
+        title: 'New Session',
+        directory: requestedPath,
+        time: { updated: 30 }
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/directories/${directoryId}/opencode-sessions`,
+        headers: json,
+        payload: { title: 'New Session', workspacePath: requestedPath, serverUrl: 'http://127.0.0.1:4096' }
+      });
+      assert.equal(response.statusCode, 201);
+      assert.equal(requestedUrls.length, 2, 'verify workspace before creating a session');
+      assert.equal(new URL(requestedUrls[0]).pathname, '/path');
+      assert.equal(new URL(requestedUrls[0]).searchParams.get('directory'), requestedPath);
+      assert.equal(new URL(requestedUrls[1]).pathname, '/session');
+      assert.equal(new URL(requestedUrls[1]).searchParams.get('directory'), requestedPath);
+      assert.equal(response.json<{ session: { id: string; directory: string } }>().session.directory, requestedPath);
+    } finally {
+      globalThis.fetch = originalFetch;
+      cleanup();
+    }
+  });
+
+  it('does not bind a session if OpenCode ignores the requested workspace', async () => {
+    const { app, cleanup } = await makeApp();
+    const created = await app.inject({
+      method: 'POST', url: '/api/directories', headers: json, payload: { name: 'Workspace' }
+    });
+    const directoryId = created.json<{ id: string }>().id;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      id: 'ses_wrong_workspace',
+      title: 'Wrong Workspace',
+      directory: 'D:/opencode-server-startup',
+      time: { updated: 30 }
+    }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/directories/${directoryId}/opencode-sessions`,
+        headers: json,
+        payload: { title: 'New Session', workspacePath: 'D:\\workspace\\project-a', serverUrl: 'http://127.0.0.1:4096' }
+      });
+      assert.equal(response.statusCode, 502);
+      assert.match(response.json<{ error: string }>().error, /no session was created/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      cleanup();
+    }
+  });
+
+  it('requires an OpenCode Server URL before listing or creating sessions', async () => {
+    const { app, cleanup } = await makeApp();
+    const created = await app.inject({
+      method: 'POST', url: '/api/directories', headers: json,
+      payload: { name: 'Workspace' }
+    });
+    assert.equal(created.statusCode, 201);
+    const id = created.json<{ id: string }>().id;
+    const list = await app.inject({ method: 'GET', url: `/api/directories/${id}/opencode-sessions` });
+    const create = await app.inject({
+      method: 'POST', url: `/api/directories/${id}/opencode-sessions`,
+      headers: json, payload: { title: 'Session' }
+    });
+    assert.equal(list.statusCode, 400);
+    assert.equal(create.statusCode, 400);
+    cleanup();
   });
 });
 
@@ -255,7 +500,7 @@ describe('TASKBOARD_HUMAN_DONE gate', () => {
     cleanup();
   });
 
-  it('honors the confirm escape hatch on both paths', async () => {
+  it('does not treat confirm:true as human approval on either path', async () => {
     const { app, cleanup, issueId } = await gated();
     const v = (await app.inject({ method: 'GET', url: `/api/issues/${issueId}` })).json<{ version: number }>().version;
     const patch = await app.inject({
@@ -266,8 +511,8 @@ describe('TASKBOARD_HUMAN_DONE gate', () => {
       method: 'POST', url: '/api/projects/p1/issues',
       headers: { ...json, 'x-taskboard-actor': 'cli' }, payload: { title: 't', status: 'done', confirm: true }
     });
-    assert.equal(patch.statusCode, 200);
-    assert.equal(create.statusCode, 201);
+    assert.equal(patch.statusCode, 403);
+    assert.equal(create.statusCode, 403);
     cleanup();
   });
 
@@ -479,8 +724,10 @@ describe('ready/next views', () => {
     assert.equal(before.json<{ issue: { id: string } | null }>().issue?.id, a);
     assert.equal(before.json<{ issue: { id: string } | null }>().issue?.status, 'todo');
 
-    // 默认开启的 HUMAN_DONE 门禁下，非 web 来源置 done 需显式 confirm 逃生舱。
-    await app.inject({ method: 'PATCH', url: `/api/issues/${a}`, headers: json, payload: { status: 'done', confirm: true } });
+    // 完成任务必须走 web 审批入口，客户端自报 confirm 不能绕过门禁。
+    const doneVersion = (await app.inject({ method: 'GET', url: `/api/issues/${a}` })).json<{ version: number }>().version;
+    const done = await app.inject({ method: 'PATCH', url: `/api/issues/${a}`, headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { status: 'done', version: doneVersion } });
+    assert.equal(done.statusCode, 200);
     const after = await app.inject({ method: 'GET', url: '/api/projects/p1/next' });
     assert.equal(after.json<{ issue: { id: string } | null }>().issue?.id, b);
     cleanup();
@@ -561,7 +808,7 @@ describe('in_review 评论门禁（TASKBOARD_REVIEW_COMMENT 默认开）', () =>
     cleanup();
   });
 
-  it('web actor is exempt; create-at-in_review gated with confirm escape', async () => {
+  it('web actor is exempt; confirm cannot bypass create-at-in_review gate', async () => {
     const { app, cleanup } = await makeApp();
     await seedProject(app);
     const issueId = await seedIssue(app);
@@ -577,7 +824,7 @@ describe('in_review 评论门禁（TASKBOARD_REVIEW_COMMENT 默认开）', () =>
     const escaped = await app.inject({
       method: 'POST', url: '/api/projects/p1/issues', headers: json, payload: { title: '直接交验', status: 'in_review', confirm: true }
     });
-    assert.equal(escaped.statusCode, 201);
+    assert.equal(escaped.statusCode, 403);
     cleanup();
   });
 
@@ -613,5 +860,66 @@ describe('in_review 门禁只拦状态流转', () => {
     });
     assert.equal(res.statusCode, 200);
     cleanup();
+  });
+});
+
+
+describe('server bind safety', () => {
+  it('refuses non-loopback binding without an API token', async () => {
+    await assert.rejects(
+      () => buildApp({ env: { TASKBOARD_HOST: '0.0.0.0' } }),
+      /TASKBOARD_TOKEN/
+    );
+  });
+
+  it('allows loopback binding without a token for local-only use', async () => {
+    const { app, cleanup } = await makeApp({ TASKBOARD_HOST: '127.0.0.1' });
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/meta' });
+      assert.equal(response.statusCode, 200);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('allows non-loopback binding when an API token is configured', async () => {
+    const { app, cleanup } = await makeApp({ TASKBOARD_HOST: '0.0.0.0', TASKBOARD_TOKEN: 'test-token' });
+    try {
+      const response = await app.inject({
+        method: 'GET', url: '/api/meta',
+        headers: { authorization: 'Bearer test-token' }
+      });
+      assert.equal(response.statusCode, 200);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+
+describe('project routing safety', () => {
+  it('rejects workspace/server changes while an agent holds an active lease', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      await seedProject(app);
+      const issueId = await seedIssue(app, {}, 'agent-a');
+      const claim = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/claim`, headers: json,
+        payload: { agent: 'agent-a', sessionId: 'ses_a', branch: 'feat/task-a', ttlMinutes: 30 }
+      });
+      assert.equal(claim.statusCode, 200);
+
+      const changed = await app.inject({
+        method: 'PATCH', url: '/api/projects/p1', headers: json,
+        payload: { workspacePath: '/workspace/other', wakeChannel: 'http://127.0.0.1:4097' }
+      });
+      assert.equal(changed.statusCode, 409);
+      assert.match(changed.json<{ error: string }>().error, /active agent leases/);
+
+      const project = await app.inject({ method: 'GET', url: '/api/projects/p1' });
+      assert.equal(project.json<{ workspacePath: string }>().workspacePath, '');
+    } finally {
+      cleanup();
+    }
   });
 });

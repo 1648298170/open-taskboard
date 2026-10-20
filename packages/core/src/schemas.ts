@@ -20,11 +20,25 @@ const nullableDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
   .refine(isRealCalendarDate, 'must be a real calendar date (YYYY-MM-DD)')
   .nullable().optional();
 
+export const createDirectorySchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  workspacePath: z.string().optional(),
+}).strict();
+
+export const directoryPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  workspacePath: z.string().optional(),
+}).strict();
+
 export const createProjectSchema = z
   .object({
     id: z.string().optional(),
     name: z.string().min(1),
+    directoryId: z.string().min(1).optional(),
+    defaultSessionId: z.string().min(1).nullable().optional(),
     workspacePath: z.string().optional(),
+    // A directory provides the default workspacePath; projects may override it.
     // v0.4 wake routing: full TUI URL (http://127.0.0.1:4097); '' = unbound.
     wakeChannel: z.string().max(200).optional(),
     labels: z.string().optional(),
@@ -36,6 +50,8 @@ export const createProjectSchema = z
 export const projectPatchSchema = z
   .object({
     name: z.string().min(1).optional(),
+    defaultSessionId: z.string().min(1).nullable().optional(),
+    workspacePath: z.string().optional(),
     wakeChannel: z.string().max(200).optional(),
     labels: z.string().optional(),
     // '' clears the project default; whitespace-only is rejected.
@@ -60,8 +76,7 @@ export const createIssueSchema = z
     assignee: z.string().optional(),
     startDate: nullableDate,
     dueDate: nullableDate,
-    // 与 restUpdateIssueSchema 的逃生舱对齐：TASKBOARD_HUMAN_DONE=1 时，
-    // 用户确认后 agent 可带 confirm: true 直接创建即 done 的任务。
+    // Deprecated compatibility field. The server does not treat client-supplied confirm as human approval.
     confirm: z.boolean().optional(),
   })
   .strict();
@@ -87,8 +102,7 @@ export const issuePatchSchema = z
 // REST PATCH keeps version optional (today's REST contract).
 export const restUpdateIssueSchema = issuePatchSchema.extend({
   version: z.number().int().positive().optional(),
-  // T7-36 逃生舱：TASKBOARD_HUMAN_DONE=1 时，用户确认后 agent 可传
-  // confirm: true 代为把状态置为 done（默认仅 web 来源可过门禁）。
+  // Deprecated compatibility field. A client-supplied boolean is not proof of human approval.
   confirm: z.boolean().optional(),
 });
 
@@ -129,12 +143,13 @@ export const claimSchema = z
     // 认领即绑定：绑空位不抢绑（已有绑定被忽略），语义见 store.claimIssue。
     sessionId: z.string().min(1).optional(),
     branch: z.string().min(1).optional(),
-    // require-session 逃生舱（与 human-done/in_review 同构）：人工确认后 agent
-    // 可带 confirm: true 跳过开工绑定（自动化看板设 TASKBOARD_REQUIRE_SESSION=0）。
+    // Deprecated compatibility field. The server never treats confirm:true as approval or a binding substitute.
     confirm: z.boolean().optional(),
   })
   .strict();
 
+export type CreateDirectoryInput = z.infer<typeof createDirectorySchema>;
+export type DirectoryPatchInput = z.infer<typeof directoryPatchSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type CreateIssueInput = z.infer<typeof createIssueSchema>;
 export type IssuePatchInput = z.infer<typeof issuePatchSchema>;

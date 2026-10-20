@@ -154,10 +154,67 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
   (db: DatabaseSync) => {
     db.exec("ALTER TABLE comments ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'");
   },
-  // v12 → v13: per-project default opencode session for new tasks. '' =
-  // unbound; createIssue inherits it when the caller supplies no session.
+  // v12 → v13: workspace directories group projects in the sidebar. Existing
+  // projects are grouped by their current workspace path + OpenCode server,
+  // preserving the configuration they already use.
   (db: DatabaseSync) => {
-    db.exec("ALTER TABLE projects ADD COLUMN session_id TEXT NOT NULL DEFAULT ''");
+    db.exec(`
+      CREATE TABLE directories (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      ALTER TABLE projects ADD COLUMN directory_id TEXT REFERENCES directories(id);
+      ALTER TABLE projects ADD COLUMN default_session_id TEXT;
+      CREATE TEMP TABLE directory_migration_map (
+        workspace_path TEXT NOT NULL,
+        server_url TEXT NOT NULL,
+        directory_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_path, server_url)
+      );
+      INSERT INTO directory_migration_map (workspace_path, server_url, directory_id)
+      SELECT workspace_path, wake_channel, lower(hex(randomblob(4)))
+      FROM projects
+      GROUP BY workspace_path, wake_channel;
+      INSERT INTO directories (id, name, created_at)
+      SELECT m.directory_id,
+             CASE WHEN m.workspace_path <> '' THEN m.workspace_path ELSE '默认目录' END,
+             MIN(p.created_at)
+      FROM directory_migration_map m
+      JOIN projects p ON p.workspace_path = m.workspace_path AND p.wake_channel = m.server_url
+      GROUP BY m.directory_id, m.workspace_path;
+      UPDATE projects
+      SET directory_id = (
+        SELECT m.directory_id FROM directory_migration_map m
+        WHERE m.workspace_path = projects.workspace_path AND m.server_url = projects.wake_channel
+        LIMIT 1
+      );
+      DROP TABLE directory_migration_map;
+      CREATE INDEX idx_projects_directory ON projects(directory_id);
+    `);
+  },
+  // v13 → v14: a directory may provide a default workspace path for new projects.
+  // Backfill from an existing project in each directory to preserve migrated setups.
+  (db: DatabaseSync) => {
+    db.exec("ALTER TABLE directories ADD COLUMN workspace_path TEXT NOT NULL DEFAULT ''");
+    db.exec(`
+      UPDATE directories
+      SET workspace_path = COALESCE((
+        SELECT p.workspace_path FROM projects p
+        WHERE p.directory_id = directories.id AND p.workspace_path <> ''
+        ORDER BY p.created_at LIMIT 1
+      ), '')
+    `);
+  },
+  // v14 → v15: persistent application-level defaults shared by all browser clients.
+  (db: DatabaseSync) => {
+    db.exec(`
+      CREATE TABLE app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL DEFAULT ''
+      );
+      INSERT INTO app_settings (key, value) VALUES ('default_workspace_path', '');
+    `);
   },
 ];
 

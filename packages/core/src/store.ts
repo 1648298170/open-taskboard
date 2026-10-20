@@ -1,15 +1,17 @@
 ﻿import type { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isWakeComment, STATUSES, activeClaim } from './types.js';
 import type {
-  Activity, Attachment, Comment, DependencyEdge, Issue, IssuePatch, Priority, Progress, Project, Status, Stats, StoreEvent
+  Activity, Attachment, Comment, DependencyEdge, Issue, IssuePatch, Priority, Progress, Project, Status, Stats, StoreEvent, WorkspaceDirectory
 } from './types.js';
 import { ConflictError, NotFoundError, PermissionError, ValidationError } from './errors.js';
 import { configureDatabase, createDatabase } from './db.js';
 import { EventBus } from './events.js';
 import { inTransaction } from './transactions.js';
 import { ProjectRepo } from './repos/projects.js';
+import { DirectoryRepo, type DirectoryCreateInput, type DirectoryPatchInput } from './repos/directories.js';
 import { IssueRepo } from './repos/issues.js';
 import { CommentRepo } from './repos/comments.js';
 import { ActivityRepo } from './repos/activities.js';
@@ -66,6 +68,7 @@ export class Store {
   private db: DatabaseSync;
   private events = new EventBus();
   private projects: ProjectRepo;
+  private directories: DirectoryRepo;
   private issues: IssueRepo;
   private comments: CommentRepo;
   private activities: ActivityRepo;
@@ -84,6 +87,7 @@ export class Store {
     this.db = db ?? createDatabase(dataDir);
     if (db) configureDatabase(db);
     this.projects = new ProjectRepo(this.db);
+    this.directories = new DirectoryRepo(this.db);
     this.issues = new IssueRepo(this.db);
     this.comments = new CommentRepo(this.db);
     this.activities = new ActivityRepo(this.db);
@@ -112,26 +116,96 @@ export class Store {
 
   revision(): number {
     return this.db.prepare(
-      `SELECT (SELECT COUNT(*) FROM projects) + (SELECT COUNT(*) FROM issues) * 10
-             + (SELECT COUNT(*) FROM comments) * 100
-             + (SELECT COUNT(*) FROM issue_dependencies) * 1000
-             + (SELECT COUNT(*) FROM attachments) * 10000
+      `SELECT (SELECT COUNT(*) FROM directories)
+             + (SELECT COUNT(*) FROM projects) * 10
+             + (SELECT COUNT(*) FROM issues) * 100
+             + (SELECT COUNT(*) FROM comments) * 1000
+             + (SELECT COUNT(*) FROM issue_dependencies) * 10000
+             + (SELECT COUNT(*) FROM attachments) * 100000
              + (SELECT COALESCE(SUM(version),0) FROM issues) AS rev`
     ).get()!.rev as number;
   }
 
+  // ---- application settings ----
+  getAppSettings(): { defaultWorkspacePath: string } {
+    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = 'default_workspace_path'").get() as { value: string } | undefined;
+    return { defaultWorkspacePath: row?.value ?? '' };
+  }
+
+  updateAppSettings(patch: { defaultWorkspacePath: string }): { defaultWorkspacePath: string } {
+    this.db.prepare("INSERT INTO app_settings (key, value) VALUES ('default_workspace_path', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(patch.defaultWorkspacePath.trim());
+    return this.getAppSettings();
+  }
+
+  // ---- workspace directories ----
+  createDirectory(input: DirectoryCreateInput): WorkspaceDirectory {
+    const id = this.directories.create(input);
+    this.emit('directory.created', { id });
+    return this.directories.get(id)!;
+  }
+
+  updateDirectory(id: string, patch: DirectoryPatchInput): WorkspaceDirectory {
+    inTransaction(this.db, () => this.directories.update(id, patch));
+    this.emit('directory.updated', { id, fields: Object.keys(patch) });
+    return this.directories.get(id)!;
+  }
+
+  listDirectories(): WorkspaceDirectory[] {
+    return this.directories.list();
+  }
+
+  getDirectory(id: string): WorkspaceDirectory | null {
+    return this.directories.get(id);
+  }
+
+  deleteDirectory(id: string): void {
+    inTransaction(this.db, () => this.directories.delete(id));
+    this.emit('directory.deleted', { id });
+  }
+
   // ---- projects ----
-  createProject(input: { id?: string; name: string; workspacePath?: string; wakeChannel?: string; labels?: string; sessionId?: string }): Project {
+  createProject(input: { id?: string; name: string; directoryId?: string; defaultSessionId?: string | null; workspacePath?: string; wakeChannel?: string; labels?: string }): Project {
     const id = this.projects.create(input);
-    this.emit('project.created', { id });
+    this.emit('project.created', { id, directoryId: this.projects.get(id)?.directoryId ?? null });
     return this.projects.get(id)!;
   }
 
-  updateProject(id: string, patch: { name?: string; wakeChannel?: string; labels?: string; sessionId?: string }): Project {
-    if (!this.projects.get(id)) throw new NotFoundError(`project not found: ${id}`);
+  updateProject(id: string, patch: { name?: string; workspacePath?: string; wakeChannel?: string; labels?: string; defaultSessionId?: string | null }): Project {
+    const current = this.projects.get(id);
+    if (!current) throw new NotFoundError(`project not found: ${id}`);
     if (patch.name !== undefined && patch.name.trim() === '') throw new ValidationError('name: must not be blank');
-    inTransaction(this.db, () => this.projects.update(id, patch));
-    this.emit('project.updated', { id, fields: Object.keys(patch) });
+    const routingChanged =
+      (patch.workspacePath !== undefined && patch.workspacePath.trim() !== current.workspacePath) ||
+      (patch.wakeChannel !== undefined && patch.wakeChannel.trim() !== current.wakeChannel);
+    if (routingChanged) {
+      const activeIssues = this.issues.list(id, { archived: 'all' }).filter(issue => activeClaim(issue));
+      if (activeIssues.length > 0) {
+        throw new ConflictError(
+          `cannot change project workspace/server while ${activeIssues.length} task(s) have active agent leases; release or wait for the leases to expire first`
+        );
+      }
+    }
+    const effectivePatch = routingChanged && patch.defaultSessionId === undefined
+      ? { ...patch, defaultSessionId: null }
+      : patch;
+    const unboundIssueIds: string[] = [];
+    inTransaction(this.db, () => {
+      this.projects.update(id, effectivePatch);
+      if (routingChanged) {
+        // A task's sessionId is meaningful only in the project server + path
+        // context. Clear bindings when that context changes to prevent routing
+        // an old session ID to a different OpenCode server or directory.
+        for (const issue of this.issues.list(id, { archived: 'all' })) {
+          if (!issue.sessionId) continue;
+          this.issues.update(issue.id, { sessionId: null });
+          this.logActivity(issue.id, 'system', 'session-unbound', 'Project workspace/server changed; bind a session again');
+          unboundIssueIds.push(issue.id);
+        }
+      }
+    });
+    for (const issueId of unboundIssueIds) this.emit('issue.updated', { id: issueId, fields: ['sessionId'] });
+    this.emit('project.updated', { id, fields: Object.keys(effectivePatch), unboundIssueIds });
     return this.projects.get(id)!;
   }
 
@@ -579,6 +653,46 @@ export class Store {
     });
     this.emit('issue.updated', { id: issueId });
     return attachment;
+  }
+
+  /**
+   * Persist an uploaded attachment as one logical operation. The body is first
+   * written to a temporary file; the metadata row and final atomic rename then
+   * happen inside the SQLite transaction. If any step fails, remove temporary
+   * or final files so the database never advertises a body that was not saved.
+   */
+  addAttachmentWithBody(issueId: string, filename: string, body: Uint8Array, actor = ''): Attachment {
+    if (!this.issues.get(issueId)) throw new NotFoundError(`issue not found: ${issueId}`);
+    const existing = this.attachments.listByIssue(issueId);
+    if (existing.length >= MAX_ISSUE_ATTACHMENTS) {
+      throw new ValidationError(`attachment quota exceeded: ${issueId} already holds ${existing.length}/${MAX_ISSUE_ATTACHMENTS} files`);
+    }
+    const usedBytes = existing.reduce((sum, attachment) => sum + attachment.size, 0);
+    if (usedBytes + body.byteLength > MAX_ISSUE_ATTACHMENT_BYTES) {
+      throw new ValidationError(`attachment quota exceeded: ${existing.length} files / ${usedBytes} bytes used of ${MAX_ISSUE_ATTACHMENT_BYTES} byte quota — ${filename} (${body.byteLength} bytes) does not fit`);
+    }
+
+    const directory = this.attachmentDirFor(issueId);
+    const temporaryPath = join(directory, `.upload-${randomUUID()}.tmp`);
+    let finalPath = '';
+    try {
+      writeFileSync(temporaryPath, body, { flag: 'wx' });
+      const attachment = inTransaction(this.db, () => {
+        const row = this.attachments.record(issueId, filename, body.byteLength, actor);
+        finalPath = this.attachmentPathFor(issueId, row.id, filename);
+        renameSync(temporaryPath, finalPath);
+        this.logActivity(issueId, actor, 'attachment', filename);
+        return row;
+      });
+      this.emit('issue.updated', { id: issueId });
+      return attachment;
+    } catch (error) {
+      for (const path of [temporaryPath, finalPath]) {
+        if (!path || !existsSync(path)) continue;
+        try { unlinkSync(path); } catch { /* best-effort rollback cleanup */ }
+      }
+      throw error;
+    }
   }
 
   listAttachments(issueId: string): Attachment[] {
