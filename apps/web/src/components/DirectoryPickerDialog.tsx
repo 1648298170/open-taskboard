@@ -8,7 +8,6 @@ function isWindowsDriveRoot(path: string): boolean {
 
 interface DirectoryPickerDialogProps {
   open: boolean;
-  serverUrl: string;
   initialPath: string;
   onClose: () => void;
   onSelect: (path: string) => void;
@@ -20,7 +19,6 @@ interface DirectoryPickerDialogProps {
  */
 export function DirectoryPickerDialog({
   open,
-  serverUrl,
   initialPath,
   onClose,
   onSelect
@@ -39,7 +37,7 @@ export function DirectoryPickerDialog({
     setLoading(true);
     setError('');
     try {
-      const listing = await api_.browseWorkspaceDirectories(serverUrl, requestedPath);
+      const listing = await api_.browseWorkspaceDirectories(requestedPath);
       if (requestId !== requestIdRef.current) return;
       setCurrentPath(listing.path);
       setPathInput(listing.path);
@@ -55,7 +53,7 @@ export function DirectoryPickerDialog({
     } finally {
       if (requestId === requestIdRef.current) setLoading(false);
     }
-  }, [serverUrl]);
+  }, []);
 
   useEffect(() => {
     if (!open) {
@@ -87,8 +85,6 @@ export function DirectoryPickerDialog({
         </div>
         <button type="button" className="icon-btn" aria-label="关闭目录选择器" title="关闭" onClick={onClose}>×</button>
       </div>
-
-      <div className="directory-picker-server"><span>OpenCode Server</span><code>{serverUrl}</code></div>
 
       <div className="directory-picker-pathbar">
         <button type="button" className="btn" disabled={loading || !parentPath} title="返回上一级目录"
@@ -131,7 +127,7 @@ export function DirectoryPickerDialog({
       {error && <div className="directory-picker-error" role="alert">
         <strong>读取目录失败</strong>
         <span>{error}</span>
-        <small>请检查 Server URL、网络连通性，以及 OpenCode Server 是否支持 GET /file 接口。也可以直接输入目录路径后重试。</small>
+        <small>请检查服务端部署配置、网络连通性，以及 OpenCode Server 是否支持 GET /file 接口。也可以直接输入目录路径后重试。</small>
       </div>}
 
       <div className="directory-picker-list" aria-label="子目录列表">
