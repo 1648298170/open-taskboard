@@ -14,11 +14,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../src/app.js';
 import type { FastifyInstance } from 'fastify';
+import type { Store } from '@taskboard/core';
 
 type Env = Record<string, string | undefined>;
 
 interface App {
   app: FastifyInstance;
+  store: Store;
   cleanup: () => void;
 }
 
@@ -28,6 +30,7 @@ async function makeApp(env: Env = {}): Promise<App> {
   const { app } = await buildApp({ store, env, dataDir: dir });
   return {
     app,
+    store,
     cleanup: () => { app.close(); rmSync(dir, { recursive: true, force: true }); }
   };
 }
@@ -240,73 +243,76 @@ describe('TASKBOARD_REQUIRE_SESSION gate', () => {
     return { ...app, issueId };
   }
 
-  it('claim without sessionId/branch → 403 with a teaching message; with both → bound', async () => {
+  it('claim sessionId cannot bypass the Project default Session requirement', async () => {
     const t = await gated();
     const bare = await t.app.inject({ method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json, payload: { agent: 'bot' } });
     assert.equal(bare.statusCode, 403);
-    assert.match(bare.json<{ error: string }>().error, /sessionId/);
-    const fakeApproval = await t.app.inject({
-      method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json,
-      payload: { agent: 'bot', confirm: true }
-    });
-    assert.equal(fakeApproval.statusCode, 403, 'confirm:true must not bypass session binding');
+    assert.match(bare.json<{ error: string }>().error, /Project default Session/);
 
-    const bound = await t.app.inject({
+    const fakeBinding = await t.app.inject({
       method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json,
-      payload: { agent: 'bot', sessionId: 'ses_x1', branch: 'feat/x' }
+      payload: { agent: 'bot', sessionId: 'ses_forged', branch: 'feat/x' }
     });
-    assert.equal(bound.statusCode, 200);
-    assert.equal(bound.json<{ sessionId: string; branch: string }>().sessionId, 'ses_x1');
-    assert.equal(bound.json<{ branch: string }>().branch, 'feat/x');
+    assert.equal(fakeBinding.statusCode, 403, 'task-level sessionId must not override a missing project binding');
+
+    t.store.updateProject('p1', { defaultSessionId: 'ses_project' });
+    const claimed = await t.app.inject({
+      method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json,
+      payload: { agent: 'bot', sessionId: 'ses_other', branch: 'feat/x' }
+    });
+    assert.equal(claimed.statusCode, 200);
+    assert.equal(claimed.json<{ sessionId: string; branch: string }>().sessionId, 'ses_project');
+    assert.equal(claimed.json<{ branch: string }>().branch, 'feat/x');
     t.cleanup();
   });
 
-  it('PATCH flow to in_progress without binding → 403; with sessionId+branch in the same patch → applied', async () => {
+  it('PATCH Session values cannot bypass the Project gate; the task inherits once Project is configured', async () => {
     const t = await gated();
-    // 先 claim 一个已绑定任务（claim 绑定后 PATCH 流转不再拦）
-    const bound = await t.app.inject({
-      method: 'POST', url: `/api/issues/${t.issueId}/claim`, headers: json,
-      payload: { agent: 'bot', sessionId: 'ses_x2', branch: 'feat/y' }
+    const noProjectSession = await t.app.inject({
+      method: 'PATCH', url: `/api/issues/${t.issueId}`, headers: json,
+      payload: {
+        status: 'in_progress', sessionId: 'ses_forged', branch: 'feat/z',
+        statusNote: '开始执行：准备工作已完成。验证证据：权限门禁检查完成。未覆盖：实现尚未完成。',
+        version: 1
+      }
     });
-    const version = bound.json<{ version: number }>().version;
-    const unbound = await t.app.inject({ method: 'POST', url: '/api/projects/p1/issues', headers: json, payload: { title: 'fresh' } });
-    const freshId = unbound.json<{ id: string }>().id;
+    assert.equal(noProjectSession.statusCode, 403);
+    assert.match(noProjectSession.json<{ error: string }>().error, /Project default Session/);
 
-    const bare = await t.app.inject({
-      method: 'PATCH', url: `/api/issues/${freshId}`, headers: json,
-      payload: { status: 'in_progress', version: 1 }
+    t.store.updateProject('p1', { defaultSessionId: 'ses_project' });
+    const allowed = await t.app.inject({
+      method: 'PATCH', url: `/api/issues/${t.issueId}`, headers: json,
+      payload: {
+        status: 'in_progress', branch: 'feat/z',
+        statusNote: '开始执行：准备工作已完成。验证证据：项目会话继承已确认。未覆盖：实现尚未完成。',
+        version: 1
+      }
     });
-    assert.equal(bare.statusCode, 403);
-    const fakeApproval = await t.app.inject({
-      method: 'PATCH', url: `/api/issues/${freshId}`, headers: json,
-      payload: { status: 'in_progress', version: 1, confirm: true }
-    });
-    assert.equal(fakeApproval.statusCode, 403, 'confirm:true must not bypass session binding');
-
-    const withBind = await t.app.inject({
-      method: 'PATCH', url: `/api/issues/${freshId}`, headers: json,
-      payload: { status: 'in_progress', sessionId: 'ses_x3', branch: 'feat/z', statusNote: '开始执行：已绑定会话和分支。验证证据：本次开工前检查完成。未覆盖：实现与回归测试尚未完成。', version: 1 }
-    });
-    assert.equal(withBind.statusCode, 200);
-    assert.equal(withBind.json<{ sessionId: string }>().sessionId, 'ses_x3');
+    assert.equal(allowed.statusCode, 200, allowed.body);
+    assert.equal(allowed.json<{ sessionId: string }>().sessionId, 'ses_project');
     t.cleanup();
   });
 
   it('web actor is exempt; disabled env restores old behavior', async () => {
     const t = await gated();
-    const web = await t.app.inject({ method: 'PATCH', url: `/api/issues/${t.issueId}`, headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { status: 'in_progress', version: 1 } });
+    const web = await t.app.inject({
+      method: 'PATCH', url: `/api/issues/${t.issueId}`,
+      headers: { ...json, 'x-taskboard-actor': 'web' },
+      payload: { status: 'in_progress', version: 1 }
+    });
     assert.equal(web.statusCode, 200, 'web is exempt');
-
     t.app.close();
+
     const app2 = await makeApp({ TASKBOARD_REQUIRE_SESSION: '0' });
     await seedProject(app2.app);
     const id2 = await seedIssue(app2.app);
-    const claim2 = await app2.app.inject({ method: 'POST', url: `/api/issues/${id2}/claim`, headers: json, payload: { agent: 'bot' } });
+    const claim2 = await app2.app.inject({
+      method: 'POST', url: `/api/issues/${id2}/claim`, headers: json, payload: { agent: 'bot' }
+    });
     assert.equal(claim2.statusCode, 200, 'opt-out restores open flow');
     app2.cleanup();
   });
 });
-
 describe('workspace directory API', () => {
   it('creates a directory default workspace path and lets projects inherit it', async () => {
     const { app, cleanup } = await makeApp();
@@ -338,8 +344,8 @@ describe('workspace directory API', () => {
     }
   });
 
-  it('optionally synchronizes existing project routes and clears Session bindings', async () => {
-    const { app, cleanup } = await makeApp();
+  it('directory routing changes update every Project and clear inherited Session bindings', async () => {
+    const { app, store, cleanup } = await makeApp();
     try {
       const created = await app.inject({
         method: 'POST', url: '/api/directories', headers: json,
@@ -348,22 +354,21 @@ describe('workspace directory API', () => {
       const directoryId = created.json<{ id: string }>().id;
       const projectRes = await app.inject({
         method: 'POST', url: '/api/projects', headers: json,
-        payload: { name: 'Project A', directoryId, workspacePath: '/workspace/project-a', wakeChannel: 'http://127.0.0.1:4096' }
+        payload: { name: 'Project A', directoryId, defaultSessionId: null }
       });
+      assert.equal(projectRes.statusCode, 201, projectRes.body);
       const projectId = projectRes.json<{ id: string }>().id;
+      store.updateProject(projectId, { defaultSessionId: 'ses-old' });
       const issueRes = await app.inject({
         method: 'POST', url: `/api/projects/${projectId}/issues`, headers: json,
-        payload: { title: 'Has a bound session', sessionId: 'ses-old' }
+        payload: { title: 'Inherited session' }
       });
-      assert.equal(issueRes.statusCode, 201);
+      assert.equal(issueRes.statusCode, 201, issueRes.body);
       const issueId = issueRes.json<{ id: string }>().id;
 
       const changed = await app.inject({
         method: 'PATCH', url: `/api/directories/${directoryId}`, headers: json,
-        payload: {
-          workspacePath: '/workspace/new', serverUrl: 'http://127.0.0.1:4097',
-          syncProjects: true
-        }
+        payload: { workspacePath: '/workspace/new', serverUrl: 'http://127.0.0.1:4097' }
       });
       assert.equal(changed.statusCode, 200, changed.body);
       const projectAfter = (await app.inject({
@@ -377,6 +382,21 @@ describe('workspace directory API', () => {
       })).json<{ sessionId: string | null; activities: { action: string }[] }>();
       assert.equal(issueAfter.sessionId, null);
       assert.ok(issueAfter.activities.some(activity => activity.action === 'session-unbound'));
+    } finally { cleanup(); }
+  });
+
+  it('exposes OpenCode status from the Directory menu endpoint', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      const created = await app.inject({
+        method: 'POST', url: '/api/directories', headers: json,
+        payload: { name: 'Unconfigured workspace' }
+      });
+      const id = created.json<{ id: string }>().id;
+      const res = await app.inject({ method: 'GET', url: `/api/directories/${id}/opencode-status` });
+      assert.equal(res.statusCode, 200, res.body);
+      assert.equal(res.json<{ serverStatus: string }>().serverStatus, 'unconfigured');
+      assert.deepEqual(res.json<{ projects: unknown[] }>().projects, []);
     } finally { cleanup(); }
   });
 
@@ -561,9 +581,9 @@ describe('project OpenCode session discovery route', () => {
 });
 
 // --- web task creation requires an OpenCode session -------------------------------
-describe('web-created task session binding', () => {
-  it('rejects a missing sessionId and accepts a non-empty binding', async () => {
-    const { app, cleanup } = await makeApp();
+describe('web-created tasks inherit Project Session', () => {
+  it('rejects missing Project Session even when a legacy task sessionId is supplied', async () => {
+    const { app, store, cleanup } = await makeApp();
     await seedProject(app);
     const missing = await app.inject({
       method: 'POST', url: '/api/projects/p1/issues',
@@ -571,15 +591,23 @@ describe('web-created task session binding', () => {
       payload: { title: 'must bind' }
     });
     assert.equal(missing.statusCode, 400);
-    assert.match(missing.json<{ error: string }>().error, /sessionId/);
+    assert.match(missing.json<{ error: string }>().error, /项目配置默认 OpenCode Session/);
 
-    const bound = await app.inject({
+    const forged = await app.inject({
       method: 'POST', url: '/api/projects/p1/issues',
       headers: { ...json, 'x-taskboard-actor': 'web' },
-      payload: { title: 'bound task', sessionId: 'ses_existing' }
+      payload: { title: 'legacy forged', sessionId: 'ses_existing' }
     });
-    assert.equal(bound.statusCode, 201);
-    assert.equal(bound.json<{ sessionId: string }>().sessionId, 'ses_existing');
+    assert.equal(forged.statusCode, 400, 'a task-level Session must not satisfy the Project gate');
+
+    store.updateProject('p1', { defaultSessionId: 'ses_project' });
+    const inherited = await app.inject({
+      method: 'POST', url: '/api/projects/p1/issues',
+      headers: { ...json, 'x-taskboard-actor': 'web' },
+      payload: { title: 'inherits project', sessionId: 'ses_other' }
+    });
+    assert.equal(inherited.statusCode, 201, inherited.body);
+    assert.equal(inherited.json<{ sessionId: string }>().sessionId, 'ses_project');
     cleanup();
   });
 });
@@ -667,49 +695,52 @@ describe('TASKBOARD_HUMAN_DONE gate', () => {
   });
 });
 
-describe('claim endpoints (lease + session binding)', () => {
-  it('claim binds sessionId on an unbound issue and auto-flows todo → in_progress', async () => {
-    const { app, cleanup } = await makeApp();
+describe('claim endpoints (lease + inherited Session)', () => {
+  it('claim cannot override the Project Session and auto-flows todo → in_progress', async () => {
+    const { app, store, cleanup } = await makeApp();
     await seedProject(app);
-    const issueId = await seedIssue(app);
+    store.updateProject('p1', { defaultSessionId: 'ses_project' });
+    const issueId = await seedIssue(app.app);
     const res = await app.inject({
       method: 'POST', url: `/api/issues/${issueId}/claim`, headers: json,
-      payload: { agent: 'sisyphus', sessionId: 'ses_x' }
+      payload: { agent: 'sisyphus', sessionId: 'ses_forged' }
     });
     assert.equal(res.statusCode, 200);
     const body = res.json<{ status: string; sessionId: string | null; claimedBy: string }>();
     assert.equal(body.status, 'in_progress', '认领即开工');
-    assert.equal(body.sessionId, 'ses_x', '认领即绑定');
+    assert.equal(body.sessionId, 'ses_project', '认领 Session is projected from Project');
     assert.equal(body.claimedBy, 'sisyphus');
     cleanup();
   });
 
-  it('claiming an already-bound issue never overwrites the binding', async () => {
-    const { app, cleanup } = await makeApp();
+  it('task-level Session PATCH and claim fields never replace the Project binding', async () => {
+    const { app, store, cleanup } = await makeApp();
     await seedProject(app);
-    const issueId = await seedIssue(app);
+    store.updateProject('p1', { defaultSessionId: 'ses_project' });
+    const issueId = await seedIssue(app.app);
     const patched = await app.inject({
-      method: 'PATCH', url: `/api/issues/${issueId}`, headers: json, payload: { sessionId: 'ses_owner' }
+      method: 'PATCH', url: `/api/issues/${issueId}`, headers: json,
+      payload: { sessionId: 'ses_owner' }
     });
     assert.equal(patched.statusCode, 200);
+    assert.equal(patched.json<{ sessionId: string | null }>().sessionId, 'ses_project');
     const res = await app.inject({
       method: 'POST', url: `/api/issues/${issueId}/claim`, headers: json,
       payload: { agent: 'intruder', sessionId: 'ses_intruder' }
     });
     assert.equal(res.statusCode, 200);
-    assert.equal(res.json<{ sessionId: string | null }>().sessionId, 'ses_owner', '只绑空位，不抢绑');
+    assert.equal(res.json<{ sessionId: string | null }>().sessionId, 'ses_project');
     cleanup();
   });
 
-  it('served openapi documents ClaimRequest.sessionId (contract stays honest)', async () => {
+  it('served openapi documents ClaimRequest.sessionId (legacy input is ignored by Session ownership)', async () => {
     const { app, cleanup } = await makeApp();
     const res = await app.inject({ method: 'GET', url: '/api/openapi.json' });
     const spec = res.json<{ components: { schemas: { ClaimRequest: { properties: Record<string, unknown> } } } }>();
-    assert.ok(spec.components.schemas.ClaimRequest.properties.sessionId, 'ClaimRequest.sessionId must be documented');
+    assert.ok(spec.components.schemas.ClaimRequest.properties.sessionId);
     cleanup();
   });
 });
-
 // --- error mapping --------------------------------------------------------------
 
 describe('error mapping', () => {

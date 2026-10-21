@@ -1,7 +1,5 @@
 // Project-level default OpenCode sessions (server layer):
-// new issues inherit project.defaultSessionId unless an explicit body value or
-// the x-taskboard-session header overrides it. Also covers the stateless session
-// discovery endpoint and session-only project creation.
+// Every issue inherits project.defaultSessionId. Legacy task body/header Session values cannot override it.
 
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, it } from 'node:test';
@@ -150,25 +148,25 @@ describe('issue creation inherits the project default session', () => {
     cleanup();
   });
 
-  it('lets the x-taskboard-session header override the project default', async () => {
+  it('ignores the x-taskboard-session header when a Project default exists', async () => {
     const { app, cleanup } = await makeApp();
     stubSessions([{ id: 'ses_project', title: 'P', directory: 'D:/ws' }]);
     await createProject(app, { id: 'p1', name: 'P', defaultSessionId: 'ses_project' }, 'web');
     const res = await createIssue(app, 'p1', { title: 'A' }, {
       'x-taskboard-actor': 'cli', 'x-taskboard-session': 'ses_agent'
     });
-    assert.equal(res.body.sessionId, 'ses_agent');
+    assert.equal(res.body.sessionId, 'ses_project');
     cleanup();
   });
 
-  it('lets an explicit body sessionId override both', async () => {
+  it('ignores explicit body sessionId and inherits the Project default', async () => {
     const { app, cleanup } = await makeApp();
     stubSessions([{ id: 'ses_project', title: 'P', directory: 'D:/ws' }]);
     await createProject(app, { id: 'p1', name: 'P', defaultSessionId: 'ses_project' }, 'web');
     const res = await createIssue(app, 'p1', { title: 'A', sessionId: 'ses_body' }, {
       'x-taskboard-actor': 'cli', 'x-taskboard-session': 'ses_agent'
     });
-    assert.equal(res.body.sessionId, 'ses_body');
+    assert.equal(res.body.sessionId, 'ses_project');
     cleanup();
   });
 
