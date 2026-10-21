@@ -45,6 +45,13 @@ export function resolveOpenCodeBase(explicitUrl: string | undefined, projectChan
   return normalizeOpenCodeBase(FALLBACK_OPENCODE_URL);
 }
 
+/** Resolve the single deployment-configured OpenCode endpoint. Directory and project records must not override it. */
+export function getConfiguredOpenCodeBase(): string {
+  const configured = (process.env.TASKBOARD_OPENCODE_URL ?? '').trim();
+  if (!configured) throw new Error('TASKBOARD_OPENCODE_URL must be configured on the Taskboard server');
+  return normalizeOpenCodeBase(configured);
+}
+
 export function normalizeOpenCodeBase(raw: string): string {
   let url: URL;
   try {
