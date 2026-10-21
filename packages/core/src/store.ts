@@ -170,7 +170,7 @@ export class Store {
       : [];
     if (activeIssueIds.length > 0) {
       throw new ConflictError(
-        `cannot change directory workspace/server while ${activeIssueIds.length} task(s) have active agent leases; release or wait for the leases to expire first`
+        `cannot change directory workspace while ${activeIssueIds.length} task(s) have active agent leases; release or wait for the leases to expire first`
       );
     }
 
