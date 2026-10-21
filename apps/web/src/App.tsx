@@ -679,14 +679,6 @@ export default function App() {
                           setDirectoryWorkspaceEditPath(directory.workspacePath);
                           
                         }}><Folder size={13} /> 修改工作目录</button>
-<button role="menuitem" onClick={() => {
-                          setDirectoryMenuOpen(null);
-                          setDirectoryStatusOpenId(directory.id);
-                          setDirectoryOpenCodeStatus(null);
-                          void refreshDirectoryOpenCodeStatus(directory.id);
-                        }}><Activity size={13} /> OpenCode 运行状态</button>
-                        <button role="menuitem" className="danger" onClick={async () => {
-                          setDirectoryMenuOpen(null);
                           const projectCount = projects.filter(project => project.directoryId === directory.id).length;
                           const ok = await confirmDialog({
                             title: `移除目录「${directoryLabel(directory.name)}」？`,
@@ -1109,7 +1101,6 @@ export default function App() {
 
       <DirectoryPickerDialog
         open={directoryPickerOpen}
-        serverUrl={directoryPickerServerUrl}
         initialPath={directoryPickerInitialPath}
         onClose={() => setDirectoryPickerOpen(false)}
         onSelect={handleWorkspaceDirectorySelect}
