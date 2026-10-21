@@ -212,6 +212,7 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
   // 解析成该工作树 checkout 的 HEAD）。换任务或换绑定即重取。
   const commitRef = detail ? (detail.worktree || detail.branch || '') : '';
   const executionEvents = detail ? detail.activities.filter(a => a.action === 'execution').slice(0, 5) : [];
+  const visibleActivities = detail ? detail.activities.filter(a => a.action !== 'execution') : [];
   useEffect(() => {
     setCommits(null);
     if (!projectId || !commitRef) return;
@@ -274,62 +275,50 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
         onBlur={e => { const v = e.currentTarget.textContent?.trim(); if (v && v !== detail.title) void patch({ title: v }); }}>
         {detail.title}
       </h2>
-      <div className="meta-row">
-        <Select value={detail.status} onChange={v => void patch({ status: v as Status })}
-          options={statuses.map(st => ({ value: st, label: STATUS_CN[st] ?? st }))} />
-        <Select value={detail.priority} onChange={v => void patch({ priority: v as IssueDetail['priority'] })}
+      <div className="detail-primary-fields">
+        <div className="detail-status-fields">
+          <Select value={detail.status} onChange={v => void patch({ status: v as Status })}
+            options={statuses.map(st => ({ value: st, label: STATUS_CN[st] ?? st }))} />
+          <Select value={detail.priority} onChange={v => void patch({ priority: v as IssueDetail['priority'] })}
             options={PRIORITIES.map(pr => ({ value: pr, label: pr }))} />
-        {/* 负责人 / 标签：与分支回退输入同款模式（defaultValue + 失焦提交），
-            此前这两个字段只能经 CLI/MCP 修改，面板上看得到改不了。 */}
-        <input title="负责人" placeholder="负责人" defaultValue={detail.assignee}
-          onBlur={e => { const v = e.target.value.trim(); if (v !== detail.assignee) void patch({ assignee: v }); }} />
-        {/* v0.4: opencode 会话绑定（@agent 唤醒续此会话）。 */}
-        <input title="opencode 会话绑定（@agent 唤醒续此会话）" placeholder="ses_…"
-          defaultValue={detail.sessionId ?? ''}
-          onBlur={e => { const v = e.target.value.trim() || null; if (v !== detail.sessionId) void patch({ sessionId: v }); }} />
-        <input title="标签（逗号分隔）" placeholder="标签,逗号分隔" defaultValue={detail.labels}
-          onBlur={e => { const v = e.target.value.trim(); if (v !== detail.labels) void patch({ labels: v }); }} />
-        {/* T2-8: 有 git-refs 数据时分支用下拉（保留当前值即使不在列表中），
-            拉不到数据回退为原文本输入；改动走与原输入相同的乐观锁 patch。 */}
-        {refs && refs.branches.length > 0 ? (
-          <Select title="分支" value={detail.branch}
-            onChange={v => { if (v !== detail.branch) void patch({ branch: v }); }}
-            options={[{ value: '', label: '分支 —' },
-              ...(detail.branch && !refs.branches.includes(detail.branch) ? [{ value: detail.branch, label: detail.branch }] : []),
-              ...refs.branches.map(b => ({ value: b, label: b }))]} />
-        ) : (
-          <input placeholder="分支" defaultValue={detail.branch}
-            onBlur={e => { if (e.target.value !== detail.branch) void patch({ branch: e.target.value }); }} />
-        )}
-        {/* T2-8: 工作树字段，同样的下拉/回退模式（值为 worktree 名称）。 */}
-        {refs && refs.worktrees.length > 0 ? (
-          <Select title="工作树" value={detail.worktree}
-            onChange={v => {
-              if (v === detail.worktree) return;
-              const selected = refs.worktrees.find(w => w.name === v);
-              void patch({ worktree: v, worktreePath: selected?.path ?? '' });
-            }}
-            options={[{ value: '', label: '工作树 —' },
-              ...(detail.worktree && !refs.worktrees.some(w => w.name === detail.worktree) ? [{ value: detail.worktree, label: detail.worktree }] : []),
-              ...refs.worktrees.map(w => ({ value: w.name, label: w.name }))]} />
-        ) : (
-          <input placeholder="工作树" defaultValue={detail.worktree}
-            onBlur={e => { if (e.target.value !== detail.worktree) void patch({ worktree: e.target.value }); }} />
-        )}
-        <input type="date" title="计划开始日期" defaultValue={detail.startDate ?? ''}
-          onChange={e => { const v = e.target.value || null; if (v !== detail.startDate) void patch({ startDate: v }); }} />
-        <input type="date" title="截止日期" defaultValue={detail.dueDate ?? ''}
-          onChange={e => { const v = e.target.value || null; if (v !== detail.dueDate) void patch({ dueDate: v }); }} />
-        <button className="btn tiny" style={{ color: 'var(--danger)' }} onClick={async () => {
+        </div>
+        <label className="detail-assignee-field">
+          <span>负责人</span>
+          <input title="负责人" placeholder="未分配" defaultValue={detail.assignee}
+            onBlur={e => { const v = e.target.value.trim(); if (v !== detail.assignee) void patch({ assignee: v }); }} />
+        </label>
+      </div>
+
+      <details className="detail-extra-properties">
+        <summary>更多属性</summary>
+        <div className="detail-extra-grid">
+          <label className="detail-field">
+            <span>标签</span>
+            <input title="标签（逗号分隔）" placeholder="以逗号分隔" defaultValue={detail.labels}
+              onBlur={e => { const v = e.target.value.trim(); if (v !== detail.labels) void patch({ labels: v }); }} />
+          </label>
+          <label className="detail-field">
+            <span>计划开始</span>
+            <input type="date" title="计划开始日期" defaultValue={detail.startDate ?? ''}
+              onChange={e => { const v = e.target.value || null; if (v !== detail.startDate) void patch({ startDate: v }); }} />
+          </label>
+          <label className="detail-field">
+            <span>截止日期</span>
+            <input type="date" title="截止日期" defaultValue={detail.dueDate ?? ''}
+              onChange={e => { const v = e.target.value || null; if (v !== detail.dueDate) void patch({ dueDate: v }); }} />
+          </label>
+        </div>
+      </details>
+
+      <div className="detail-actions">
+        <button className="btn tiny detail-danger-action" onClick={async () => {
           if (!await confirmDialog({ title: `删除 #${detail.id} 及其子任务/评论？`, danger: true, confirmText: '删除' })) return;
           try {
             await api_.deleteIssue(detail.id);
             onToast('已删除');
             onClose(); onChanged();
           } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-        }}>删除</button>
-        {/* T5-24: 归档。done 后可选（暗色弱化样式，confirm 双击保护——与删除一致）；
-            已归档的任务显示「取消归档」。归档后从看板消失 → 关抽屉。 */}
+        }}>删除任务</button>
         {detail.archivedAt
           ? <button className="btn tiny" onClick={async () => {
               try {
@@ -339,7 +328,7 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
             }}>取消归档</button>
           : detail.status === 'done' && (
-            <button className="btn tiny" style={{ color: 'var(--ink-dim)' }} onClick={async () => {
+            <button className="btn tiny" onClick={async () => {
               if (!await confirmDialog({ title: `归档 #${detail.id}？`, lines: ['将从看板移除（可随时取消归档）'], confirmText: '归档' })) return;
               try {
                 await api_.archiveIssue(detail.id);
@@ -350,34 +339,27 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
           )}
         <button className="btn tiny" disabled={!sessionUrl}
           title={sessionUrl
-            ? '打开此任务绑定的 OpenCode 会话 ' + detail.sessionId + '。当前任务只记录 Session ID，暂不能跳到会话中的某一条具体消息。'
+            ? '打开此任务绑定的 OpenCode 会话 ' + detail.sessionId
             : detail.sessionId
               ? '缺少项目工作目录或 OpenCode Server URL，无法生成会话链接'
               : '此任务尚未绑定 OpenCode Session'}
           onClick={() => {
             if (!sessionUrl) return;
-            // 使用固定命名目标：后续定位会复用由此按钮打开的 OpenCode 标签，
-            // 不再像 _blank 一样每次新建标签。浏览器不能自动查找用户手动打开、
-            // 且没有这个窗口名的其他标签页。
             const sessionWindow = window.open(sessionUrl, 'taskboard-opencode-session');
             sessionWindow?.focus();
           }}><ExternalLink size={13} /> 定位会话</button>
-        {/* v0.4: 一键唤醒 —— UI 代发唤醒评论（web 来源，人工触发）。路由由
-            watch 决定：已绑定 sessionId → prompt_async 续原会话；未绑定 →
-            项目 wakeChannel/TUI → headless 新会话。done 任务无编排意义。 */}
         {detail.status !== 'done' && (
-          <button className="btn tiny" style={{ color: 'var(--accent)' }}
+          <button className="btn tiny detail-wake-action"
             title={detail.sessionId
-              ? `唤醒 agent 编排此任务（评论 ${WAKE_PREFIX}）：watch 直达已绑定会话 ${detail.sessionId}；主进程忙时收尾后接手`
-              : `唤醒 agent 编排此任务（评论 ${WAKE_PREFIX}）：任务未绑定会话，watch 走项目唤醒通道/TUI，兜底新建 headless 会话`}
+              ? `唤醒 agent：继续绑定会话 ${detail.sessionId}`
+              : '唤醒 agent：按项目路由发送或创建新会话'}
             onClick={async () => {
               try {
                 const created = await api_.addComment(detail.id, 'web', `${WAKE_PREFIX} 认领此任务并编排（拆解子任务、排依赖）`);
                 onToast(detail.sessionId
                   ? `已入队——watch 将投递到绑定会话 ${detail.sessionId}`
-                  : '已入队——任务未绑定会话，watch 将按项目路由送达或新建 headless 会话');
+                  : '已入队——watch 将按项目路由送达或新建 headless 会话');
                 onChanged();
-                // 送达确认：评论一直 pending 说明 watch 没跑或任务没有可用路由。
                 void (async () => {
                   for (let i = 0; i < 5; i++) {
                     await new Promise(r => setTimeout(r, 1000));
@@ -386,9 +368,6 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
                       setDetail(fresh);
                       const st = fresh.comments.find(c => c.id === created.id)?.status;
                       if (st && st !== 'pending') {
-                        // The watcher reports the execution outcome immediately
-                        // after changing comment status; fetch once more so the
-                        // activity timeline also includes that event.
                         await new Promise(r => setTimeout(r, 250));
                         try { setDetail(await api_.showIssue(issueId)); } catch { /* keep latest successful detail */ }
                         onToast(st === 'processed' ? '✓ agent 已处理本条唤醒' : '✓ 已送达，agent 处理中');
@@ -402,23 +381,21 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
             }}><Sparkles size={14} /> 唤醒</button>
         )}
-        {/* T7-34: 认领/释放（以 agent 'web' 操作，紧挨归档）。有效租约显示
-            认领徽章 + 释放；无租约显示认领。他人持有的租约释放会 409 → toast。 */}
         {activeClaim(detail) !== null
-          ? <button className="btn tiny" style={{ color: 'var(--accent)' }} onClick={async () => {
+          ? <button className="btn tiny" onClick={async () => {
               try {
                 await api_.releaseIssue(detail.id);
                 onToast(`#${detail.id} 已释放租约`);
                 onChanged(); await load();
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-            }}>释放</button>
-          : <button className="btn tiny" style={{ color: 'var(--accent)' }} onClick={async () => {
+            }}>释放认领</button>
+          : <button className="btn tiny" onClick={async () => {
               try {
                 const claimed = await api_.claimIssue(detail.id);
                 onToast(`#${detail.id} 已认领，租约至 ${claimed.leaseExpiresAt ? fmtHMLocal(claimed.leaseExpiresAt) : ''}`);
                 onChanged(); await load();
               } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-            }}>认领</button>}
+            }}>认领任务</button>}
       </div>
 
       {/* T7-34: 认领信息（meta 行下单独一行，含续租）。仅有效租约显示。 */}
@@ -442,29 +419,57 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
         );
       })()}
 
-      <section className="detail-section execution-context">
-        <h3>执行上下文</h3>
+      <details className="detail-section detail-disclosure execution-context">
+        <summary>
+          <span>执行环境</span>
+          <span className="detail-summary-meta">{detail.sessionId ? 'Session 已绑定' : '未绑定 Session'}{detail.branch ? ` · ${detail.branch}` : ''}</span>
+        </summary>
         <div className="detail-context-grid">
-          <div className="detail-context-item">
-            <span>实际开始</span>
-            <strong>{detail.startedAt ? fmtWhen(detail.startedAt) : '尚未开始'}</strong>
-          </div>
-          <div className="detail-context-item">
-            <span>实际完成</span>
-            <strong>{detail.completedAt ? fmtWhen(detail.completedAt) : '尚未完成'}</strong>
-          </div>
-          <div className="detail-context-item">
-            <span>当前执行者</span>
-            <strong>{activeClaim(detail) ?? '未认领'}</strong>
-          </div>
-          <div className="detail-context-item">
+          {(detail.startedAt || detail.completedAt) && (
+            <div className="detail-context-item detail-context-wide">
+              <span>执行时间</span>
+              <strong>
+                {detail.startedAt ? fmtWhen(detail.startedAt) : '—'}
+                {detail.completedAt ? ` → ${fmtWhen(detail.completedAt)}` : detail.startedAt ? ' · 进行中' : ''}
+              </strong>
+              {detail.startedAt && detail.completedAt && (
+                <small>{(() => {
+                  const minutes = Math.max(0, Math.round((Date.parse(detail.completedAt) - Date.parse(detail.startedAt)) / 60000));
+                  return minutes < 60 ? `耗时 ${minutes} 分钟` : `耗时 ${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
+                })()}</small>
+              )}
+            </div>
+          )}
+          <label className="detail-field">
             <span>Git 分支</span>
-            <strong>{detail.branch || '未绑定'}</strong>
-          </div>
-          <div className="detail-context-item detail-context-wide">
+            {refs && refs.branches.length > 0 ? (
+              <Select title="分支" value={detail.branch}
+                onChange={v => { if (v !== detail.branch) void patch({ branch: v }); }}
+                options={[{ value: '', label: '未绑定分支' },
+                  ...(detail.branch && !refs.branches.includes(detail.branch) ? [{ value: detail.branch, label: detail.branch }] : []),
+                  ...refs.branches.map(b => ({ value: b, label: b }))]} />
+            ) : (
+              <input placeholder="未绑定分支" defaultValue={detail.branch}
+                onBlur={e => { if (e.target.value !== detail.branch) void patch({ branch: e.target.value }); }} />
+            )}
+          </label>
+          <label className="detail-field">
             <span>Git 工作树</span>
-            <strong>{detail.worktree || '未绑定'}</strong>
-          </div>
+            {refs && refs.worktrees.length > 0 ? (
+              <Select title="工作树" value={detail.worktree}
+                onChange={v => {
+                  if (v === detail.worktree) return;
+                  const selected = refs.worktrees.find(w => w.name === v);
+                  void patch({ worktree: v, worktreePath: selected?.path ?? '' });
+                }}
+                options={[{ value: '', label: '未绑定工作树' },
+                  ...(detail.worktree && !refs.worktrees.some(w => w.name === detail.worktree) ? [{ value: detail.worktree, label: detail.worktree }] : []),
+                  ...refs.worktrees.map(w => ({ value: w.name, label: w.name }))]} />
+            ) : (
+              <input placeholder="未绑定工作树" defaultValue={detail.worktree}
+                onBlur={e => { if (e.target.value !== detail.worktree) void patch({ worktree: e.target.value }); }} />
+            )}
+          </label>
           <label className="detail-field detail-context-wide">
             <span>工作树绝对路径</span>
             <input title="工作树绝对路径" defaultValue={detail.worktreePath}
@@ -606,15 +611,6 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
               )}
             </div>
           )}
-          <div className="detail-context-item detail-context-wide">
-            <span>执行耗时</span>
-            <strong>{detail.startedAt && detail.completedAt
-              ? (() => {
-                  const minutes = Math.max(0, Math.round((Date.parse(detail.completedAt) - Date.parse(detail.startedAt)) / 60000));
-                  return minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
-                })()
-              : detail.startedAt ? '进行中' : '—'}</strong>
-          </div>
           <div className="detail-context-wide execution-history">
             <span className="execution-history-title">最近 Agent 执行记录</span>
             {executionEvents.length
@@ -636,10 +632,10 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
               : <p className="detail-empty">暂无执行记录。通过「唤醒」触发 Agent 后，这里会记录提交、重试和失败信息。</p>}
           </div>
         </div>
-      </section>
+      </details>
 
-      <section className="detail-section review-context">
-        <h3>验收与审核</h3>
+      <details className="detail-section detail-disclosure review-context">
+        <summary>验收与审核</summary>
         <label className="detail-field">
           <span>验收标准（Markdown）</span>
           <textarea rows={4} defaultValue={detail.acceptanceCriteria}
@@ -668,7 +664,7 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
               if (value !== detail.reviewNotes) void patch({ reviewNotes: value });
             }} />
         </label>
-      </section>
+      </details>
 
       {/* T6-36: 最近提交预览 —— 绑定了分支或工作树才显示。 */}
       {commitRef && (
@@ -913,8 +909,8 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
 
       <h3>活动</h3>
       <ul className="activities">
-        {detail.activities.length
-          ? detail.activities.map(a => (
+        {visibleActivities.length
+          ? visibleActivities.map(a => (
             <li key={a.id}>
               <span className="when">{fmtWhen(a.createdAt)}</span>
               <span className="who">{a.actor || 'anon'}</span>
