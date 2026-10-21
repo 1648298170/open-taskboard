@@ -49,7 +49,8 @@ export function resolveOpenCodeBase(explicitUrl: string | undefined, projectChan
 export function buildOpenCodePublicSessionUrl(workspacePath: string, sessionId: string, configuredPublicOrigin = process.env.TASKBOARD_OPENCODE_PUBLIC_URL): string | null {
   const publicOrigin = (configuredPublicOrigin ?? '').trim();
   if (!publicOrigin || !workspacePath.trim() || !sessionId.trim()) return null;
-  const base = normalizeOpenCodeBase(publicOrigin);
+  let base: string;
+  try { base = normalizeOpenCodeBase(publicOrigin); } catch { return null; }
   const encodedPath = Buffer.from(workspacePath.trim(), 'utf8').toString('base64').replace(/=+$/, '');
   return new URL(`/${encodeURIComponent(encodedPath)}/session/${encodeURIComponent(sessionId.trim())}`, base).toString();
 }
