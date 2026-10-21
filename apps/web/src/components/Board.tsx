@@ -55,7 +55,7 @@ function Column({ status, laneIssues, boardEmpty, onOpen, onDrop, blockedByMap, 
               }
             : undefined;
           return (
-            <div key={top.id}>
+            <div key={top.id} className="card-stack">
               <Card issue={top} onOpen={onOpen} locked={hasUnmetDeps(top.id)} childProgress={childProgress}
                 batchMode={batchMode} checked={selectedIds?.has(top.id) ?? false}
                 onToggleSelect={onToggleSelect} active={cursorId === top.id} />
@@ -153,14 +153,14 @@ function DuePill({ dueDate }: { dueDate: string }) {
 
 /** T5-25: 父卡片子任务进度 — `2/5 ●◐○○○`：● done / ◐ in_progress / ○ 其余。 */
 function ChildProgress({ done, inProgress, total }: { done: number; inProgress: number; total: number }) {
+  const percent = total > 0 ? Math.round(done / total * 100) : 0;
   return (
-    <div className="child-progress" title={`子任务 ${done}/${total} done · ${inProgress} 进行中`}>
-      {done}/{total}{' '}
-      {Array.from({ length: total }, (_, i) => {
-        const cls = i < done ? 'dot-on' : i < done + inProgress ? 'dot-prog' : 'dot-off';
-        const glyph = cls === 'dot-on' ? '●' : cls === 'dot-prog' ? '◐' : '○';
-        return <span key={i} className={cls}>{glyph}</span>;
-      })}
+    <div className="child-progress" title={`子任务：${done}/${total} 完成，${inProgress} 个进行中`}>
+      <span className="child-progress-label">{done}/{total} 子任务</span>
+      <span className="child-progress-track" aria-hidden="true">
+        <span className="child-progress-fill" style={{ width: `${percent}%` }} />
+      </span>
+      {inProgress > 0 && <span className="child-progress-running">{inProgress} 进行中</span>}
     </div>
   );
 }
@@ -176,6 +176,13 @@ function ClaimBadge({ issue }: { issue: Issue }) {
     </span>
   );
 }
+
+const PRIORITY_LABEL: Record<string, string> = {
+  urgent: '紧急',
+  high: '高',
+  medium: '普通',
+  low: '低'
+};
 
 /** 卡片纯展示（Card 与 DragOverlay 浮层共用）。 */
 function CardView({ issue, child, locked, childProgress, active, overlay,
@@ -206,16 +213,24 @@ function CardView({ issue, child, locked, childProgress, active, overlay,
       {...(attributes ?? {})}
       onClick={onClick}>
       {children}
-      <div className="card-title">{child ? '└ ' : ''}{issue.title}</div>
+      <div className="card-title-row">
+        <span className="card-status-mark" data-status={issue.status} aria-hidden="true" />
+        <div className="card-title">{child ? <span className="card-child-prefix">↳ </span> : null}{issue.title}</div>
+      </div>
       {!child && childProgress && <ChildProgress done={childProgress.done} inProgress={childProgress.inProgress} total={childProgress.total} />}
       <div className="card-meta">
-        {locked && <span className="dep-lock" title="被未完成的依赖阻塞">🔒</span>}
+        {locked && <span className="dep-lock" title="被未完成的依赖阻塞">阻塞</span>}
         {!overlay && <ClaimBadge issue={issue} />}
-        <span className={`badge ${issue.priority}`}>{issue.priority}</span>
+        {issue.priority !== 'medium' && (
+          <span
+            className={`badge ${issue.priority}`}
+            title={`优先级：${PRIORITY_LABEL[issue.priority] ?? issue.priority}`}
+          >
+            {PRIORITY_LABEL[issue.priority] ?? issue.priority}
+          </span>
+        )}
         {issue.dueDate && <DuePill dueDate={issue.dueDate} />}
-        {issue.branch && <span className="badge branch">⟂ {issue.branch}</span>}
-        {issue.worktree && <span className="wt-badge" title={`worktree: ${issue.worktree}`}>⎇ {issue.worktree}</span>}
-        <span>#{issue.id}</span>
+        <span className="card-id">#{issue.id}</span>
       </div>
     </article>
   );

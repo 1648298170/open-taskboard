@@ -4,7 +4,8 @@
 // not a git repo, git not installed, timeout, odd output) collapses to empty
 // arrays; this helper never throws.
 import { execFile } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 
 export interface GitRefs {
   branches: string[];
@@ -57,6 +58,79 @@ async function listWorktrees(cwd: string): Promise<GitRefs['worktrees']> {
   } catch {
     return [];
   }
+}
+
+export class GitWorktreeError extends Error {
+  constructor(message: string, readonly statusCode: 400 | 409 | 502 = 502) {
+    super(message);
+    this.name = 'GitWorktreeError';
+  }
+}
+
+export interface CreatedTaskWorktree {
+  branch: string;
+  name: string;
+  path: string;
+}
+
+/**
+ * Create a dedicated branch/worktree for one task. The destination is a sibling
+ * directory, never nested inside the project checkout. This function does not
+ * delete pre-existing branches or directories on failure.
+ */
+export async function createTaskWorktree(
+  workspacePath: string,
+  projectId: string,
+  issueId: string,
+  title: string
+): Promise<CreatedTaskWorktree> {
+  if (!workspacePath.trim()) {
+    throw new GitWorktreeError('项目尚未配置工作目录，无法创建 Worktree', 400);
+  }
+  let root: string;
+  try {
+    if (!statSync(workspacePath).isDirectory()) {
+      throw new Error('not a directory');
+    }
+    root = resolve((await execGit(workspacePath, ['rev-parse', '--show-toplevel'])).trim());
+  } catch {
+    throw new GitWorktreeError('项目工作目录不可用或不是 Git 仓库；请检查 workspacePath 和 Git 安装', 400);
+  }
+
+  const safePart = (value: string): string => {
+    const part = value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+    return !part || part === '.' || part === '..' ? 'task' : part;
+  };
+  const slug = safePart(title).toLowerCase();
+  const branch = `task/${safePart(issueId)}-${slug}`;
+  const name = `${safePart(issueId)}-${slug}`;
+  const parent = join(dirname(root), '.taskboard-worktrees', safePart(projectId));
+  const path = resolve(join(parent, name));
+
+  // Refuse collisions instead of reusing or overwriting a developer's work.
+  const refs = await scanGitRefs(root);
+  if (refs.branches.includes(branch)) {
+    throw new GitWorktreeError(`分支已存在：${branch}。请在任务详情中手动绑定，或先确认该分支是否可复用`, 409);
+  }
+  if (refs.worktrees.some(item => resolve(item.path) === path) || existsSync(path)) {
+    throw new GitWorktreeError(`Worktree 目标路径已存在：${path}。为保护已有文件，未执行覆盖`, 409);
+  }
+
+  try {
+    mkdirSync(parent, { recursive: true });
+  } catch (error) {
+    throw new GitWorktreeError(`无法创建 Worktree 父目录：${(error as Error).message}`, 502);
+  }
+  try {
+    await execGit(root, ['worktree', 'add', '-b', branch, path]);
+  } catch (error) {
+    const reason = (error as Error).message || String(error);
+    throw new GitWorktreeError(
+      `Git Worktree 创建失败：${reason}${existsSync(path) ? `；Git 可能留下部分目录，请检查 ${path}` : ''}`,
+      502
+    );
+  }
+  return { branch, name, path };
 }
 
 export async function scanGitRefs(workspacePath: string): Promise<GitRefs> {

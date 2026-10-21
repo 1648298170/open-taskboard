@@ -116,12 +116,12 @@ describe('project creation with a default Session', () => {
   });
 
   it('uses TASKBOARD_OPENCODE_URL when the server is omitted', async () => {
-    await withOpenCodeEnv('http://host.docker.internal:4096', async () => {
+    await withOpenCodeEnv('http://127.0.0.1:4096', async () => {
       const { app, cleanup } = await makeApp();
       stubSessions([{ id: 'ses_x', title: 'X', directory: 'D:/ws' }]);
       const res = await postProject(app, { id: 'p1', name: 'P', defaultSessionId: 'ses_x' }, 'web');
       assert.equal(res.statusCode, 201, res.body);
-      assert.equal(res.json<{ wakeChannel: string }>().wakeChannel, 'http://host.docker.internal:4096');
+      assert.equal(res.json<{ wakeChannel: string }>().wakeChannel, 'http://127.0.0.1:4096');
       cleanup();
     });
   });
@@ -214,14 +214,14 @@ describe('GET /api/opencode/sessions', () => {
   });
 
   it('resolves a blank url from TASKBOARD_OPENCODE_URL', async () => {
-    await withOpenCodeEnv('http://host.docker.internal:4096', async () => {
+    await withOpenCodeEnv('http://127.0.0.1:4096', async () => {
       const { app, cleanup } = await makeApp();
       const requested: string[] = [];
       stubSessions([{ id: 'ses_a', title: 'A', directory: 'D:/ws' }], requested);
       const res = await app.inject({ method: 'GET', url: '/api/opencode/sessions' });
       assert.equal(res.statusCode, 200, res.body);
-      assert.equal(res.json<{ serverUrl: string }>().serverUrl, 'http://host.docker.internal:4096');
-      assert.ok(requested[0]?.startsWith('http://host.docker.internal:4096/session'));
+      assert.equal(res.json<{ serverUrl: string }>().serverUrl, 'http://127.0.0.1:4096');
+      assert.ok(requested[0]?.startsWith('http://127.0.0.1:4096/session'));
       cleanup();
     });
   });

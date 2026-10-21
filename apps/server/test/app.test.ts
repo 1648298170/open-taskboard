@@ -8,7 +8,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../src/app.js';
@@ -920,3 +921,162 @@ describe('project routing safety', () => {
     }
   });
 });
+
+describe('task Git worktree creation', () => {
+  it('creates and binds an isolated worktree, and retries idempotently', async () => {
+    const { app, cleanup } = await makeApp();
+    const root = mkdtempSync(join(tmpdir(), 'tb-worktree-test-'));
+    const workspacePath = join(root, 'repo');
+    mkdirSync(workspacePath);
+    const git = (args: string[]) => execFileSync('git', args, { cwd: workspacePath, stdio: 'pipe' });
+    try {
+      git(['init', '-b', 'main']);
+      git(['config', 'user.email', 'taskboard-test@example.invalid']);
+      git(['config', 'user.name', 'Taskboard Test']);
+      writeFileSync(join(workspacePath, 'README.md'), 'seed\n');
+      git(['add', 'README.md']);
+      git(['commit', '-m', 'initial commit']);
+
+      const project = await app.inject({
+        method: 'POST', url: '/api/projects', headers: json,
+        payload: { id: 'git-project', name: 'Git project', workspacePath }
+      });
+      assert.equal(project.statusCode, 201);
+
+      const conflictIssue = await app.inject({
+        method: 'POST', url: '/api/projects/git-project/issues', headers: json,
+        payload: { title: 'Conflict task' }
+      });
+      const conflictId = conflictIssue.json<{ id: string }>().id;
+      const conflictBranch = `task/${conflictId}-conflict-task`;
+      git(['branch', conflictBranch]);
+      const conflict = await app.inject({
+        method: 'POST', url: `/api/issues/${conflictId}/create-worktree`,
+        headers: { 'x-taskboard-actor': 'web' }
+      });
+      assert.equal(conflict.statusCode, 409);
+      assert.match(conflict.json<{ error: string }>().error, /分支已存在/);
+
+      const issue = await app.inject({
+        method: 'POST', url: '/api/projects/git-project/issues', headers: json,
+        payload: { title: 'Implement calendar view', sessionId: 'ses_main_checkout' }
+      });
+      assert.equal(issue.statusCode, 201);
+      const issueId = issue.json<{ id: string }>().id;
+
+      const created = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/create-worktree`,
+        headers: { 'x-taskboard-actor': 'web' }
+      });
+      assert.equal(created.statusCode, 201, created.body);
+      const body = created.json<{ branch: string; worktree: string; worktreePath: string; alreadyBound: boolean; issue: { branch: string; worktreePath: string } }>();
+      assert.equal(body.alreadyBound, false);
+      assert.ok(body.branch.startsWith('task/'));
+      assert.equal(body.issue.branch, body.branch);
+      assert.equal(body.issue.worktreePath, body.worktreePath);
+      assert.equal(body.issue.sessionId, null, 'a session bound to the main checkout must be cleared after creating a worktree');
+      assert.ok(existsSync(body.worktreePath));
+      assert.doesNotThrow(() => git(['show-ref', '--verify', `refs/heads/${body.branch}`]));
+
+      const retry = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/create-worktree`,
+        headers: { 'x-taskboard-actor': 'web' }
+      });
+      assert.equal(retry.statusCode, 200, retry.body);
+      assert.equal(retry.json<{ alreadyBound: boolean }>().alreadyBound, true);
+
+      const released = await app.inject({
+        method: 'DELETE', url: `/api/issues/${issueId}/git-binding`,
+        headers: { 'x-taskboard-actor': 'web' }
+      });
+      assert.equal(released.statusCode, 200, released.body);
+      assert.equal(released.json<{ branch: string; worktree: string; worktreePath: string }>().branch, '');
+      assert.equal(released.json<{ branch: string; worktree: string; worktreePath: string }>().worktree, '');
+      assert.equal(released.json<{ branch: string; worktree: string; worktreePath: string }>().worktreePath, '');
+      assert.ok(existsSync(body.worktreePath), 'unbind must not delete the local worktree');
+    } finally {
+      cleanup();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a clear client error when the project has no Git workspace', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      await seedProject(app);
+      const issueId = await seedIssue(app);
+      const response = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/create-worktree`,
+        headers: json, payload: {}
+      });
+      assert.equal(response.statusCode, 400);
+      assert.match(response.json<{ error: string }>().error, /工作目录/);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('task OpenCode Session binding', () => {
+  it('refuses to create a Session until the project OpenCode server is configured', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      await seedProject(app);
+      const issueId = await seedIssue(app);
+      const response = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/opencode-session`,
+        headers: { 'x-taskboard-actor': 'web' }
+      });
+      assert.equal(response.statusCode, 400);
+      assert.match(response.json<{ error: string }>().error, /OpenCode Server URL/);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('Agent execution event timeline', () => {
+  it('persists queued, retry and failure events on the task detail', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      await seedProject(app);
+      const issueId = await seedIssue(app);
+      const report = async (outcome: string, detail: string) => app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/agent-events`,
+        headers: { ...json, 'x-taskboard-actor': 'watch' },
+        payload: { outcome, detail }
+      });
+      assert.equal((await report('queued', 'prompt submitted')).statusCode, 201);
+      assert.equal((await report('running', 'session reports busy')).statusCode, 201);
+      assert.equal((await report('idle', 'session reports idle; not task success')).statusCode, 201);
+      assert.equal((await report('retrying', 'attempt 1 failed')).statusCode, 201);
+      assert.equal((await report('failed', 'all attempts failed')).statusCode, 201);
+      const detail = await app.inject({ method: 'GET', url: `/api/issues/${issueId}` });
+      const events = detail.json<{ activities: { action: string; detail: string }[] }>().activities
+        .filter(activity => activity.action === 'execution');
+      assert.equal(events.length, 5);
+      assert.ok(events[0]!.detail.includes('[failed] all attempts failed'));
+      assert.ok(events[1]!.detail.includes('[retrying] attempt 1 failed'));
+      assert.ok(events.some(event => event.detail.includes('[running] session reports busy')));
+      assert.ok(events.some(event => event.detail.includes('[idle] session reports idle; not task success')));
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('rejects invalid outcomes and empty details', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      await seedProject(app);
+      const issueId = await seedIssue(app);
+      const response = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/agent-events`,
+        headers: json, payload: { outcome: 'maybe', detail: '' }
+      });
+      assert.equal(response.statusCode, 400);
+    } finally {
+      cleanup();
+    }
+  });
+});
+

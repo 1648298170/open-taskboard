@@ -38,8 +38,8 @@ const isoDay = (d: Date): string =>
 // Patch keys that map to a writable column, in repo colMap order — used to
 // build the activity detail ("status,title", "startDate", ...).
 const PATCH_KEYS: (keyof IssuePatch)[] = [
-  'title', 'description', 'status', 'priority', 'labels', 'branch', 'worktree',
-  'sessionId', 'assignee', 'parentId', 'startDate', 'dueDate'
+  'title', 'description', 'status', 'priority', 'labels', 'branch', 'worktree', 'worktreePath',
+  'sessionId', 'assignee', 'parentId', 'startDate', 'dueDate', 'acceptanceCriteria', 'reviewStatus', 'reviewNotes'
 ];
 
 /**
@@ -263,9 +263,10 @@ export class Store {
   createIssue(input: {
     projectId: string; parentId?: string | null; title: string;
     description?: string; status?: Status; priority?: Priority;
-    labels?: string; branch?: string; worktree?: string | null; assignee?: string;
+    labels?: string; branch?: string; worktree?: string | null; worktreePath?: string | null; assignee?: string;
     sessionId?: string | null;
     startDate?: string | null; dueDate?: string | null;
+    acceptanceCriteria?: string; reviewStatus?: 'pending' | 'approved' | 'changes_requested'; reviewNotes?: string;
   }, actor = '', agentSessionId: string | null = null): Issue {
     const parentId = input.parentId ?? null;
     const project = this.projects.get(input.projectId);
@@ -280,10 +281,11 @@ export class Store {
       const issueId = this.issues.create({
         projectId: input.projectId, parentId, title: input.title,
         description: input.description, status: input.status, priority: input.priority,
-        labels: input.labels, branch: input.branch, worktree: input.worktree,
+        labels: input.labels, branch: input.branch, worktree: input.worktree, worktreePath: input.worktreePath,
         sessionId,
         assignee: input.assignee,
-        startDate: input.startDate, dueDate: input.dueDate
+        startDate: input.startDate, dueDate: input.dueDate,
+        acceptanceCriteria: input.acceptanceCriteria, reviewStatus: input.reviewStatus, reviewNotes: input.reviewNotes
       });
       this.syncFts(() => this.fts.indexIssue(issueId, input.projectId, input.title, input.description ?? ''));
       this.logActivity(issueId, actor, 'created', input.title);
@@ -332,6 +334,17 @@ export class Store {
       .map(k => k === 'status' && patch.status ? `status: ${cur.status}→${patch.status}` : k)
       .join(',');
     const statusChanged = patch.status !== undefined && patch.status !== cur.status;
+    // Domain-managed timestamps: first start is immutable across retries; reopening clears completion.
+    const effectivePatch: IssuePatch = { ...patch };
+    const transitionAt = statusChanged ? now() : null;
+    if (statusChanged && patch.status === 'in_progress' && cur.startedAt === null) {
+      effectivePatch.startedAt = transitionAt;
+    }
+    if (statusChanged && patch.status === 'done' && cur.completedAt === null) {
+      effectivePatch.completedAt = transitionAt;
+    } else if (statusChanged && cur.status === 'done' && patch.status !== 'done') {
+      effectivePatch.completedAt = null;
+    }
     const suppliedNote = statusNote?.trim() ?? '';
     // Defense in depth: HTTP validates this too, but a named non-web actor must
     // never move a status without a note. Web board actions get an explicit,
@@ -344,7 +357,7 @@ export class Store {
       : '';
     const transactionResult = inTransaction(this.db, () => {
       let auditComment: Comment | null = null;
-      const result = this.issues.update(id, patch, expectedVersion);
+      const result = this.issues.update(id, effectivePatch, expectedVersion);
       if (result.changed) {
         // Title/description may have moved — refresh both fts rows.
         const updated = this.issues.get(id)!;
@@ -454,7 +467,7 @@ export class Store {
     if (!child.parentId) return;
     const parent = this.issues.get(child.parentId);
     if (!parent || parent.status !== 'todo') return;
-    this.issues.update(parent.id, { status: 'in_progress' });
+    this.issues.update(parent.id, { status: 'in_progress', ...(parent.startedAt === null ? { startedAt: now() } : {}) });
     this.logActivity(parent.id, actor, 'status', 'todo → in_progress (child started)');
   }
 
@@ -471,7 +484,7 @@ export class Store {
     const children = this.issues.list(parent.projectId, { parentId: parent.id, archived: 'all' });
     if (children.length === 0) return;
     if (!children.every(item => item.status === 'in_review' || item.status === 'done')) return;
-    this.issues.update(parent.id, { status: 'in_review' });
+    this.issues.update(parent.id, { status: 'in_review', ...(parent.startedAt === null ? { startedAt: now() } : {}) });
     this.logActivity(parent.id, actor, 'status', `${parent.status} -> in_review (all children waiting for review)`);
   }
 
@@ -506,7 +519,7 @@ export class Store {
       // dashi 语义：认领即开工 —— todo 单向自动流转，「进行中」列从此
       // 机器级真实（agent 想跳过都跳不掉）。in_review/done 不回退。
       if (issue.status === 'todo') {
-        this.issues.update(id, { status: 'in_progress' });
+        this.issues.update(id, { status: 'in_progress', ...(issue.startedAt === null ? { startedAt: t } : {}) });
         this.logActivity(id, actor, 'status', 'todo → in_progress (claim)');
       }
       // 认领即绑定：只绑空位，绝不接管他人会话的绑定（所有权语义）。
@@ -585,7 +598,11 @@ export class Store {
       // line and issue.updated event so every client notices immediately.
       if (isWakeComment(input.body)
         && (issue.status === 'in_review' || issue.status === 'done')) {
-        this.issues.update(issueId, { status: 'in_progress' });
+        this.issues.update(issueId, {
+          status: 'in_progress',
+          ...(issue.startedAt === null ? { startedAt: now() } : {}),
+          ...(issue.status === 'done' ? { completedAt: null } : {})
+        });
         this.logActivity(issueId, actor, 'updated', `status: ${issue.status}→in_progress (wake)`);
       }
       return commentId;
@@ -653,7 +670,11 @@ export class Store {
       if (patch.status === 'pending'
         && isWakeComment(patch.body ?? cur.body)
         && (before === 'in_review' || before === 'done')) {
-        this.issues.update(issueId, { status: 'in_progress' });
+        this.issues.update(issueId, {
+          status: 'in_progress',
+          ...(this.issues.get(issueId)?.startedAt == null ? { startedAt: now() } : {}),
+          ...(before === 'done' ? { completedAt: null } : {})
+        });
         this.logActivity(issueId, actor, 'updated', `status: ${before}→in_progress (wake)`);
       }
     });
@@ -706,6 +727,24 @@ export class Store {
   // ---- activities: latest first, capped by the repo (default 50) ----
   listActivities(issueId: string): Activity[] {
     return this.activities.listByIssue(issueId);
+  }
+
+  /** Persist an Agent/watch dispatch outcome in the task timeline. */
+  recordExecutionEvent(
+    issueId: string,
+    outcome: 'started' | 'queued' | 'running' | 'idle' | 'retrying' | 'succeeded' | 'failed' | 'cancel_requested',
+    detail: string,
+    actor = 'watch'
+  ): Activity {
+    if (!this.issues.get(issueId)) throw new NotFoundError(`issue not found: ${issueId}`);
+    const normalized = detail.trim().slice(0, 2000);
+    if (!normalized) throw new ValidationError('execution event detail is required');
+    const activity = inTransaction(this.db, () => {
+      this.logActivity(issueId, actor, 'execution', `[${outcome}] ${normalized}`);
+      return this.activities.listByIssue(issueId, 1)[0]!;
+    });
+    this.emit('issue.updated', { id: issueId });
+    return activity;
   }
 
   // ---- attachments (T7-39): metadata rows in sqlite, bodies on disk ----

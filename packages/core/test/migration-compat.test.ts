@@ -22,6 +22,13 @@ describe('migration compatibility', () => {
     db.exec('DROP INDEX IF EXISTS idx_projects_directory;');
     db.exec('ALTER TABLE projects DROP COLUMN directory_id;');
     db.exec('ALTER TABLE projects DROP COLUMN default_session_id;');
+    // The fixture starts from the latest schema, so remove columns added
+    // after v13 before replaying migrations from the historical v13 stamp.
+    for (const column of ['review_notes', 'review_status', 'acceptance_criteria', 'completed_at', 'started_at', 'worktree_path']) {
+      db.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
+    }
+    db.exec('ALTER TABLE directories DROP COLUMN server_url;');
+    db.exec('ALTER TABLE directories DROP COLUMN workspace_path;');
     db.exec('ALTER TABLE projects ADD COLUMN session_id TEXT');
     db.exec("UPDATE projects SET session_id = 'ses_old' WHERE id = 'p1'");
     db.exec('DROP TABLE directories;');

@@ -129,6 +129,15 @@ function ensureSchemaCompatibility(db: DatabaseSync, version: number): void {
         AND session_id IS NOT NULL AND session_id <> ''
     `);
   }
+  // Repair a database whose version stamp came from a divergent migration line.
+  if (version >= 17 && hasTable(db, 'issues')) {
+    if (!hasColumn(db, 'issues', 'worktree_path')) db.exec("ALTER TABLE issues ADD COLUMN worktree_path TEXT NOT NULL DEFAULT ''");
+    if (!hasColumn(db, 'issues', 'started_at')) db.exec('ALTER TABLE issues ADD COLUMN started_at TEXT');
+    if (!hasColumn(db, 'issues', 'completed_at')) db.exec('ALTER TABLE issues ADD COLUMN completed_at TEXT');
+    if (!hasColumn(db, 'issues', 'acceptance_criteria')) db.exec("ALTER TABLE issues ADD COLUMN acceptance_criteria TEXT NOT NULL DEFAULT ''");
+    if (!hasColumn(db, 'issues', 'review_status')) db.exec("ALTER TABLE issues ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending'");
+    if (!hasColumn(db, 'issues', 'review_notes')) db.exec("ALTER TABLE issues ADD COLUMN review_notes TEXT NOT NULL DEFAULT ''");
+  }
 }
 
 // Ordered migrations: MIGRATIONS[i] moves a db from user_version i to i+1.
@@ -292,6 +301,18 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
         WHERE p.directory_id = directories.id AND p.wake_channel <> ''
         ORDER BY p.created_at LIMIT 1
       ), '')
+    `);
+  },
+  // v16 → v17: execution context, lifecycle timestamps, and human review fields.
+  // Existing rows remain NULL/pending; we do not fabricate historical timestamps.
+  (db: DatabaseSync) => {
+    db.exec(`
+      ALTER TABLE issues ADD COLUMN worktree_path TEXT NOT NULL DEFAULT '';
+      ALTER TABLE issues ADD COLUMN started_at TEXT;
+      ALTER TABLE issues ADD COLUMN completed_at TEXT;
+      ALTER TABLE issues ADD COLUMN acceptance_criteria TEXT NOT NULL DEFAULT '';
+      ALTER TABLE issues ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending';
+      ALTER TABLE issues ADD COLUMN review_notes TEXT NOT NULL DEFAULT '';
     `);
   },
 ];

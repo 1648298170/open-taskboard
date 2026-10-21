@@ -1592,6 +1592,170 @@
         }
       }
     },
+    "/api/issues/{id}/opencode-state": {
+      "summary": "Recover the current OpenCode Session state for an issue",
+      "get": {
+        "operationId": "getIssueOpenCodeState",
+        "summary": "Read authoritative Session status after reconnect or Taskboard restart",
+        "tags": [
+          "issues"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IssueId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenCode Session snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server unavailable or Session cannot be recovered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/issues/{id}/opencode-abort": {
+      "summary": "Cancel the agent currently executing in the issue-bound OpenCode Session",
+      "post": {
+        "operationId": "abortIssueOpenCodeSession",
+        "summary": "Send an abort request to the owning OpenCode server",
+        "tags": [
+          "issues"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IssueId"
+          },
+          {
+            "$ref": "#/components/parameters/Actor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancellation request accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server rejected or could not process cancellation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/issues/{id}/opencode-events": {
+      "summary": "Subscribe to live events for the issue-bound OpenCode Session",
+      "get": {
+        "operationId": "subscribeIssueOpenCodeEvents",
+        "summary": "Proxy OpenCode SSE events filtered to the bound Session; reconnect then refresh opencode-state",
+        "tags": [
+          "issues"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IssueId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-sent events: ready, opencode, and upstream-error",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode event stream unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/issues/{id}/archive": {
       "summary": "Archive an issue",
       "post": {
@@ -2351,6 +2515,290 @@
           }
         }
       }
+    },
+    "/api/issues/{id}/create-worktree": {
+      "summary": "Create and bind an isolated Git worktree for a task",
+      "post": {
+        "tags": [
+          "Issues"
+        ],
+        "summary": "Create task branch and worktree",
+        "description": "Creates a dedicated branch and worktree for the task. Rejects conflicts and active task leases. Clears any prior Session binding because a Session rooted in the project's main checkout must not be reused from the new worktree; create a new Session in the bound worktree.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Worktree created and bound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "issue": {
+                      "$ref": "#/components/schemas/Issue"
+                    },
+                    "branch": {
+                      "type": "string"
+                    },
+                    "worktree": {
+                      "type": "string"
+                    },
+                    "worktreePath": {
+                      "type": "string"
+                    },
+                    "alreadyBound": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "issue",
+                    "branch",
+                    "worktree",
+                    "worktreePath",
+                    "alreadyBound"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Project workspace missing or is not a Git repository"
+          },
+          "404": {
+            "description": "Task or project not found"
+          },
+          "409": {
+            "description": "Branch/path collision or task already has a Git binding"
+          },
+          "500": {
+            "description": "Worktree created but binding persistence failed; response includes the path for recovery"
+          },
+          "502": {
+            "description": "Git failed to create the worktree"
+          }
+        }
+      }
+    },
+    "/api/issues/{id}/agent-events": {
+      "summary": "Record Agent execution outcomes",
+      "post": {
+        "tags": [
+          "Issues"
+        ],
+        "summary": "Append an Agent execution event",
+        "description": "Used by the watch process to persist dispatch, retry, success, and failure events. For bound OpenCode sessions, running/idle are observational session-level states. The watcher correlates a unique marker in the injected user message with a subsequent Assistant reply; only a correlated reply followed by Session idle is reported as succeeded. Idle by itself is never proof of task completion.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "started",
+                      "queued",
+                      "running",
+                      "idle",
+                      "retrying",
+                      "succeeded",
+                      "failed"
+                    ]
+                  },
+                  "detail": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  }
+                },
+                "required": [
+                  "outcome",
+                  "detail"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Execution event saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Activity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid event payload"
+          },
+          "404": {
+            "description": "Task not found"
+          }
+        }
+      }
+    },
+    "/api/issues/{id}/git-binding": {
+      "summary": "Release task Git binding without deleting local resources",
+      "delete": {
+        "tags": [
+          "Issues"
+        ],
+        "summary": "Unbind branch/worktree metadata",
+        "description": "Clears the task's branch, worktree name and absolute path. Does not delete local Git branches or worktree directories. Rejected while the task has an active claim lease.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Git binding cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Issue"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found"
+          },
+          "409": {
+            "description": "Task has an active execution lease"
+          }
+        }
+      }
+    },
+    "/api/issues/{id}/opencode-session": {
+      "summary": "Create an OpenCode Session in the task execution directory",
+      "post": {
+        "tags": [
+          "Issues"
+        ],
+        "summary": "Create and bind a task Session",
+        "description": "Creates a Session in the task's bound worktreePath when present, otherwise in the project's workspacePath. Validates the OpenCode server's active directory before creating and binding the Session. Rejected while the task has an active claim lease.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session created and bound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "issue": {
+                      "$ref": "#/components/schemas/Issue"
+                    },
+                    "session": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "directory": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "title",
+                        "directory",
+                        "updatedAt"
+                      ]
+                    },
+                    "serverUrl": {
+                      "type": "string"
+                    },
+                    "workspacePath": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "issue",
+                    "session",
+                    "serverUrl",
+                    "workspacePath"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing workspace or OpenCode server URL"
+          },
+          "404": {
+            "description": "Task or project not found"
+          },
+          "409": {
+            "description": "Task has an active execution lease"
+          },
+          "502": {
+            "description": "OpenCode session creation or directory validation failed"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2591,6 +3039,43 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "worktreePath": {
+            "type": "string",
+            "description": "Absolute path of the bound git worktree; empty string = unresolved/unbound"
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Actual first-start timestamp; generated by task status transitions"
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Actual completion timestamp; cleared when a completed task is reopened"
+          },
+          "acceptanceCriteria": {
+            "type": "string",
+            "description": "Markdown definition of done and acceptance checklist"
+          },
+          "reviewStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "changes_requested"
+            ],
+            "description": "Human review outcome, independent from workflow status"
+          },
+          "reviewNotes": {
+            "type": "string",
+            "description": "Reviewer notes and acceptance evidence"
           }
         },
         "required": [
@@ -3236,6 +3721,30 @@
           "confirm": {
             "type": "boolean",
             "description": "T7-36 escape hatch: with TASKBOARD_HUMAN_DONE=1, an agent may create an issue directly at done after the user confirmed in conversation"
+          },
+          "worktreePath": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2000,
+            "description": "Absolute path of the bound git worktree; null clears the binding"
+          },
+          "acceptanceCriteria": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "reviewStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "changes_requested"
+            ]
+          },
+          "reviewNotes": {
+            "type": "string",
+            "maxLength": 20000
           }
         },
         "required": [
@@ -3319,6 +3828,30 @@
             "minLength": 1,
             "maxLength": 10000,
             "description": "Required for an actual agent status transition. Explain reason, verification evidence, and unchecked items; saved as a comment in the same transaction as the status update."
+          },
+          "worktreePath": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2000,
+            "description": "Absolute path of the bound git worktree; null clears the binding"
+          },
+          "acceptanceCriteria": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "reviewStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "changes_requested"
+            ]
+          },
+          "reviewNotes": {
+            "type": "string",
+            "maxLength": 20000
           }
         },
         "additionalProperties": false

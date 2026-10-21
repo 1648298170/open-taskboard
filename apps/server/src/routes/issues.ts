@@ -3,6 +3,8 @@
 // options. JSON bodies are validated with the shared zod schemas — no
 // hand-rolled type assertions.
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import { createTaskWorktree, GitWorktreeError, scanGitRefs } from '../git-refs.js';
+import { abortOpenCodeSession, createOpenCodeSession, getOpenCodeSessionRuntimeState, normalizeOpenCodeBase, openOpenCodeEventStream } from '../opencode.js';
 import { STATUSES, Store, ValidationError, resolveIssueSessionId } from '@taskboard/core';
 import type { Status, TaskboardServerConfig } from '@taskboard/core';
 import { claimSchema, createIssueSchema, restUpdateIssueSchema, z } from '@taskboard/core/schemas';
@@ -16,6 +18,38 @@ const createIssueBodySchema = createIssueSchema.omit({ projectId: true });
 // One readable line per zod issue: "field: message; field: message".
 const validationMessage = (error: z.ZodError): string =>
   error.issues.map(i => (i.path.length > 0 ? `${i.path.map(String).join('.')}: ` : '') + i.message).join('; ');
+
+const normalizeGitPath = (value: string): string => {
+  const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+};
+
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** OpenCode event envelopes differ by event type; only forward events explicitly tied to this Session. */
+function openCodeEventBelongsToSession(event: unknown, sessionId: string): boolean {
+  if (!isUnknownRecord(event)) return false;
+  const payload = isUnknownRecord(event.payload) ? event.payload : event;
+  const properties = isUnknownRecord(payload.properties) ? payload.properties : {};
+  const info = isUnknownRecord(properties.info) ? properties.info : {};
+  const part = isUnknownRecord(properties.part) ? properties.part : {};
+  const candidates = [
+    event.sessionID, event.sessionId,
+    payload.sessionID, payload.sessionId,
+    properties.sessionID, properties.sessionId,
+    info.sessionID, info.sessionId, info.id,
+    part.sessionID, part.sessionId
+  ];
+  return candidates.some(value => typeof value === 'string' && value === sessionId);
+}
+
+function normalizeOpenCodeDirectory(value: string): string {
+  const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^[a-zA-Z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
+}
 
 const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerConfig }> = async (app, { store, config }) => {
   app.get('/api/projects/:projectId/issues', async (req: FastifyRequest<{ Params: ProjectParams; Querystring: { status?: Status; parentId?: string; includeDone?: string; archived?: string } }>, reply) => {
@@ -139,6 +173,262 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     // 兼容旧客户端的 confirm 字段不作为审批凭证，且不透传 Store
     const { version, confirm, statusNote, ...patch } = parsed.data;
     return store.updateIssue(req.params.id, patch, version, actor, statusNote);
+  });
+
+  // Create and bind an isolated Git worktree for this task. Git and SQLite
+  // cannot share a transaction, so the handler validates first and reports an
+  // explicit orphan path if Git succeeds but persistence fails.
+  app.post('/api/issues/:id/create-worktree', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const issue = store.getIssue(req.params.id);
+    if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    const project = store.getProject(issue.projectId);
+    if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
+    if (issue.claimedBy && issue.leaseExpiresAt && Date.parse(issue.leaseExpiresAt) > Date.now()) {
+      return reply.code(409).send({ error: '任务当前有有效执行租约；请先释放租约再创建或切换 Worktree' });
+    }
+
+    const refs = await scanGitRefs(project.workspacePath);
+    if (issue.worktreePath && refs.worktrees.some(w => normalizeGitPath(w.path) === normalizeGitPath(issue.worktreePath!))) {
+      // Retry is idempotent when the task is already bound to its real worktree.
+      return { issue, branch: issue.branch, worktree: issue.worktree, worktreePath: issue.worktreePath, alreadyBound: true };
+    }
+    if (issue.branch || issue.worktree || issue.worktreePath) {
+      return reply.code(409).send({
+        error: '任务已有 Git 绑定。为避免覆盖现有分支或工作树，请先确认并解除绑定后再自动创建'
+      });
+    }
+
+    try {
+      const created = await createTaskWorktree(project.workspacePath, project.id, issue.id, issue.title);
+      const siblings = store.listIssues(issue.projectId, { archived: 'all' });
+      const collision = siblings.find(other => other.id !== issue.id &&
+        (normalizeGitPath(other.worktreePath) === normalizeGitPath(created.path) || other.branch === created.branch));
+      if (collision) {
+        // This should be rare (concurrent requests), but never bind one Git
+        // execution context to multiple tasks. Keep the created path visible.
+        return reply.code(409).send({
+          error: `Worktree 已创建但绑定冲突：任务 #${collision.id} 已使用同一分支或路径；请检查并手动清理 ${created.path}`
+        });
+      }
+      try {
+        const updated = store.updateIssue(issue.id, {
+          branch: created.branch,
+          worktree: created.name,
+          worktreePath: created.path,
+          // A Session previously bound to the main checkout must never survive
+          // a switch to a new worktree; the user must create a Session there.
+          sessionId: null
+        }, issue.version, String(req.headers['x-taskboard-actor'] ?? 'web'));
+        return reply.code(201).send({
+          issue: updated,
+          branch: created.branch,
+          worktree: created.name,
+          worktreePath: created.path,
+          alreadyBound: false
+        });
+      } catch (error) {
+        return reply.code(500).send({
+          error: `Worktree 已创建，但任务绑定写入失败。请勿重复创建；先检查路径并手动绑定：${created.path}。原因：${(error as Error).message}`
+        });
+      }
+    } catch (error) {
+      if (error instanceof GitWorktreeError) {
+        return reply.code(error.statusCode).send({ error: error.message });
+      }
+      throw error;
+    }
+  });
+
+  // Create a Session in the task's actual execution directory. If a worktree
+  // is bound, never silently create the Session in the project's main checkout.
+  app.post('/api/issues/:id/opencode-session', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const issue = store.getIssue(req.params.id);
+    if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    const project = store.getProject(issue.projectId);
+    if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
+    if (issue.claimedBy && issue.leaseExpiresAt && Date.parse(issue.leaseExpiresAt) > Date.now()) {
+      return reply.code(409).send({ error: '任务当前有有效执行租约；请先释放租约再替换 Session 绑定' });
+    }
+    const bodySchema = z.object({ title: z.string().trim().min(1).max(200).optional() }).strict();
+    const parsed = bodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    if (!project.wakeChannel.trim()) {
+      return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
+    }
+    const targetDirectory = issue.worktreePath.trim() || project.workspacePath.trim();
+    if (!targetDirectory) {
+      return reply.code(400).send({ error: '请先配置项目工作目录，或先为任务创建 Git Worktree' });
+    }
+    try {
+      const serverUrl = normalizeOpenCodeBase(project.wakeChannel);
+      const session = await createOpenCodeSession(
+        serverUrl,
+        targetDirectory,
+        parsed.data.title ?? `#${issue.id} ${issue.title}`
+      );
+      const normalizePath = (value: string): string => {
+        const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+        return /^[a-zA-Z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
+      };
+      if (normalizePath(session.directory) !== normalizePath(targetDirectory)) {
+        return reply.code(502).send({ error: `OpenCode Session 目录不匹配；新 Session 为 ${session.id}，未绑定到任务` });
+      }
+      try {
+        const updated = store.updateIssue(issue.id, { sessionId: session.id }, issue.version, String(req.headers['x-taskboard-actor'] ?? 'web'));
+        return reply.code(201).send({ issue: updated, session, serverUrl, workspacePath: targetDirectory });
+      } catch (error) {
+        return reply.code(500).send({ error: `Session ${session.id} 已创建，但任务绑定失败。请手动绑定该 Session。原因：${(error as Error).message}` });
+      }
+    } catch (error) {
+      return reply.code(502).send({ error: `无法在目标工作目录创建 OpenCode Session：${(error as Error).message}` });
+    }
+  });
+
+  // Unbind metadata only. The local branch/worktree is intentionally preserved.
+  app.delete('/api/issues/:id/git-binding', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const issue = store.getIssue(req.params.id);
+    if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    if (issue.claimedBy && issue.leaseExpiresAt && Date.parse(issue.leaseExpiresAt) > Date.now()) {
+      return reply.code(409).send({ error: '任务当前有有效执行租约；请先释放租约再解除 Git 绑定' });
+    }
+    const actor = String(req.headers['x-taskboard-actor'] ?? 'web');
+    return store.updateIssue(issue.id, { branch: '', worktree: null, worktreePath: null }, issue.version, actor);
+  });
+
+
+  // Runtime snapshot is the recovery path after Taskboard reload/restart. The
+  // Session ID is persisted on the issue; OpenCode remains authoritative for
+  // whether its agent is busy. This endpoint does not mutate task workflow status.
+  app.get('/api/issues/:id/opencode-state', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const issue = store.getIssue(req.params.id);
+    if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    if (!issue.sessionId?.trim()) return reply.code(409).send({ error: '任务尚未绑定 OpenCode Session' });
+    const project = store.getProject(issue.projectId);
+    if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
+    if (!project.wakeChannel.trim()) return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
+    const directory = issue.worktreePath.trim() || project.workspacePath.trim();
+    if (!directory) return reply.code(400).send({ error: '任务没有可用的工作目录' });
+    try {
+      const state = await getOpenCodeSessionRuntimeState(project.wakeChannel, directory, issue.sessionId);
+      if (state.directory && normalizeOpenCodeDirectory(state.directory) !== normalizeOpenCodeDirectory(directory)) {
+        return reply.code(409).send({ error: `OpenCode Session 的实际目录与任务执行目录不一致：${state.directory}` });
+      }
+      return { ...state, issueStatus: issue.status, recoverable: true };
+    } catch (err) {
+      return reply.code(502).send({ error: `无法恢复 OpenCode Session 状态：${(err as Error).message}` });
+    }
+  });
+
+  // Cancellation reaches the owning OpenCode server; it is not merely a
+  // Taskboard status change. The task itself remains in its workflow column.
+  app.post('/api/issues/:id/opencode-abort', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const issue = store.getIssue(req.params.id);
+    if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    if (!issue.sessionId?.trim()) return reply.code(409).send({ error: '任务尚未绑定 OpenCode Session' });
+    const project = store.getProject(issue.projectId);
+    if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
+    if (!project.wakeChannel.trim()) return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
+    const directory = issue.worktreePath.trim() || project.workspacePath.trim();
+    try {
+      const runtime = await getOpenCodeSessionRuntimeState(project.wakeChannel, directory, issue.sessionId);
+      if (runtime.directory && normalizeOpenCodeDirectory(runtime.directory) !== normalizeOpenCodeDirectory(directory)) {
+        return reply.code(409).send({ error: `OpenCode Session 的实际目录与任务执行目录不一致：${runtime.directory}` });
+      }
+      if (!runtime.busy) {
+        return reply.code(409).send({ error: 'OpenCode Session 当前未报告执行中；请先重新同步状态' });
+      }
+      await abortOpenCodeSession(project.wakeChannel, directory, issue.sessionId);
+      store.recordExecutionEvent(
+        issue.id,
+        'cancel_requested',
+        `已向 OpenCode Session ${issue.sessionId} 发送取消请求；任务状态未自动变更`,
+        String(req.headers['x-taskboard-actor'] ?? 'web')
+      );
+      return { ok: true, sessionId: issue.sessionId, requestedAt: new Date().toISOString() };
+    } catch (err) {
+      return reply.code(502).send({ error: `取消 OpenCode 执行失败：${(err as Error).message}` });
+    }
+  });
+
+  // Proxy the upstream OpenCode SSE stream, filtering out events from other
+  // sessions. Browser EventSource reconnects automatically; clients first
+  // reload /opencode-state to reconcile events missed while disconnected.
+  app.get('/api/issues/:id/opencode-events', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const issue = store.getIssue(req.params.id);
+    if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    if (!issue.sessionId?.trim()) return reply.code(409).send({ error: '任务尚未绑定 OpenCode Session' });
+    const project = store.getProject(issue.projectId);
+    if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
+    if (!project.wakeChannel.trim()) return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
+    const directory = issue.worktreePath.trim() || project.workspacePath.trim();
+    const controller = new AbortController();
+    let upstream: Response;
+    try {
+      upstream = await openOpenCodeEventStream(project.wakeChannel, directory, controller.signal);
+    } catch (err) {
+      return reply.code(502).send({ error: `无法订阅 OpenCode 事件：${(err as Error).message}` });
+    }
+
+    const res = reply.raw;
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'X-Accel-Buffering': 'no'
+    });
+    res.write(`event: ready\ndata: ${JSON.stringify({ issueId: issue.id, sessionId: issue.sessionId, at: new Date().toISOString() })}\n\n`);
+
+    const stop = (): void => { if (!controller.signal.aborted) controller.abort(); };
+    res.on('close', stop);
+    res.on('error', stop);
+    let buffer = '';
+    const decoder = new TextDecoder();
+    try {
+      for await (const chunk of upstream.body!) {
+        if (controller.signal.aborted || res.destroyed) break;
+        buffer += decoder.decode(chunk, { stream: true });
+        let boundary = buffer.search(/\r?\n\r?\n/);
+        while (boundary >= 0) {
+          const frame = buffer.slice(0, boundary);
+          const delimiter = /^\r?\n\r?\n/.exec(buffer.slice(boundary))?.[0] ?? '\n\n';
+          buffer = buffer.slice(boundary + delimiter.length);
+          const data = frame.split(/\r?\n/)
+            .filter(line => line.startsWith('data:'))
+            .map(line => line.slice(5).trimStart())
+            .join('\n');
+          if (data) {
+            try {
+              const parsed: unknown = JSON.parse(data);
+              if (openCodeEventBelongsToSession(parsed, issue.sessionId!)) {
+                res.write(`event: opencode\ndata: ${JSON.stringify(parsed)}\n\n`);
+              }
+            } catch {
+              // Ignore malformed/non-JSON upstream frames; do not break the stream.
+            }
+          }
+          boundary = buffer.search(/\r?\n\r?\n/);
+        }
+      }
+    } catch (err) {
+      if (!controller.signal.aborted && !res.destroyed) {
+        res.write(`event: upstream-error\ndata: ${JSON.stringify({ error: (err as Error).message })}\n\n`);
+      }
+    } finally {
+      res.off('close', stop);
+      res.off('error', stop);
+      await upstream.body?.cancel().catch(() => undefined);
+      if (!res.writableEnded) res.end();
+    }
+    return reply;
+  });
+
+  app.post('/api/issues/:id/agent-events', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
+    const eventSchema = z.object({ outcome: z.enum(['started', 'queued', 'running', 'idle', 'retrying', 'succeeded', 'failed', 'cancel_requested']), detail: z.string().trim().min(1).max(2000) });
+    const parsed = eventSchema.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
+    const actor = String(req.headers['x-taskboard-actor'] ?? 'watch');
+    return reply.code(201).send(store.recordExecutionEvent(req.params.id, parsed.data.outcome, parsed.data.detail, actor));
   });
 
   app.delete('/api/issues/:id', async (req: FastifyRequest<{ Params: IssueParams }>) => {

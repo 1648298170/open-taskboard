@@ -65,6 +65,7 @@ export default function App() {
   const [deps, setDeps] = useState<DependencyEdge[]>([]);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [detailRefreshKey, setDetailRefreshKey] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [connError, setConnError] = useState(false);
   const [sortBy, setSortBy] = useState<SortBy>('created');
@@ -321,7 +322,7 @@ export default function App() {
   }, []);
 
   useEffect(() => { if (projectId) { localStorage.setItem('project', projectId); void refresh(projectId); } }, [projectId, refresh]);
-  useEffect(() => connectSSE(() => { void loadProjects(); void refresh(); }), [loadProjects, refresh]);
+  useEffect(() => connectSSE(() => { setDetailRefreshKey(key => key + 1); void loadProjects(); void refresh(); }), [loadProjects, refresh]);
   // T6-31: 面板打开（或切换项目）时立即拉取一次；开着期间的更新走 refresh 内的重取。
   useEffect(() => {
     if (!statsOpen || !projectId) return;
@@ -815,7 +816,7 @@ export default function App() {
       </div>
 
       {openId && (
-        <Drawer issueId={openId} projectId={projectId}
+        <Drawer issueId={openId} projectId={projectId} refreshKey={detailRefreshKey}
           workspacePath={projects.find(project => project.id === projectId)?.workspacePath}
           sessionServerUrl={projects.find(project => project.id === projectId)?.wakeChannel}
           onClose={closeDrawer}

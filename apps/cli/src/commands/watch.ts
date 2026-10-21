@@ -60,6 +60,52 @@ async function firstHealthySessionBase(candidates: readonly string[]): Promise<s
 
 export interface SseEvent { name: string; data: string }
 
+export interface OpenCodeMessageLike {
+  info?: { id?: string; parentID?: string; role?: string; sessionID?: string; time?: { created?: number; completed?: number }; error?: unknown; finish?: unknown };
+  parts?: Array<{ type?: string; text?: string }>;
+}
+
+/**
+ * Find the Assistant response that follows the exact Taskboard-injected user
+ * message. OpenCode's history may contain unrelated work in the same Session;
+ * never correlate by Session idle/busy alone.
+ */
+export function findCorrelatedAssistant(
+  input: unknown,
+  marker: string,
+): { matchedPrompt: boolean; assistant?: OpenCodeMessageLike } {
+  if (!Array.isArray(input)) return { matchedPrompt: false };
+  const messages = (input as OpenCodeMessageLike[]).map((message, index) => ({ message, index }))
+    .sort((a, b) => {
+      const at = a.message.info?.time?.created;
+      const bt = b.message.info?.time?.created;
+      return typeof at === 'number' && typeof bt === 'number' ? at - bt || a.index - b.index : a.index - b.index;
+    })
+    .map(item => item.message);
+  const promptIndex = messages.findIndex(message =>
+    message.info?.role === 'user'
+    && (message.parts ?? []).some(part => part.type === 'text' && typeof part.text === 'string' && part.text.includes(marker))
+  );
+  if (promptIndex < 0) return { matchedPrompt: false };
+  const promptMessage = messages[promptIndex];
+  if (!promptMessage) return { matchedPrompt: false };
+  const promptId = promptMessage.info?.id;
+  // Prefer OpenCode's explicit parent relationship. This remains correct even
+  // when several prompts are queued before the first Assistant response arrives.
+  const linkedAssistant = promptId
+    ? messages.find(message => message.info?.role === 'assistant' && message.info?.parentID === promptId)
+    : undefined;
+  if (linkedAssistant) return { matchedPrompt: true, assistant: linkedAssistant };
+
+  // Compatibility fallback for API payloads without parentID: a later user
+  // message starts another request, so never cross that boundary.
+  const nextUserOffset = messages.slice(promptIndex + 1).findIndex(message => message.info?.role === 'user');
+  const endIndex = nextUserOffset < 0 ? messages.length : promptIndex + 1 + nextUserOffset;
+  const assistants = messages.slice(promptIndex + 1, endIndex).filter(message => message.info?.role === 'assistant');
+  const assistant = assistants.at(-1);
+  return assistant ? { matchedPrompt: true, assistant } : { matchedPrompt: true };
+}
+
 /**
  * Bound outbound HTTP waits so one stalled OpenCode/API request cannot hold the
  * serialized wake queue forever. The timeout aborts the client request; for
@@ -370,17 +416,106 @@ export const watchCommand: Command = {
       }
     };
 
+    const reportExecution = async (
+      issueId: string,
+      outcome: 'started' | 'queued' | 'running' | 'idle' | 'retrying' | 'succeeded' | 'failed',
+      detail: string
+    ): Promise<void> => {
+      try {
+        const res = await fetchWithTimeout(`${base()}/api/issues/${encodeURIComponent(issueId)}/agent-events`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-taskboard-actor': 'watch', ...(token() ? { Authorization: `Bearer ${token()}` } : {}) },
+          body: JSON.stringify({ outcome, detail })
+        });
+        if (!res.ok) console.error(`watch: execution event report failed (HTTP ${res.status})`);
+      } catch (err) {
+        console.error(`watch: execution event report failed (${(err as Error).message})`);
+      }
+    };
+
+    // OpenCode prompt_async acknowledges only queueing. A unique marker lets us
+    // find the exact user message in the Session history; success requires a later
+    // assistant response AND the Session returning to idle. Idle alone is never success.
+    const monitoredSessions = new Set<string>();
+    const makeWakeCorrelationMarker = (commentId: string, issuedAt = Date.now()): string =>
+      `taskboard-wake:${commentId || 'unknown'}:${issuedAt}`;
+    const monitorOpenCodeSession = async (
+      issueId: string, sessionId: string, serverUrl: string, marker: string
+    ): Promise<void> => {
+      const monitorKey = `${sessionId}:${marker}`;
+      if (monitoredSessions.has(monitorKey)) return;
+      monitoredSessions.add(monitorKey);
+      let observedBusy = false;
+      let reportedRunning = false;
+      let matchedPrompt = false;
+      const deadline = Date.now() + 10 * 60_000;
+      try {
+        while (Date.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, 2_000));
+          const [statusResponse, messagesResponse] = await Promise.all([
+            fetchWithTimeout(`${serverUrl}/session/status`),
+            fetchWithTimeout(`${serverUrl}/session/${encodeURIComponent(sessionId)}/message?limit=50`)
+          ]);
+          if (!statusResponse.ok) throw new Error(`OpenCode status returned HTTP ${statusResponse.status}`);
+          if (!messagesResponse.ok) throw new Error(`OpenCode message history returned HTTP ${messagesResponse.status}`);
+          const statusPayload = await statusResponse.json() as Record<string, unknown>;
+          const rawStatus = statusPayload && typeof statusPayload === 'object' ? statusPayload[sessionId] : undefined;
+          const status = rawStatus && typeof rawStatus === 'object' && 'type' in rawStatus
+            ? String((rawStatus as { type: unknown }).type)
+            : '';
+          const rawMessages = await messagesResponse.json() as unknown;
+          const correlation = findCorrelatedAssistant(rawMessages, marker);
+          if (correlation.matchedPrompt) matchedPrompt = true;
+          const assistant = correlation.assistant;
+
+          if (status === 'busy' || status === 'retry') {
+            observedBusy = true;
+            if (matchedPrompt && !reportedRunning) {
+              reportedRunning = true;
+              await reportExecution(issueId, 'running',
+                `已在 OpenCode Session ${sessionId} 历史中匹配到本次唤醒；当前会话处于执行状态`);
+            }
+          }
+          if (assistant && status === 'idle') {
+            const error = assistant.info?.error;
+            if (error) {
+              const detail = typeof error === 'string' ? error : JSON.stringify(error);
+              await reportExecution(issueId, 'failed',
+                `OpenCode 已返回与本次唤醒关联的 Assistant 错误：${detail.slice(0, 1500)}`);
+            } else {
+              await reportExecution(issueId, 'succeeded',
+                `已匹配本次唤醒标识 ${marker}，并观察到后续 Assistant 回复且 Session 已空闲`);
+            }
+            return;
+          }
+          if (status === 'idle' && observedBusy && matchedPrompt && !assistant) {
+            // A busy→idle transition without a correlated assistant reply is not proof of success.
+            await reportExecution(issueId, 'idle',
+              `Session ${sessionId} 已空闲，但尚未找到本次唤醒对应的 Assistant 回复；不判定任务成功`);
+            observedBusy = false;
+          }
+        }
+        console.log(`watch: stopped completion observation for session ${sessionId} after 10 minutes (matched prompt: ${matchedPrompt})`);
+      } catch (err) {
+        console.error(`watch: session completion observation failed for ${sessionId}: ${(err as Error).message}`);
+      } finally {
+        monitoredSessions.delete(monitorKey);
+      }
+    };
+
     const executeWake = async (issueId: string, prompt: string, tuiUrl?: string, commentId = '', projectChannel?: string | null): Promise<boolean> => {
       // Session binding is authoritative. Never inject a bound task into the
       // currently selected TUI session, and never silently spawn a new session.
       let sessionId: string | null = null;
+      let taskWorktreePath = '';
       try {
         const res = await fetchWithTimeout(`${base()}/api/issues/${encodeURIComponent(issueId)}`, {
           headers: token() ? { Authorization: `Bearer ${token()}` } : {}
         });
         if (res.ok) {
-          const issue = await res.json() as { sessionId?: string | null; title?: string };
+          const issue = await res.json() as { sessionId?: string | null; title?: string; worktreePath?: string };
           sessionId = issue.sessionId ?? null;
+          taskWorktreePath = issue.worktreePath?.trim() ?? '';
         } else {
           console.error(`watch: cannot load task ${issueId} (HTTP ${res.status}); wake skipped`);
           return false;
@@ -390,6 +525,7 @@ export const watchCommand: Command = {
         return false;
       }
 
+      await reportExecution(issueId, 'started', '收到唤醒请求，开始解析任务路由');
       if (sessionId) {
         // Project wakeChannel and --opencode normally point at the same server.
         // Prefer the explicit session server, then use the project's configured
@@ -404,32 +540,77 @@ export const watchCommand: Command = {
         // prompt). A bound task that fails it must refuse: falling through to
         // TUI/headless would inject into the WRONG session.
         if (decideWake(sessionId, sessionBase) !== 'prompt') {
+          const reason = `任务绑定 Session ${sessionId}，但没有可用的 OpenCode 服务；拒绝回退到其他会话`;
           console.error(`watch: task ${issueId} is bound to ${sessionId}, but no healthy OpenCode server is reachable (checked: ${sessionCandidates.join(', ') || 'none'}); refusing to start a new session`);
+          await reportExecution(issueId, 'failed', reason);
           return false;
         }
+        // A task bound to a worktree must not dispatch into a Session rooted at
+        // the project's main checkout. Query sessions in the target directory
+        // and fail closed when the bound Session cannot be found there.
+        if (taskWorktreePath) {
+          try {
+            const sessionsRes = await fetchWithTimeout(`${sessionBase}/session?directory=${encodeURIComponent(taskWorktreePath)}`);
+            if (!sessionsRes.ok) throw new Error(`OpenCode returned HTTP ${sessionsRes.status}`);
+            const sessions = await sessionsRes.json() as { id?: string; directory?: string }[];
+            const boundSession = Array.isArray(sessions) ? sessions.find(item => item?.id === sessionId) : undefined;
+            const normalizePath = (value: string): string => {
+              const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+              return /^[a-zA-Z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
+            };
+            if (!boundSession?.directory || normalizePath(boundSession.directory) !== normalizePath(taskWorktreePath)) {
+              const reason = `Session ${sessionId} 不在绑定的 Worktree 目录 ${taskWorktreePath} 中；请在任务详情中创建工作树 Session 后重试`;
+              console.error(`watch: refusing to dispatch task ${issueId}; session directory does not match worktree path`);
+              await reportExecution(issueId, 'failed', reason);
+              return false;
+            }
+          } catch (err) {
+            const reason = `无法验证 Session ${sessionId} 与 Worktree 目录的对应关系：${(err as Error).message}`;
+            await reportExecution(issueId, 'failed', reason);
+            console.error(`watch: ${reason}`);
+            return false;
+          }
+        }
         try {
+          const correlationMarker = makeWakeCorrelationMarker(commentId);
+          const correlatedPrompt = `${prompt}\n\n[Taskboard correlation marker: ${correlationMarker}. Treat this as metadata; do not repeat it in your answer.]`;
           const res = await fetchWithTimeout(`${sessionBase}/session/${encodeURIComponent(sessionId)}/prompt_async`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
-              parts: [{ type: 'text', text: prompt }],
+              parts: [{ type: 'text', text: correlatedPrompt }],
               ...(modelRef ? { model: modelRef } : {})
             })
           });
           if (!res.ok) {
+            const reason = `绑定 Session ${sessionId} 拒绝了提示词请求（HTTP ${res.status}）；没有创建备用会话`;
             console.error(`watch: bound session ${sessionId} rejected prompt (HTTP ${res.status}); no fallback session will be created`);
+            await reportExecution(issueId, 'failed', reason);
             return false;
           }
           console.log(`watch: queued prompt in bound session ${sessionId}`);
           await markStatus(commentId, 'processing');
+          await reportExecution(issueId, 'queued', `提示词已提交到绑定的 OpenCode Session ${sessionId}；该状态表示已排队，不代表 Agent 已完成`);
+          void monitorOpenCodeSession(issueId, sessionId!, sessionBase!, correlationMarker);
           return true;
         } catch (err) {
           console.error(`watch: bound session ${sessionId} failed (${(err as Error).message}); no fallback session will be created`);
+          await reportExecution(issueId, 'failed', `提交到绑定 Session ${sessionId} 失败：${(err as Error).message}`);
           return false;
         }
       }
 
-      // Only unbound tasks may use the TUI input box (which belongs to the
+      // A task with a worktree must never fall through to a TUI or headless
+      // command whose cwd is not guaranteed to be that worktree. Require a
+      // Session created in the worktree and validated above.
+      if (taskWorktreePath) {
+        const reason = `任务已绑定 Worktree ${taskWorktreePath}，但没有绑定 OpenCode Session；为避免在错误目录执行，请先创建工作树 Session`;
+        await reportExecution(issueId, 'failed', reason);
+        console.error(`watch: refusing to dispatch task ${issueId} without a Session bound to its worktree`);
+        return false;
+      }
+
+      // Only tasks without a worktree binding may use the TUI input box (which belongs to the
       // currently selected TUI session) or headless spawn fallback.
       if (tuiUrl) {
         try {
@@ -441,6 +622,7 @@ export const watchCommand: Command = {
           if (res.ok) {
             console.log(`watch: appended wake to TUI (${tuiUrl}) — 等待人工回车提交`);
             await markStatus(commentId, 'processing');
+            await reportExecution(issueId, 'queued', `唤醒内容已写入 TUI 输入框 ${tuiUrl}，等待人工提交`);
             return true;
           }
           console.error(`watch: TUI append failed (HTTP ${res.status}) — 尝试 headless`);
@@ -458,14 +640,24 @@ export const watchCommand: Command = {
           child.on('exit', code => resolve(code === 0 ? 'ok' : 'failed'));
           child.on('error', () => resolve('missing'));
         });
-        if (outcome === 'ok') { await markStatus(commentId, 'processed'); return true; }
+        if (outcome === 'ok') {
+          await markStatus(commentId, 'processed');
+          await reportExecution(issueId, 'succeeded', `Headless Agent 执行成功（第 ${i + 1} 次尝试）`);
+          return true;
+        }
         if (outcome === 'missing') {
           console.error(`watch: exec ${execParts[0]} not found in PATH`);
+          await reportExecution(issueId, 'failed', `找不到执行命令 ${execParts[0]}，请检查 PATH 配置`);
           return false;
         }
         console.error(`watch: headless run failed (attempt ${i + 1}/${attempts.length})`);
+        if (i + 1 < attempts.length) {
+          await reportExecution(issueId, 'retrying',
+            `Headless Agent 第 ${i + 1}/${attempts.length} 次尝试失败，将按重试间隔再次执行`);
+        }
       }
       console.error('watch: headless run failed after all retries — 结果不可用，请检查 exec 命令与目标 agent CLI 状态');
+      await reportExecution(issueId, 'failed', 'Headless Agent 所有重试均失败，请检查命令、环境变量和 Agent CLI 日志');
       return false;
     };
 

@@ -73,6 +73,10 @@ export const createIssueSchema = z
     branch: z.string().optional(),
     // T2-8: null creates as unbound ('' after the repo's ?? '' normalization).
     worktree: z.string().nullable().optional(),
+    worktreePath: z.string().trim().max(2000).nullable().optional(),
+    acceptanceCriteria: z.string().max(20000).optional(),
+    reviewStatus: z.enum(['pending', 'approved', 'changes_requested']).optional(),
+    reviewNotes: z.string().max(20000).optional(),
     // v0.4: opencode session binding 鈥?null/absent = unbound.
     sessionId: z.string().min(1).nullable().optional(),
     assignee: z.string().optional(),
@@ -93,6 +97,10 @@ export const issuePatchSchema = z
     branch: z.string().optional(),
     // T2-8: null clears (stored as '').
     worktree: z.string().nullable().optional(),
+    worktreePath: z.string().trim().max(2000).nullable().optional(),
+    acceptanceCriteria: z.string().max(20000).optional(),
+    reviewStatus: z.enum(['pending', 'approved', 'changes_requested']).optional(),
+    reviewNotes: z.string().max(20000).optional(),
     sessionId: z.string().min(1).nullable().optional(),
     assignee: z.string().optional(),
     parentId: z.string().nullable().optional(),

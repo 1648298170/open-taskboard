@@ -1,11 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { computePosition, flip, shift } from '@floating-ui/dom';
-import { activeClaim, api_, Commit, GitRefs, Issue, IssueDetail, PRIORITIES, STATUS_CN, Status } from '../api';
+import { activeClaim, api_, Commit, connectOpenCodeSessionEvents, GitRefs, Issue, IssueDetail, OpenCodeSessionRuntimeState, PRIORITIES, STATUS_CN, Status } from '../api';
 import { Markdown } from '../markdown';
 import { confirmDialog, promptDialog } from './dialogs';
 import { fmtHMLocal, fmtWhenLocal } from '../logic/time';
 import { applyMention, mentionCandidatesFor, MentionCandidate, nextHi } from '../logic/mention';
-import { ExternalLink, Pencil, Plus, Sparkles, UserRound, X } from 'lucide-react';
+import { Activity, ExternalLink, Pencil, Plus, RefreshCw, Sparkles, Square, UserRound, X } from 'lucide-react';
 import { WAKE_PREFIX } from '@taskboard/core/types';
 
 const fmtWhen = fmtWhenLocal;
@@ -47,8 +47,10 @@ const humanSize = (bytes: number): string =>
 // 规则同源；taskboard watch --on 可改运行时前缀，此处只反映默认值）。
 const MENTION_CANDIDATES: MentionCandidate[] = [{ value: WAKE_PREFIX, label: '唤醒 agent 干活（主进程忙时排队：收尾当前任务后接手 · Enter 选择）' }];
 
-export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, statuses, onClose, onChanged, onToast, onOpenIssue, issues }: {
+export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionServerUrl, statuses, onClose, onChanged, onToast, onOpenIssue, issues }: {
   issueId: string;
+  /** Incremented by the app-level SSE handler to refresh live execution history. */
+  refreshKey: number;
   /** 当前项目 id —— 抽屉打开时拉一次 git 分支/工作树列表（T2-8） */
   projectId: string | null;
   /** OpenCode directory + server used to build a direct session deep link. */
@@ -101,6 +103,14 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
   };
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refs, setRefs] = useState<GitRefs | null>(null);
+  const [creatingWorktree, setCreatingWorktree] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [openCodeRuntime, setOpenCodeRuntime] = useState<OpenCodeSessionRuntimeState | null>(null);
+  const [openCodeRuntimeLoading, setOpenCodeRuntimeLoading] = useState(false);
+  const [openCodeAbortLoading, setOpenCodeAbortLoading] = useState(false);
+  const [openCodeEventsConnected, setOpenCodeEventsConnected] = useState(false);
+  const [openCodeRuntimeError, setOpenCodeRuntimeError] = useState<string | null>(null);
+  const [openCodeRecentEvents, setOpenCodeRecentEvents] = useState<Array<{ type: string; at: string }>>([]);
   // T6-36: 最近提交预览。null = 加载中/不可用。
   const [commits, setCommits] = useState<Commit[] | null>(null);
 
@@ -113,6 +123,84 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
     }
   };
   useEffect(() => { setDetail(null); setDesc(''); setEditingDesc(false); setLoadError(null); void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [issueId]);
+  useEffect(() => { if (refreshKey > 0) void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [refreshKey]);
+
+  // Attach to the task's persisted OpenCode Session. A fresh snapshot on the
+  // initial connection and every SSE reconnect recovers status missed offline.
+  const refreshOpenCodeRuntime = useCallback(async (silent = false): Promise<void> => {
+    if (!detail?.sessionId) return;
+    if (!silent) setOpenCodeRuntimeLoading(true);
+    setOpenCodeRuntimeError(null);
+    try {
+      setOpenCodeRuntime(await api_.openCodeSessionState(issueId));
+    } catch (err) {
+      setOpenCodeRuntimeError((err as Error).message);
+    } finally {
+      if (!silent) setOpenCodeRuntimeLoading(false);
+    }
+  }, [issueId, detail?.sessionId]);
+
+  useEffect(() => {
+    if (!detail?.sessionId || !sessionServerUrl?.trim()) {
+      setOpenCodeRuntime(null);
+      setOpenCodeRecentEvents([]);
+      setOpenCodeEventsConnected(false);
+      setOpenCodeRuntimeError(null);
+      return;
+    }
+    let active = true;
+    const disconnect = connectOpenCodeSessionEvents(
+      issueId,
+      event => {
+        if (!active || typeof event !== 'object' || event === null) return;
+        const envelope = event as {
+          payload?: { type?: string; properties?: Record<string, unknown> };
+          type?: string;
+          properties?: Record<string, unknown>;
+        };
+        const payload = envelope.payload ?? envelope;
+        const type = payload.type ?? envelope.type ?? 'event';
+        const properties = payload.properties ?? {};
+        setOpenCodeRecentEvents(previous => [{ type, at: new Date().toISOString() }, ...previous].slice(0, 5));
+        if (type === 'session.idle') {
+          setOpenCodeRuntime(previous => previous ? {
+            ...previous, busy: false, status: { type: 'idle' }, observedAt: new Date().toISOString()
+          } : previous);
+          void refreshOpenCodeRuntime(true);
+        } else if (type === 'session.status') {
+          const status = properties.status;
+          if (typeof status === 'object' && status !== null && 'type' in status && typeof status.type === 'string') {
+            const runtimeStatus = status as { type: string; [key: string]: unknown };
+            setOpenCodeRuntime(previous => previous ? {
+              ...previous,
+              status: runtimeStatus,
+              busy: ['busy', 'running', 'retry'].includes(runtimeStatus.type),
+              observedAt: new Date().toISOString()
+            } : previous);
+          }
+        } else if (type === 'session.error') {
+          setOpenCodeRuntimeError('OpenCode Session 返回执行错误');
+          void refreshOpenCodeRuntime(true);
+        }
+      },
+      () => {
+        if (!active) return;
+        setOpenCodeEventsConnected(true);
+        void refreshOpenCodeRuntime(true);
+      },
+      message => {
+        if (!active) return;
+        setOpenCodeEventsConnected(false);
+        setOpenCodeRuntimeError(message);
+      }
+    );
+    void refreshOpenCodeRuntime(true);
+    return () => {
+      active = false;
+      disconnect();
+      setOpenCodeEventsConnected(false);
+    };
+  }, [issueId, detail?.sessionId, sessionServerUrl, refreshOpenCodeRuntime]);
 
   // 每次抽屉打开（组件挂载）拉一次 git-refs；失败静默回退为文本输入。
   useEffect(() => {
@@ -123,6 +211,7 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
   // T6-36: 绑定分支/工作树时预览最近提交（工作树优先——名字会被服务端
   // 解析成该工作树 checkout 的 HEAD）。换任务或换绑定即重取。
   const commitRef = detail ? (detail.worktree || detail.branch || '') : '';
+  const executionEvents = detail ? detail.activities.filter(a => a.action === 'execution').slice(0, 5) : [];
   useEffect(() => {
     setCommits(null);
     if (!projectId || !commitRef) return;
@@ -163,7 +252,7 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
     } catch (err) { onToast(`✗ ${(err as Error).message}`); }
   };
 
-  const sessionUrl = buildOpenCodeSessionUrl(sessionServerUrl, workspacePath, detail.sessionId);
+  const sessionUrl = buildOpenCodeSessionUrl(sessionServerUrl, detail.worktreePath || workspacePath, detail.sessionId);
 
   const addDep = async (dependsOnId: string): Promise<void> => {
     try {
@@ -215,7 +304,11 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
         {/* T2-8: 工作树字段，同样的下拉/回退模式（值为 worktree 名称）。 */}
         {refs && refs.worktrees.length > 0 ? (
           <Select title="工作树" value={detail.worktree}
-            onChange={v => { if (v !== detail.worktree) void patch({ worktree: v }); }}
+            onChange={v => {
+              if (v === detail.worktree) return;
+              const selected = refs.worktrees.find(w => w.name === v);
+              void patch({ worktree: v, worktreePath: selected?.path ?? '' });
+            }}
             options={[{ value: '', label: '工作树 —' },
               ...(detail.worktree && !refs.worktrees.some(w => w.name === detail.worktree) ? [{ value: detail.worktree, label: detail.worktree }] : []),
               ...refs.worktrees.map(w => ({ value: w.name, label: w.name }))]} />
@@ -223,7 +316,7 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
           <input placeholder="工作树" defaultValue={detail.worktree}
             onBlur={e => { if (e.target.value !== detail.worktree) void patch({ worktree: e.target.value }); }} />
         )}
-        <input type="date" title="开始日期" defaultValue={detail.startDate ?? ''}
+        <input type="date" title="计划开始日期" defaultValue={detail.startDate ?? ''}
           onChange={e => { const v = e.target.value || null; if (v !== detail.startDate) void patch({ startDate: v }); }} />
         <input type="date" title="截止日期" defaultValue={detail.dueDate ?? ''}
           onChange={e => { const v = e.target.value || null; if (v !== detail.dueDate) void patch({ dueDate: v }); }} />
@@ -290,8 +383,14 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
                     await new Promise(r => setTimeout(r, 1000));
                     try {
                       const fresh = await api_.showIssue(issueId);
+                      setDetail(fresh);
                       const st = fresh.comments.find(c => c.id === created.id)?.status;
                       if (st && st !== 'pending') {
+                        // The watcher reports the execution outcome immediately
+                        // after changing comment status; fetch once more so the
+                        // activity timeline also includes that event.
+                        await new Promise(r => setTimeout(r, 250));
+                        try { setDetail(await api_.showIssue(issueId)); } catch { /* keep latest successful detail */ }
                         onToast(st === 'processed' ? '✓ agent 已处理本条唤醒' : '✓ 已送达，agent 处理中');
                         onChanged();
                         return;
@@ -342,6 +441,234 @@ export function Drawer({ issueId, projectId, workspacePath, sessionServerUrl, st
           </div>
         );
       })()}
+
+      <section className="detail-section execution-context">
+        <h3>执行上下文</h3>
+        <div className="detail-context-grid">
+          <div className="detail-context-item">
+            <span>实际开始</span>
+            <strong>{detail.startedAt ? fmtWhen(detail.startedAt) : '尚未开始'}</strong>
+          </div>
+          <div className="detail-context-item">
+            <span>实际完成</span>
+            <strong>{detail.completedAt ? fmtWhen(detail.completedAt) : '尚未完成'}</strong>
+          </div>
+          <div className="detail-context-item">
+            <span>当前执行者</span>
+            <strong>{activeClaim(detail) ?? '未认领'}</strong>
+          </div>
+          <div className="detail-context-item">
+            <span>Git 分支</span>
+            <strong>{detail.branch || '未绑定'}</strong>
+          </div>
+          <div className="detail-context-item detail-context-wide">
+            <span>Git 工作树</span>
+            <strong>{detail.worktree || '未绑定'}</strong>
+          </div>
+          <label className="detail-field detail-context-wide">
+            <span>工作树绝对路径</span>
+            <input title="工作树绝对路径" defaultValue={detail.worktreePath}
+              placeholder="选择工作树后自动填充，也可手动填写"
+              onBlur={e => {
+                const value = e.currentTarget.value.trim();
+                if (value !== detail.worktreePath) void patch({ worktreePath: value });
+              }} />
+          </label>
+          <div className="worktree-action-row">
+            <button className="btn tiny" disabled={!projectId || creatingWorktree || !!(detail.branch || detail.worktree || detail.worktreePath)}
+              title={!projectId ? '当前任务没有所属项目' : (detail.branch || detail.worktree || detail.worktreePath)
+                ? '任务已有 Git 绑定；为避免覆盖，请先确认并解除绑定'
+                : '创建独立 task 分支和 Git Worktree，并自动绑定到当前任务'}
+              onClick={async () => {
+                const currentProjectId = projectId;
+                if (!currentProjectId) return;
+                setCreatingWorktree(true);
+                try {
+                  const result = await api_.createTaskWorktree(detail.id);
+                  onToast(result.alreadyBound
+                    ? '该任务已经绑定有效 Worktree'
+                    : `已创建并绑定 Worktree：${result.worktreePath}`);
+                  const freshRefs = await api_.gitRefs(currentProjectId);
+                  setRefs(freshRefs);
+                  onChanged();
+                  await load();
+                } catch (err) {
+                  onToast(`Worktree 创建失败：${(err as Error).message}`);
+                } finally {
+                  setCreatingWorktree(false);
+                }
+              }}>
+              {creatingWorktree ? '正在创建…' : '自动创建 Worktree'}
+            </button>
+            <span>{creatingWorktree ? '正在创建分支和独立工作目录，请勿重复操作' : '创建到项目工作目录旁的 .taskboard-worktrees 目录'}</span>
+            {(detail.branch || detail.worktree || detail.worktreePath) && (
+              <button className="btn tiny" disabled={creatingWorktree} onClick={async () => {
+                if (!await confirmDialog({
+                  title: '解除 Git 绑定？',
+                  lines: ['只清除任务中的分支、工作树名称和路径绑定。', '不会删除本地 Git 分支或工作树目录。'],
+                  confirmText: '解除绑定'
+                })) return;
+                try {
+                  await api_.releaseGitBinding(detail.id);
+                  onToast('已解除 Git 绑定；本地分支和工作树已保留');
+                  if (projectId) setRefs(await api_.gitRefs(projectId));
+                  onChanged();
+                  await load();
+                } catch (err) {
+                  onToast(`解除 Git 绑定失败：${(err as Error).message}`);
+                }
+              }}>解除 Git 绑定</button>
+            )}
+          </div>
+          <div className="detail-context-item detail-context-wide">
+            <span>OpenCode Session</span>
+            {detail.sessionId
+              ? <code title={detail.sessionId}>{detail.sessionId}</code>
+              : <span className="detail-empty">未绑定会话</span>}
+            <button className="btn tiny" disabled={creatingSession || !sessionServerUrl?.trim() || !(detail.worktreePath || workspacePath)}
+              title={detail.worktreePath
+                ? '在当前绑定的 Git Worktree 目录创建 OpenCode Session，并将其绑定到任务'
+                : '在项目工作目录创建 OpenCode Session，并将其绑定到任务'}
+              onClick={async () => {
+                if (detail.sessionId && !await confirmDialog({
+                  title: '替换当前 Session 绑定？',
+                  lines: ['将创建一个新 Session 并绑定到此任务。', '原有 Session 不会被删除，但后续唤醒将使用新 Session。'],
+                  confirmText: '创建并替换'
+                })) return;
+                setCreatingSession(true);
+                try {
+                  const result = await api_.createTaskSession(detail.id);
+                  onToast(`已创建并绑定 Session ${result.session.id}（目录：${result.workspacePath}）`);
+                  onChanged();
+                  await load();
+                } catch (err) {
+                  onToast(`创建 Session 失败：${(err as Error).message}`);
+                } finally {
+                  setCreatingSession(false);
+                }
+              }}>
+              {creatingSession ? '创建中…' : detail.worktreePath ? '在工作树中创建 Session' : '在项目目录创建 Session'}
+            </button>
+          </div>
+          {detail.sessionId && sessionServerUrl?.trim() && (
+            <div className="detail-context-item detail-context-wide">
+              <span>OpenCode 运行状态</span>
+              <strong>
+                {openCodeRuntimeLoading ? '同步中…'
+                  : openCodeRuntime?.busy ? '执行中'
+                    : openCodeRuntime?.status?.type === 'idle' ? '空闲'
+                      : openCodeRuntime?.status?.type ?? '未知'}
+              </strong>
+              <small style={{ color: openCodeEventsConnected ? 'var(--success, var(--accent))' : 'var(--ink-dim)' }}>
+                <Activity size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                {openCodeEventsConnected ? '实时事件已连接' : '事件连接中断或重连中'}
+                {openCodeRuntime?.observedAt ? ` · 同步于 ${fmtWhen(openCodeRuntime.observedAt)}` : ''}
+              </small>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button className="btn tiny" disabled={openCodeRuntimeLoading} onClick={() => void refreshOpenCodeRuntime()}>
+                  <RefreshCw size={12} /> 重新同步状态
+                </button>
+                <button className="btn tiny" disabled={!openCodeRuntime?.busy || openCodeAbortLoading} onClick={async () => {
+                  if (!await confirmDialog({
+                    title: `取消 OpenCode Session 执行？`,
+                    lines: [`将向 Session ${detail.sessionId} 发送真实取消请求。`, '任务状态不会自动改为完成或失败；取消后可继续通过「唤醒」恢复执行。'],
+                    danger: true,
+                    confirmText: '取消执行'
+                  })) return;
+                  setOpenCodeAbortLoading(true);
+                  try {
+                    await api_.abortOpenCodeSession(detail.id);
+                    onToast(`已向 OpenCode Session ${detail.sessionId} 发送取消请求`);
+                    await refreshOpenCodeRuntime();
+                    onChanged();
+                    await load();
+                  } catch (err) {
+                    onToast(`取消执行失败：${(err as Error).message}`);
+                  } finally {
+                    setOpenCodeAbortLoading(false);
+                  }
+                }}>
+                  <Square size={12} /> {openCodeAbortLoading ? '取消中…' : '取消执行'}
+                </button>
+              </div>
+              {openCodeRuntimeError && <small style={{ color: 'var(--danger)' }}>{openCodeRuntimeError}</small>}
+              {openCodeRecentEvents.length > 0 && (
+                <ul style={{ margin: '2px 0 0', paddingLeft: 18, color: 'var(--ink-dim)', fontSize: 11 }}>
+                  {openCodeRecentEvents.map((event, index) => (
+                    <li key={`${event.at}-${index}`}><code>{event.type}</code> · {fmtWhen(event.at)}</li>
+                  ))}
+                </ul>
+              )}
+              {openCodeRuntime && !openCodeRuntime.busy && detail.status === 'in_progress' && (
+                <small style={{ color: 'var(--ink-dim)' }}>
+                  Taskboard 任务仍处于「进行中」，但 OpenCode 当前未报告执行中；可重新同步，或点击「唤醒」继续任务。
+                </small>
+              )}
+            </div>
+          )}
+          <div className="detail-context-item detail-context-wide">
+            <span>执行耗时</span>
+            <strong>{detail.startedAt && detail.completedAt
+              ? (() => {
+                  const minutes = Math.max(0, Math.round((Date.parse(detail.completedAt) - Date.parse(detail.startedAt)) / 60000));
+                  return minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
+                })()
+              : detail.startedAt ? '进行中' : '—'}</strong>
+          </div>
+          <div className="detail-context-wide execution-history">
+            <span className="execution-history-title">最近 Agent 执行记录</span>
+            {executionEvents.length
+              ? <ul>
+                  {executionEvents.map(event => {
+                    const separator = event.detail.indexOf('] ');
+                    const outcome = event.detail.startsWith('[') && separator > 1 ? event.detail.slice(1, separator) : '记录';
+                    const message = event.detail.startsWith('[') && separator > 1 ? event.detail.slice(separator + 2) : event.detail;
+                    const outcomeLabel = ({ started: '开始', queued: '已提交', running: '会话执行中', idle: '会话空闲', retrying: '重试', succeeded: '成功', failed: '失败', cancel_requested: '已请求取消' } as Record<string, string>)[outcome] ?? outcome;
+                    return (
+                      <li key={event.id}>
+                        <time>{fmtWhen(event.createdAt)}</time>
+                        <strong className={`execution-outcome execution-outcome-${outcome}`}>{outcomeLabel}</strong>
+                        <span>{message}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              : <p className="detail-empty">暂无执行记录。通过「唤醒」触发 Agent 后，这里会记录提交、重试和失败信息。</p>}
+          </div>
+        </div>
+      </section>
+
+      <section className="detail-section review-context">
+        <h3>验收与审核</h3>
+        <label className="detail-field">
+          <span>验收标准（Markdown）</span>
+          <textarea rows={4} defaultValue={detail.acceptanceCriteria}
+            placeholder="列出可验证的完成条件，例如：功能行为、边界情况、测试要求…"
+            onBlur={e => {
+              const value = e.currentTarget.value;
+              if (value !== detail.acceptanceCriteria) void patch({ acceptanceCriteria: value });
+            }} />
+        </label>
+        <div className="review-status-row">
+          <span>审核结论</span>
+          <Select value={detail.reviewStatus} onChange={v => {
+            if (v !== detail.reviewStatus) void patch({ reviewStatus: v as IssueDetail['reviewStatus'] });
+          }} options={[
+            { value: 'pending', label: '待审核' },
+            { value: 'approved', label: '已通过' },
+            { value: 'changes_requested', label: '需要修改' }
+          ]} />
+        </div>
+        <label className="detail-field">
+          <span>审核意见 / 验收证据</span>
+          <textarea rows={3} defaultValue={detail.reviewNotes}
+            placeholder="记录验证结果、未覆盖项或需要修改的内容…"
+            onBlur={e => {
+              const value = e.currentTarget.value;
+              if (value !== detail.reviewNotes) void patch({ reviewNotes: value });
+            }} />
+        </label>
+      </section>
 
       {/* T6-36: 最近提交预览 —— 绑定了分支或工作树才显示。 */}
       {commitRef && (

@@ -33,6 +33,19 @@ export interface OpenCodeSessionOption {
   updatedAt: number | null;
 }
 
+/** OpenCode's authoritative runtime snapshot used to reattach after reconnect/restart. */
+export interface OpenCodeSessionRuntimeState {
+  sessionId: string;
+  title: string;
+  directory: string;
+  updatedAt: number | null;
+  status: { type: string; [key: string]: unknown } | null;
+  busy: boolean;
+  observedAt: string;
+  issueStatus: Status;
+  recoverable: boolean;
+}
+
 export interface WorkspaceDirectoryEntry {
   name: string;
   path: string;
@@ -164,11 +177,49 @@ export const api_ = {
     const qs = query.toString();
     return api<{ sessions: OpenCodeSessionOption[]; workspacePath: string; serverUrl: string }>('GET', `/api/opencode/sessions${qs ? `?${qs}` : ''}`);
   },
+  createTaskWorktree: (id: string) => api<{ issue: Issue; branch: string; worktree: string; worktreePath: string; alreadyBound: boolean }>('POST', `/api/issues/${encodeURIComponent(id)}/create-worktree`, {}),
+  releaseGitBinding: (id: string) => api<Issue>('DELETE', `/api/issues/${encodeURIComponent(id)}/git-binding`),
+  createTaskSession: (id: string, title?: string) => api<{ issue: Issue; session: OpenCodeSessionOption; serverUrl: string; workspacePath: string }>('POST', `/api/issues/${encodeURIComponent(id)}/opencode-session`, title ? { title } : {}),
+  /** Query OpenCode itself after a Taskboard reload to recover live Session state. */
+  openCodeSessionState: (id: string) => api<OpenCodeSessionRuntimeState>('GET', `/api/issues/${encodeURIComponent(id)}/opencode-state`),
+  /** Abort the actual OpenCode Session, not just the Taskboard issue status. */
+  abortOpenCodeSession: (id: string) => api<{ ok: true; sessionId: string; requestedAt: string }>('POST', `/api/issues/${encodeURIComponent(id)}/opencode-abort`, {}),
+
   gitRefs: (projectId: string) => api<GitRefs>('GET', `/api/projects/${projectId}/git-refs`),
   commits: (projectId: string, ref: string) =>
     api<{ commits: Commit[] }>('GET', `/api/projects/${projectId}/commits?ref=${encodeURIComponent(ref)}`)
       .then(r => r.commits)
 };
+
+/**
+ * Subscribe to the OpenCode Session bound to one issue. EventSource handles
+ * reconnects; the ready event is emitted on every connection so callers can
+ * fetch an authoritative state snapshot and recover anything missed offline.
+ */
+export function connectOpenCodeSessionEvents(
+  issueId: string,
+  onEvent: (event: unknown) => void,
+  onReady: () => void,
+  onError: (message: string) => void
+): () => void {
+  const token = bearerToken();
+  const es = new EventSource(
+    `/api/issues/${encodeURIComponent(issueId)}/opencode-events${token ? `?token=${encodeURIComponent(token)}` : ''}`
+  );
+  es.addEventListener('ready', () => onReady());
+  es.addEventListener('opencode', event => {
+    try { onEvent(JSON.parse((event as MessageEvent<string>).data) as unknown); }
+    catch { onError('收到无法解析的 OpenCode 事件'); }
+  });
+  es.addEventListener('upstream-error', event => {
+    try {
+      const payload = JSON.parse((event as MessageEvent<string>).data) as { error?: string };
+      onError(payload.error ?? 'OpenCode 事件流异常');
+    } catch { onError('OpenCode 事件流异常'); }
+  });
+  es.onerror = () => onError('OpenCode 事件连接断开，正在自动重连');
+  return () => es.close();
+}
 
 export function connectSSE(onChange: () => void): () => void {
   let closed = false;
