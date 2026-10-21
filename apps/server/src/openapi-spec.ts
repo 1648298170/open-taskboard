@@ -60,6 +60,7 @@ export interface OperationObject {
   parameters?: Array<ParameterObject | ParameterRef>;
   requestBody?: RequestBodyObject;
   responses: Record<string, ResponseObject | ResponseRef>;
+  security?: Array<Record<string, string[]>>;
 }
 
 export type ParameterRef = { $ref: string };
@@ -124,16 +125,16 @@ export const openApiSpec: OpenApiDocument = {
     // Keep in sync with apps/server/package.json "version".
     version: '0.3.0',
     description:
-      'Local-first task board REST API (Fastify + node:sqlite). ' +
-      'Auth: when TASKBOARD_TOKEN is set, every /api/* request must present it via `Authorization: Bearer <token>` ' +
-      'or `?token=<token>` (the SSE stream supports the query form); unset = fully open. ' +
+      'Local-first task board REST API (Fastify + node:sqlite). Remote/non-loopback binds require one-time administrator setup and browser login using an HttpOnly, SameSite=Strict session cookie. ' +
+      'TASKBOARD_TOKEN remains an optional compatibility credential for machine clients; browser users never need to paste a token. Loopback-only development can run without login. ' +
       'When TASKBOARD_READONLY=1, every mutating request (POST/PATCH/DELETE) is rejected with 403 before the handler runs. ' +
       'Writes may record the acting agent via the `x-taskboard-actor` header. ' +
       'Conventions: optimistic locking — PATCH /api/issues/{id} accepts an optional `version`; the MCP update_issue tool requires it.'
   },
   servers: [{ url: '/', description: 'This server (default http://127.0.0.1:47824; override via TASKBOARD_HOST/TASKBOARD_PORT)' }],
-  security: [{ bearerAuth: [] }, { tokenQuery: [] }, {}],
+  security: [{ cookieAuth: [] }, { bearerAuth: [] }, { tokenQuery: [] }, {}],
   tags: [
+    { name: 'auth', description: 'First-run administrator initialization and browser sessions' },
     { name: 'meta', description: 'Server metadata (enums, OpenAPI document)' },
     { name: 'events', description: 'Realtime SSE stream' },
     { name: 'projects', description: 'Project CRUD + git workspace views + stats' },
@@ -144,6 +145,136 @@ export const openApiSpec: OpenApiDocument = {
     { name: 'search', description: 'Full-text search' }
   ],
   paths: {
+    '/api/auth/status': {
+      get: {
+        operationId: 'getAuthStatus',
+        summary: 'Read setup and current browser authentication state',
+        tags: ['auth'],
+        security: [],
+        responses: {
+          200: {
+            description: 'Authentication status',
+            ...jsonResponse({
+              type: 'object',
+              properties: {
+                authRequired: { type: 'boolean' },
+                initialized: { type: 'boolean' },
+                authenticated: { type: 'boolean' },
+                username: { type: ['string', 'null'] }
+              },
+              required: ['authRequired', 'initialized', 'authenticated', 'username'],
+              additionalProperties: false
+            })
+          }
+        }
+      }
+    },
+    '/api/auth/setup': {
+      post: {
+        operationId: 'initializeAdmin',
+        summary: 'Create the first administrator exactly once and start a browser session',
+        tags: ['auth'],
+        security: [],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  username: { type: 'string', minLength: 3, maxLength: 64, pattern: '^[a-zA-Z0-9._-]+$' },
+                  password: { type: 'string', minLength: 12, maxLength: 256 }
+                },
+                required: ['username', 'password'],
+                additionalProperties: false
+              }
+            }
+          }
+        },
+        responses: {
+          201: {
+            description: 'Administrator created; session cookie set',
+            ...jsonResponse({
+              type: 'object',
+              properties: { ok: { type: 'boolean', const: true }, username: { type: 'string' } },
+              required: ['ok', 'username'],
+              additionalProperties: false
+            })
+          },
+          400: { $ref: '#/components/responses/BadRequest' },
+          409: {
+            description: 'Administrator already initialized, or local no-login mode is enabled',
+            ...jsonResponse(ERROR_REF)
+          },
+          500: { $ref: '#/components/responses/InternalError' }
+        }
+      }
+    },
+    '/api/auth/login': {
+      post: {
+        operationId: 'loginAdmin',
+        summary: 'Authenticate the administrator and start a browser session',
+        tags: ['auth'],
+        security: [],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  username: { type: 'string', minLength: 3, maxLength: 64 },
+                  password: { type: 'string', minLength: 1, maxLength: 256 }
+                },
+                required: ['username', 'password'],
+                additionalProperties: false
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: 'Authenticated; session cookie set',
+            ...jsonResponse({
+              type: 'object',
+              properties: { ok: { type: 'boolean', const: true }, username: { type: 'string' } },
+              required: ['ok', 'username'],
+              additionalProperties: false
+            })
+          },
+          400: { $ref: '#/components/responses/BadRequest' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          409: {
+            description: 'Administrator has not been initialized',
+            ...jsonResponse(ERROR_REF)
+          },
+          429: {
+            description: 'Too many login attempts from this IP',
+            ...jsonResponse(ERROR_REF)
+          },
+          500: { $ref: '#/components/responses/InternalError' }
+        }
+      }
+    },
+    '/api/auth/logout': {
+      post: {
+        operationId: 'logoutAdmin',
+        summary: 'Invalidate the current browser session',
+        tags: ['auth'],
+        security: [],
+        responses: {
+          200: {
+            description: 'Session invalidated and cookie cleared',
+            ...jsonResponse({
+              type: 'object',
+              properties: { ok: { type: 'boolean', const: true } },
+              required: ['ok'],
+              additionalProperties: false
+            })
+          }
+        }
+      }
+    },
     '/api/meta': {
       get: {
         operationId: 'getMeta',
@@ -1604,7 +1735,7 @@ export const openApiSpec: OpenApiDocument = {
     },
     responses: {
       BadRequest: errorResponse('Validation error (bad enum/filter value, malformed body, unknown strict-schema key, impossible parent/dependency)'),
-      Unauthorized: errorResponse('TASKBOARD_TOKEN is set and no valid Bearer header / ?token= was presented'),
+      Unauthorized: errorResponse('A valid browser session cookie or configured TASKBOARD_TOKEN was not presented'),
       Forbidden: errorResponse('Read-only mode (TASKBOARD_READONLY=1) rejects mutating requests; reserved for done-requires-confirmation'),
       NotFound: errorResponse('Resource (project / issue / parent / dependency target) not found'),
       Conflict: errorResponse('Optimistic-lock version mismatch, duplicate project id, or duplicate dependency edge (reserved for claim conflicts)'),
@@ -1655,10 +1786,16 @@ export const openApiSpec: OpenApiDocument = {
       }
     },
     securitySchemes: {
+      cookieAuth: {
+        type: 'apiKey',
+        in: 'cookie',
+        name: 'taskboard_session',
+        description: 'Server-managed browser session created by /api/auth/login or /api/auth/setup'
+      },
       bearerAuth: {
         type: 'http',
         scheme: 'bearer',
-        description: 'TASKBOARD_TOKEN value as `Authorization: Bearer <token>` (only enforced when TASKBOARD_TOKEN is set)'
+        description: 'Optional legacy TASKBOARD_TOKEN for CLI/MCP clients'
       },
       tokenQuery: {
         type: 'apiKey',

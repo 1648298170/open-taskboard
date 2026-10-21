@@ -5,7 +5,7 @@ import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
 import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
-import { Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings } from 'lucide-react';
+import { Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings, LogOut } from 'lucide-react';
 import { Drawer } from './components/Drawer';
 import { DirectoryPickerDialog } from './components/DirectoryPickerDialog';
 import { NewIssueDialog } from './components/NewIssueDialog';
@@ -70,9 +70,14 @@ export default function App() {
   const [connError, setConnError] = useState(false);
   const [sortBy, setSortBy] = useState<SortBy>('created');
   const [filters, setFilters] = useState({ text: '', assignee: '', label: '', due: '' as '' | 'overdue' | 'today' });
-  // T2-9: 令牌认证 —— 任一 API 调用 401 时置 true，渲染令牌输入浮层。
-  const [needToken, setNeedToken] = useState(false);
-  const [tokenInput, setTokenInput] = useState('');
+  // Remote deployments use first-run admin initialization and a server session cookie.
+  const [authScreen, setAuthScreen] = useState<'checking' | 'board' | 'setup' | 'login'>('checking');
+  const [authRequired, setAuthRequired] = useState(false);
+  const [authUsername, setAuthUsername] = useState('admin');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authPasswordConfirm, setAuthPasswordConfirm] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState('');
   // toast 支持附一行弱化明细（批量操作列出失败 id）。
   const [toast, setToast] = useState<{ msg: string; detail?: string } | null>(null);
   // T5-26: 批量模式 + 已选 id 集合。
@@ -113,6 +118,20 @@ export default function App() {
   const statsOpenRef = useRef(statsOpen);
 
   const isUnauthorized = (err: unknown): boolean => err instanceof ApiError && err.status === 401;
+
+  const refreshAuth = useCallback(async (): Promise<boolean> => {
+    try {
+      const status = await api_.authStatus();
+      setAuthRequired(status.authRequired);
+      const ready = !status.authRequired || status.authenticated;
+      setAuthScreen(ready ? 'board' : status.initialized ? 'login' : 'setup');
+      return ready;
+    } catch {
+      setAuthScreen('board');
+      setConnError(true);
+      return false;
+    }
+  }, []);
 
   const showToast = useCallback((msg: string, detail?: string) => {
     setToast({ msg, detail });
@@ -243,7 +262,7 @@ export default function App() {
     } catch (err) {
       // SSE 回调里的 void refresh() 失败时静默忽略，避免未处理的 Promise 拒绝；
       // 401（令牌缺失/失效）除外 —— 需要弹出令牌输入浮层。
-      if (isUnauthorized(err)) setNeedToken(true);
+      if (isUnauthorized(err)) void refreshAuth();
     }
   }, [projectId]);
 
@@ -265,24 +284,41 @@ export default function App() {
         if (selected?.directoryId) setExpandedDirectories(old => new Set(old).add(selected.directoryId!));
       } else setProjectId(null);
     }).catch(err => {
-      if (isUnauthorized(err)) setNeedToken(true);
+      if (isUnauthorized(err)) void refreshAuth();
       else setConnError(true);
     });
   }, []);
 
-  useEffect(() => { loadProjects(); }, [loadProjects]);
+  useEffect(() => {
+    let active = true;
+    // Remove tokens saved by older builds; browser auth is now an HttpOnly cookie.
+    localStorage.removeItem('taskboard-token');
+    api_.authStatus().then(status => {
+      if (!active) return;
+      setAuthRequired(status.authRequired);
+      const ready = !status.authRequired || status.authenticated;
+      setAuthScreen(ready ? 'board' : status.initialized ? 'login' : 'setup');
+      if (ready) loadProjects();
+    }).catch(() => {
+      if (!active) return;
+      setAuthScreen('board');
+      setConnError(true);
+    });
+    return () => { active = false; };
+  }, [loadProjects]);
 
   useEffect(() => {
+    if (authScreen !== 'board') return;
     api_.getSettings().then(settings => {
       setDefaultWorkspacePath(settings.defaultWorkspacePath);
       setSettingsPathInput(settings.defaultWorkspacePath);
       setDefaultOpenCodeServerUrl(settings.defaultOpenCodeServerUrl);
       setSettingsServerInput(settings.defaultOpenCodeServerUrl);
     }).catch(err => {
-      if (isUnauthorized(err)) setNeedToken(true);
+      if (isUnauthorized(err)) void refreshAuth();
       else showToast('✗ 读取全局设置失败：' + (err as Error).message);
     });
-  }, [showToast]);
+  }, [showToast, authScreen]);
 
   useEffect(() => {
     if (!directoryMenuOpen) return;
@@ -322,11 +358,14 @@ export default function App() {
   }, []);
 
   useEffect(() => { if (projectId) { localStorage.setItem('project', projectId); void refresh(projectId); } }, [projectId, refresh]);
-  useEffect(() => connectSSE(() => { setDetailRefreshKey(key => key + 1); void loadProjects(); void refresh(); }), [loadProjects, refresh]);
+  useEffect(() => {
+    if (authScreen !== 'board') return;
+    return connectSSE(() => { setDetailRefreshKey(key => key + 1); void loadProjects(); void refresh(); });
+  }, [authScreen, loadProjects, refresh]);
   // T6-31: 面板打开（或切换项目）时立即拉取一次；开着期间的更新走 refresh 内的重取。
   useEffect(() => {
     if (!statsOpen || !projectId) return;
-    api_.stats(projectId).then(setStats).catch(err => { if (isUnauthorized(err)) setNeedToken(true); });
+    api_.stats(projectId).then(setStats).catch(err => { if (isUnauthorized(err)) void refreshAuth(); });
   }, [statsOpen, projectId]);
 
   // ---- 过滤 / 排序 ----
@@ -504,26 +543,67 @@ export default function App() {
     }
   };
 
-  if (needToken) {
+  if (authScreen === 'checking') {
     return (
-      <div className="token-overlay">
-        <div className="token-card">
-          <h2>需要访问令牌</h2>
-          <form onSubmit={e => {
+      <div className="auth-overlay">
+        <div className="auth-card"><span className="glyph">▚</span><h1>taskboard</h1><p>正在检查登录状态…</p></div>
+      </div>
+    );
+  }
+
+  if (authScreen === 'setup' || authScreen === 'login') {
+    const isSetup = authScreen === 'setup';
+    return (
+      <div className="auth-overlay">
+        <div className="auth-card">
+          <span className="glyph">▚</span>
+          <h1>{isSetup ? '初始化 Taskboard' : '登录 Taskboard'}</h1>
+          <p>{isSetup ? '首次使用，请创建管理员账号。初始化完成后，公开初始化入口将自动关闭。' : '登录后继续管理任务与 Agent 会话。'}</p>
+          <form className="auth-form" onSubmit={async e => {
             e.preventDefault();
-            const t = tokenInput.trim();
-            if (!t) return;
-            localStorage.setItem('taskboard-token', t);
-            setNeedToken(false);
-            setTokenInput('');
-            setConnError(false);
-            loadProjects();   // 重建项目列表（SSE 重连自动带上新令牌）
-            void refresh();
+            setAuthError('');
+            const username = authUsername.trim();
+            if (isSetup && authPassword !== authPasswordConfirm) {
+              setAuthError('两次输入的密码不一致');
+              return;
+            }
+            setAuthBusy(true);
+            try {
+              if (isSetup) await api_.initializeAdmin(username, authPassword);
+              else await api_.login(username, authPassword);
+              setAuthPassword('');
+              setAuthPasswordConfirm('');
+              const ready = await refreshAuth();
+              if (ready) {
+                setConnError(false);
+                loadProjects();
+              }
+            } catch (error) {
+              setAuthError((error as Error).message || '认证失败，请重试');
+            } finally {
+              setAuthBusy(false);
+            }
           }}>
-            <input type="password" autoFocus value={tokenInput} placeholder="TASKBOARD_TOKEN"
-              onChange={e => setTokenInput(e.target.value)} />
-            <button className="btn primary" type="submit">保存</button>
+            <label>管理员账号
+              <input autoFocus required minLength={3} maxLength={64} pattern="[A-Za-z0-9._-]+" autoComplete="username"
+                value={authUsername} onChange={e => setAuthUsername(e.target.value)} />
+            </label>
+            <label>密码
+              <input type="password" required minLength={isSetup ? 12 : 1} maxLength={256}
+                autoComplete={isSetup ? 'new-password' : 'current-password'}
+                placeholder={isSetup ? '至少 12 个字符' : '输入管理员密码'}
+                value={authPassword} onChange={e => setAuthPassword(e.target.value)} />
+            </label>
+            {isSetup && <label>确认密码
+              <input type="password" required minLength={12} maxLength={256} autoComplete="new-password"
+                value={authPasswordConfirm} onChange={e => setAuthPasswordConfirm(e.target.value)} />
+            </label>}
+            {authError && <p className="auth-error" role="alert">{authError}</p>}
+            <button className="btn primary auth-submit" type="submit" disabled={authBusy}>
+              {authBusy ? '请稍候…' : isSetup ? '创建管理员并登录' : '登录'}
+            </button>
           </form>
+          <p className="auth-footnote">无需配置访问 Token。管理员密码仅保存哈希，浏览器通过安全会话 Cookie 保持登录。</p>
         </div>
       </div>
     );
@@ -548,6 +628,16 @@ export default function App() {
           <div className="brand">
             <span className="glyph">▚</span>
             <h1>taskboard</h1>
+            {authRequired && <button className="icon-btn auth-logout" title="退出登录" aria-label="退出登录" onClick={async () => {
+              try {
+                await api_.logout();
+                setAuthPassword('');
+                setAuthError('');
+                setAuthScreen('login');
+              } catch (error) {
+                showToast('退出登录失败：' + (error as Error).message);
+              }
+            }}><LogOut size={14} /></button>}
           </div>
           <button className="side-btn side-create-directory" onClick={() => { setDirectoryName(''); setDirectoryWorkspacePath(defaultWorkspacePath); setDirectoryServerUrl(defaultOpenCodeServerUrl); setDirectoryCreateOpen(true); }}>
             <Plus size={14} /> 新建目录

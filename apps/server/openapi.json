@@ -3,7 +3,7 @@
   "info": {
     "title": "open-taskboard API",
     "version": "0.3.0",
-    "description": "Local-first task board REST API (Fastify + node:sqlite). Auth: when TASKBOARD_TOKEN is set, every /api/* request must present it via `Authorization: Bearer <token>` or `?token=<token>` (the SSE stream supports the query form); unset = fully open. When TASKBOARD_READONLY=1, every mutating request (POST/PATCH/DELETE) is rejected with 403 before the handler runs. Writes may record the acting agent via the `x-taskboard-actor` header. Conventions: optimistic locking — PATCH /api/issues/{id} accepts an optional `version`; the MCP update_issue tool requires it."
+    "description": "Local-first task board REST API (Fastify + node:sqlite). Remote/non-loopback binds require one-time administrator setup and browser login using an HttpOnly, SameSite=Strict session cookie. TASKBOARD_TOKEN remains an optional compatibility credential for machine clients; browser users never need to paste a token. Loopback-only development can run without login. When TASKBOARD_READONLY=1, every mutating request (POST/PATCH/DELETE) is rejected with 403 before the handler runs. Writes may record the acting agent via the x-taskboard-actor header. PATCH /api/issues/{id} uses optimistic locking via version."
   },
   "servers": [
     {
@@ -13,6 +13,9 @@
   ],
   "security": [
     {
+      "cookieAuth": []
+    },
+    {
       "bearerAuth": []
     },
     {
@@ -21,6 +24,10 @@
     {}
   ],
   "tags": [
+    {
+      "name": "auth",
+      "description": "First-run administrator initialization and browser sessions"
+    },
     {
       "name": "meta",
       "description": "Server metadata (enums, OpenAPI document)"
@@ -55,6 +62,233 @@
     }
   ],
   "paths": {
+    "/api/auth/status": {
+      "get": {
+        "operationId": "getAuthStatus",
+        "summary": "Read setup and current browser authentication state",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Authentication status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "authRequired": {
+                      "type": "boolean"
+                    },
+                    "initialized": {
+                      "type": "boolean"
+                    },
+                    "authenticated": {
+                      "type": "boolean"
+                    },
+                    "username": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "authRequired",
+                    "initialized",
+                    "authenticated",
+                    "username"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/setup": {
+      "post": {
+        "operationId": "initializeAdmin",
+        "summary": "Create the first administrator exactly once and start a session",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 64,
+                    "pattern": "^[a-zA-Z0-9._-]+$"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 12,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "username",
+                  "password"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Administrator initialized; an HttpOnly session cookie is set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "username": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "username"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "description": "Administrator already initialized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "operationId": "login",
+        "summary": "Authenticate the administrator and set a browser session cookie",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "username",
+                  "password"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Logged in; an HttpOnly session cookie is set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "username": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "username"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "description": "Too many login attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "summary": "Invalidate the current browser session",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Logged out and session cookie cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meta": {
       "get": {
         "operationId": "getMeta",
@@ -4086,6 +4320,12 @@
       }
     },
     "securitySchemes": {
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "taskboard_session",
+        "description": "Server-managed browser session created by /api/auth/login or /api/auth/setup"
+      },
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",

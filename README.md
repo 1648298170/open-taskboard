@@ -208,7 +208,7 @@ opencode attach http://127.0.0.1:4097        # 终端 2：接管绑定了 4097 �
 
 #### 细节备忘
 
-- 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47825`）；服务地址与默认会话都存在**项目数据**（`wakeChannel` + `defaultSessionId`），路由就是 `任务 → 项目 → 服务/会话`，没有中心化的路由表；Web 新建项目需选择目录、工作目录、OpenCode Server 与 Session，选中 Session 会自动回填项目名称与工作区，服务端校验 Session 的实际目录后才写入 `wakeChannel`；已有任务保留自己的 `sessionId`，不会被项目会话变更改写
+- 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47824`）；服务地址与默认会话都存在**项目数据**（`wakeChannel` + `defaultSessionId`），路由就是 `任务 → 项目 → 服务/会话`，没有中心化的路由表；Web 新建项目需选择目录、工作目录、OpenCode Server 与 Session，选中 Session 会自动回填项目名称与工作区，服务端校验 Session 的实际目录后才写入 `wakeChannel`；已有任务保留自己的 `sessionId`，不会被项目会话变更改写
 - 唤醒优先级：任务已绑定 `sessionId` → 对应 OpenCode 服务的 `prompt_async`；只有未绑定任务才使用项目 `wake_channel` / `--tui-url` 注入当前 TUI，最后才 headless。绑定会话投递失败时不会静默创建新会话，唤醒评论保持 pending 以便重试
 - 同一 serve 端口被多终端 attach 时注入是**广播**（每窗都出现）——多终端请各用各的端口，绑定时不会串
 - 端口/项目/终端数量不受限：`wakeChannel` 是完整 URL（可绑局域网另一台机器），单实例锁按 server 端口 + 作用域自动命名字，headless 通道连端口都不需要
@@ -257,6 +257,22 @@ args = ["/abs/path/open-taskboard/apps/mcp/dist/mcp.js"]
 ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/open-taskboard
 ```
 
+## Docker 部署（Web + Server）
+
+仓库当前使用**单容器部署**：同一个 Taskboard 容器托管 React 静态页面与 Fastify API；不需要为 Web 和 Server 分别配置容器 DNS。
+
+```bash
+docker compose up -d --build
+```
+
+- 本机访问：`http://127.0.0.1:47824`
+- 局域网访问：`http://192.168.3.7:47824`（以宿主机实际 LAN IP 为准）
+- 宿主机端口 `47824` 映射至容器端口 `47824`。
+- 首次访问进入管理员初始化页，创建用户名和至少 12 位密码；初始化完成后只能登录，公开初始化入口不能覆盖已有账号。
+- 密码哈希与看板数据保存在持久化卷 `taskboard-data` 中。浏览器认证采用 HttpOnly、SameSite=Strict Cookie，不使用 localStorage 或 URL Token。
+- Compose 默认让 Taskboard 通过 `host.docker.internal:4096` 访问 Windows 宿主机上的 OpenCode Server。OpenCode 必须监听可从 Docker 到达的地址；如需更改监听范围，请同时限制 Windows 防火墙，避免把 OpenCode API 暴露给不可信网络。
+- 当前示例通过 HTTP 提供局域网访问；不建议直接暴露到公网。跨不可信网络访问应配置 HTTPS 与防火墙/反向代理。
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
@@ -268,7 +284,7 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 | `TASKBOARD_OPENCODE_URL` | 未设置 | Web 新建项目与无状态 `GET /api/opencode/sessions` 的默认 OpenCode 服务地址。服务端解析顺序：显式 `url` query（仅 API）→ 本环境变量 → 最近创建项目的 `wakeChannel` → `http://127.0.0.1:4096`；解析结果写入新项目的 `wakeChannel`（`未设置` 时走后面三级）。Docker Compose 示例已设为 `http://host.docker.internal:4096`，并加 `host.docker.internal:host-gateway`（Linux） |
 | `TASKBOARD_SESSION_ID` | 未设置 | CLI 每次请求自动带 `x-taskboard-session`；`--session-id` 优先于该环境变量 |
 | `TASKBOARD_WEB_DIST` | 自动探测 | 看板静态目录（默认 `apps/web/dist`，vite 构建产物） |
-| `TASKBOARD_TOKEN` | 未设置 | 设置后 API 需要 Bearer 认证（`Authorization: Bearer <token>` 或 `?token=`；SSE 支持 `?token=`） |
+| `TASKBOARD_AUTH_REQUIRED` | 未设置 | `1` 时强制浏览器登录；非回环监听地址也会自动强制登录。首次访问创建管理员，后续通过 HttpOnly Session Cookie 认证，无需手动输入 Token |\n| `TASKBOARD_TOKEN` | 未设置 | 可选的兼容凭证，供 CLI/MCP 等机器客户端使用；浏览器不再要求输入或保存此值 |
 | `TASKBOARD_READONLY` | 未设置 | `1` 时所有写操作（POST/PATCH/DELETE）返回 403，GET/SSE 不受影响 |
 | `TASKBOARD_WEBHOOK_URL` | 未设置 | 逗号分隔的 HTTP(S) URL；设置后每个事件（project/issue/comment 变更）以 POST JSON 转发到各 URL（3s 超时，失败重试一次，失败仅告警） |
 | `TASKBOARD_WEBHOOK_SECRET` | 未设置 | 设置后 webhook 请求带 `X-Taskboard-Signature: sha256=HMAC-SHA256(body, secret)`，接收端应对原始字节验签后再解析 |
@@ -287,4 +303,4 @@ ln -s /abs/path/open-taskboard/skills/open-taskboard ~/.config/opencode/skill/op
 - 附件（元数据入库、正文落盘 `attachments/`，单文件 ≤10MB，每任务限额 20 个/总量 50MB 超限 400）、桌面通知、暗/亮主题、泳道分组、批量操作、j/k 键盘导航
 - 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE（`--exec` 适配任意 agent CLI）。已绑定 `sessionId` 的任务优先调用 OpenCode v1 `POST /session/:id/prompt_async`，复用原会话上下文；未绑定任务才走项目 `wake_channel` / `--tui-url` TUI 注入，再到 headless spawn。绑定会话投递失败时不创建新会话，评论保留 pending 供重试；`--on` 可改唤醒前缀，`--project` 可选作用域过滤，`--ignore-author a,b` 按作者忽略唤醒评论（防 agent 自我唤醒循环，`watch` 自身 actor 始终忽略）
 - SSE 实时刷新（Web 多端 + 跨 agent 工具共享同一块板；25s 心跳保活，断线指数退避重连 + 全量兜底拉取）
-- LAN 共享（`TASKBOARD_HOST=0.0.0.0`）、Bearer 令牌认证、只读模式、人工 done 门禁、webhook 事件转发
+- LAN 共享（`TASKBOARD_HOST=0.0.0.0`）、首次初始化管理员 + Session Cookie 登录、只读模式、人工 done 门禁、webhook 事件转发
