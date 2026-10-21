@@ -209,14 +209,14 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
           <div className="detail-property-row">
             <label className="detail-property-label" htmlFor="drawer-start-date">计划开始</label>
             <div className="detail-property-control">
-              <input id="drawer-start-date" type="date" title="计划开始日期" defaultValue={detail.startDate ?? ''}
+                        <input id="drawer-start-date" key={`${detail.id}-start`} type="date" title="计划开始日期" defaultValue={detail.startDate ?? ''}
                 onChange={e => { const v = e.target.value || null; if (v !== detail.startDate) void patch({ startDate: v }); }} />
             </div>
           </div>
           <div className="detail-property-row">
             <label className="detail-property-label" htmlFor="drawer-due-date">截止日期</label>
             <div className="detail-property-control">
-              <input id="drawer-due-date" type="date" title="截止日期" defaultValue={detail.dueDate ?? ''}
+                        <input id="drawer-due-date" key={`${detail.id}-due`} type="date" title="截止日期" defaultValue={detail.dueDate ?? ''}
                 onChange={e => { const v = e.target.value || null; if (v !== detail.dueDate) void patch({ dueDate: v }); }} />
             </div>
           </div>
