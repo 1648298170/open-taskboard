@@ -339,8 +339,14 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
     if (hasColumn(db, 'projects', 'wake_channel')) {
       db.exec('ALTER TABLE projects DROP COLUMN wake_channel');
     }
+  },
+  // v18 -> v19: task Session is projected from Project.default_session_id; it is
+  // no longer duplicated on each Issue row.
+  (db: DatabaseSync) => {
+    if (hasColumn(db, 'issues', 'session_id')) {
+      db.exec('ALTER TABLE issues DROP COLUMN session_id');
+    }
   }
-
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after

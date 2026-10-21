@@ -45,10 +45,10 @@ export class IssueRepo {
     const id = shortId();
     const t = now();
     this.db.prepare(
-`INSERT INTO issues (id, project_id, parent_id, title, description, status, priority, labels, branch, worktree, worktree_path, session_id, assignee, version, start_date, due_date, acceptance_criteria, review_status, review_notes, claimed_by, lease_expires_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, '', NULL, ?, ?)`
+`INSERT INTO issues (id, project_id, parent_id, title, description, status, priority, labels, branch, worktree, worktree_path, assignee, version, start_date, due_date, acceptance_criteria, review_status, review_notes, claimed_by, lease_expires_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, '', NULL, ?, ?)`
     ).run(id, input.projectId, input.parentId, input.title, input.description ?? '', status, priority,
-      input.labels ?? '', input.branch ?? '', input.worktree ?? '', input.worktreePath ?? '', input.sessionId ?? null, input.assignee ?? '', input.startDate ?? null,
+      input.labels ?? '', input.branch ?? '', input.worktree ?? '', input.worktreePath ?? '', input.assignee ?? '', input.startDate ?? null,
       input.dueDate ?? null, input.acceptanceCriteria ?? '', reviewStatus, input.reviewNotes ?? '', t, t);
     return id;
   }
@@ -89,7 +89,7 @@ export class IssueRepo {
     const colMap: [keyof IssuePatch, string][] = [
       ['title', 'title'], ['description', 'description'], ['status', 'status'],
       ['priority', 'priority'], ['labels', 'labels'], ['branch', 'branch'],
-      ['worktree', 'worktree'], ['worktreePath', 'worktree_path'], ['sessionId', 'session_id'],
+      ['worktree', 'worktree'], ['worktreePath', 'worktree_path'],
       ['assignee', 'assignee'], ['parentId', 'parent_id'],
       ['startDate', 'start_date'], ['dueDate', 'due_date'],
       ['startedAt', 'started_at'], ['completedAt', 'completed_at'],

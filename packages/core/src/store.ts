@@ -168,9 +168,6 @@ export class Store {
       (patch.workspacePath !== undefined && patch.workspacePath.trim() !== directory.workspacePath) ||
       (patch.serverUrl !== undefined && patch.serverUrl.trim() !== directory.serverUrl);
     const directoryProjects = this.projects.list().filter(project => project.directoryId === id);
-
-    // Route changes affect every project in the directory. Prevent switching
-    // execution context while any task in the directory is actively claimed.
     const activeIssueIds = routingChanged
       ? directoryProjects.flatMap(project =>
           this.issues.list(project.id, { archived: 'all' }).filter(issue => activeClaim(issue)).map(issue => issue.id))
@@ -181,33 +178,26 @@ export class Store {
       );
     }
 
-    const affectedProjects: string[] = [];
-    const unboundIssueIds: string[] = [];
     inTransaction(this.db, () => {
       this.directories.update(id, patch);
-      if (!routingChanged) return;
-      for (const project of directoryProjects) {
-        // Default Sessions are specific to an OpenCode URL + workspace path.
-        this.projects.update(project.id, { defaultSessionId: null });
-        for (const issue of this.issues.list(project.id, { archived: 'all' })) {
-          if (!issue.sessionId) continue;
-          this.issues.update(issue.id, { sessionId: null });
-          this.logActivity(issue.id, 'system', 'session-unbound', 'Directory workspace/server changed; project Session cleared');
-          unboundIssueIds.push(issue.id);
+      if (routingChanged) {
+        // All tasks inherit Session from their Project. Clearing each project's
+        // default automatically unbinds every task without per-task writes.
+        for (const project of directoryProjects) {
+          this.projects.update(project.id, { defaultSessionId: null });
         }
-        affectedProjects.push(project.id);
       }
     });
 
     this.emit('directory.updated', { id, fields: Object.keys(patch) });
-    for (const projectId of affectedProjects) {
-      this.emit('project.updated', {
-        id: projectId,
-        fields: ['defaultSessionId'],
-        unboundIssueIds: unboundIssueIds.filter(issueId => this.issues.get(issueId)?.projectId === projectId)
-      });
+    if (routingChanged) {
+      for (const project of directoryProjects) {
+        this.emit('project.updated', { id: project.id, fields: ['workspacePath', 'wakeChannel', 'defaultSessionId'] });
+        for (const issue of this.issues.list(project.id, { archived: 'all' })) {
+          this.emit('issue.updated', { id: issue.id, fields: ['sessionId'] });
+        }
+      }
     }
-    for (const issueId of unboundIssueIds) this.emit('issue.updated', { id: issueId, fields: ['sessionId'] });
     return this.directories.get(id)!;
   }
 
