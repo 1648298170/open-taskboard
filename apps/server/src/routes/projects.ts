@@ -104,7 +104,10 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store; openCodeUrl?: string }>
       ? input.defaultSessionId
       : input.sessionId === '' ? null : input.sessionId;
 
-    if (typeof defaultSessionId === 'string') {
+    // A directory path change can make the already-bound Session disappear from
+    // the current discovery list. Saving that same binding must remain a no-op;
+    // validate only when the user selects a different Session.
+    if (typeof defaultSessionId === 'string' && defaultSessionId !== current.defaultSessionId) {
       const directory = current.directoryId ? store.getDirectory(current.directoryId) : null;
       if (!directory) return reply.code(409).send({ error: '项目未关联目录，无法解析 OpenCode 路由' });
       const workspacePath = directory.workspacePath.trim();
