@@ -33,7 +33,6 @@ describe('migration compatibility', () => {
     for (const column of ['review_notes', 'review_status', 'acceptance_criteria', 'completed_at', 'started_at', 'worktree_path']) {
       db.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
     }
-    db.exec('ALTER TABLE directories DROP COLUMN server_url;');
     db.exec('ALTER TABLE directories DROP COLUMN workspace_path;');
     db.exec("UPDATE projects SET session_id = 'ses_old' WHERE id = 'p1'");
     db.exec('DROP TABLE directories;');
