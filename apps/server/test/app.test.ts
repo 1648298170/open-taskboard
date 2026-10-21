@@ -505,14 +505,15 @@ describe('workspace directory API', () => {
 });
 
 describe('directory OpenCode session routes', () => {
-  it('queries sessions in the requested workspace and filters out other directories', async () => {
+  it('uses the canonical Directory route and ignores request-supplied route overrides', async () => {
     const { app, cleanup } = await makeApp();
+    const requestedPath = 'D:\\workspace\\project-a';
     const created = await app.inject({
-      method: 'POST', url: '/api/directories', headers: json, payload: { name: 'Workspace' }
+      method: 'POST', url: '/api/directories', headers: json,
+      payload: { name: 'Workspace', workspacePath: requestedPath, serverUrl: 'http://127.0.0.1:4096' }
     });
     const directoryId = created.json<{ id: string }>().id;
     const originalFetch = globalThis.fetch;
-    const requestedPath = 'D:\\workspace\\project-a';
     let requestedUrl = '';
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       requestedUrl = String(input);
@@ -525,9 +526,10 @@ describe('directory OpenCode session routes', () => {
     try {
       const response = await app.inject({
         method: 'GET',
-        url: `/api/directories/${directoryId}/opencode-sessions?workspacePath=${encodeURIComponent(requestedPath)}&serverUrl=${encodeURIComponent('http://127.0.0.1:4096')}`
+        url: `/api/directories/${directoryId}/opencode-sessions?workspacePath=${encodeURIComponent('D:/workspace/other')}&serverUrl=${encodeURIComponent('http://127.0.0.1:4999')}`
       });
       assert.equal(response.statusCode, 200);
+      assert.equal(new URL(requestedUrl).origin, 'http://127.0.0.1:4096');
       assert.equal(new URL(requestedUrl).searchParams.get('directory'), requestedPath);
       assert.deepEqual(response.json<{ sessions: { id: string }[] }>().sessions.map(session => session.id), ['ses_a']);
     } finally {
@@ -536,14 +538,15 @@ describe('directory OpenCode session routes', () => {
     }
   });
 
-  it('creates a session with the requested directory context', async () => {
+  it('creates a Session in the canonical Directory workspace', async () => {
     const { app, cleanup } = await makeApp();
+    const requestedPath = 'D:\\workspace\\project-a';
     const created = await app.inject({
-      method: 'POST', url: '/api/directories', headers: json, payload: { name: 'Workspace' }
+      method: 'POST', url: '/api/directories', headers: json,
+      payload: { name: 'Workspace', workspacePath: requestedPath, serverUrl: 'http://127.0.0.1:4096' }
     });
     const directoryId = created.json<{ id: string }>().id;
     const originalFetch = globalThis.fetch;
-    const requestedPath = 'D:\\workspace\\project-a';
     let requestedUrl = '';
     const requestedUrls: string[] = [];
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -565,7 +568,7 @@ describe('directory OpenCode session routes', () => {
         method: 'POST',
         url: `/api/directories/${directoryId}/opencode-sessions`,
         headers: json,
-        payload: { title: 'New Session', workspacePath: requestedPath, serverUrl: 'http://127.0.0.1:4096' }
+        payload: { title: 'New Session' }
       });
       assert.equal(response.statusCode, 201);
       assert.equal(requestedUrls.length, 2, 'verify workspace before creating a session');
@@ -580,10 +583,11 @@ describe('directory OpenCode session routes', () => {
     }
   });
 
-  it('does not bind a session if OpenCode ignores the requested workspace', async () => {
+  it('does not bind a Session if OpenCode returns a different workspace', async () => {
     const { app, cleanup } = await makeApp();
     const created = await app.inject({
-      method: 'POST', url: '/api/directories', headers: json, payload: { name: 'Workspace' }
+      method: 'POST', url: '/api/directories', headers: json,
+      payload: { name: 'Workspace', workspacePath: 'D:\\workspace\\project-a', serverUrl: 'http://127.0.0.1:4096' }
     });
     const directoryId = created.json<{ id: string }>().id;
     const originalFetch = globalThis.fetch;
@@ -598,7 +602,7 @@ describe('directory OpenCode session routes', () => {
         method: 'POST',
         url: `/api/directories/${directoryId}/opencode-sessions`,
         headers: json,
-        payload: { title: 'New Session', workspacePath: 'D:\\workspace\\project-a', serverUrl: 'http://127.0.0.1:4096' }
+        payload: { title: 'New Session' }
       });
       assert.equal(response.statusCode, 502);
       assert.match(response.json<{ error: string }>().error, /no session was created/);
