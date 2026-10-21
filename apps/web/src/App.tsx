@@ -128,6 +128,10 @@ export default function App() {
     finally { setDirectoryStatusLoading(false); }
   }, []);
 
+  useEffect(() => {
+    if (settingsOpen) void refreshOpenCodeStatus();
+  }, [settingsOpen, refreshOpenCodeStatus]);
+
   const refreshAuth = useCallback(async (): Promise<boolean> => {
     try {
       const status = await api_.authStatus();
