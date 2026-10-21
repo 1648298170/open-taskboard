@@ -8,7 +8,6 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '../src/app.js';
-import { FALLBACK_OPENCODE_URL } from '../src/opencode.js';
 import type { FastifyInstance } from 'fastify';
 
 type Env = Record<string, string | undefined>;
@@ -97,10 +96,10 @@ describe('project creation with a default Session', () => {
       stubSessions([{ id: 'ses_x', title: 'X', directory: 'D:/ws' }]);
       const res = await postProject(app, { id: 'p1', name: 'P', defaultSessionId: 'ses_x' }, 'web');
       assert.equal(res.statusCode, 201, res.body);
-      const project = res.json<{ defaultSessionId: string; workspacePath: string; wakeChannel: string }>();
+      const project = res.json<{ defaultSessionId: string; workspacePath: string }>();
       assert.equal(project.defaultSessionId, 'ses_x');
       assert.equal(project.workspacePath, 'D:/ws');
-      assert.equal(project.wakeChannel, FALLBACK_OPENCODE_URL);
+      assert.equal('wakeChannel' in project, false);
       cleanup();
     });
   });
@@ -116,10 +115,12 @@ describe('project creation with a default Session', () => {
   it('uses TASKBOARD_OPENCODE_URL when the server is omitted', async () => {
     await withOpenCodeEnv('http://127.0.0.1:4096', async () => {
       const { app, cleanup } = await makeApp();
-      stubSessions([{ id: 'ses_x', title: 'X', directory: 'D:/ws' }]);
+      const requested: string[] = [];
+      stubSessions([{ id: 'ses_x', title: 'X', directory: 'D:/ws' }], requested);
       const res = await postProject(app, { id: 'p1', name: 'P', defaultSessionId: 'ses_x' }, 'web');
       assert.equal(res.statusCode, 201, res.body);
-      assert.equal(res.json<{ wakeChannel: string }>().wakeChannel, 'http://127.0.0.1:4096');
+      assert.equal('wakeChannel' in res.json<Record<string, unknown>>(), false);
+      assert.ok(requested[0]?.startsWith('http://127.0.0.1:4096/session'));
       cleanup();
     });
   });
@@ -129,7 +130,7 @@ describe('project creation with a default Session', () => {
     stubSessions([{ id: 'ses_x', title: 'X', directory: 'D:/other' }]);
     const res = await postProject(
       app,
-      { id: 'p1', name: 'P', defaultSessionId: 'ses_x', workspacePath: 'D:/ws', wakeChannel: 'http://127.0.0.1:4096' },
+      { id: 'p1', name: 'P', defaultSessionId: 'ses_x', workspacePath: 'D:/ws' },
       'web'
     );
     assert.equal(res.statusCode, 400);
@@ -184,7 +185,7 @@ describe('PATCH project default Session', () => {
   it('sets and clears defaultSessionId', async () => {
     const { app, cleanup } = await makeApp();
     await createProject(app, {
-      id: 'p1', name: 'P', workspacePath: 'D:/ws', wakeChannel: 'http://127.0.0.1:4096'
+      id: 'p1', name: 'P', workspacePath: 'D:/ws'
     });
     stubSessions([{ id: 'ses_default', title: 'D', directory: 'D:/ws' }]);
     const set = await app.inject({
@@ -203,12 +204,16 @@ describe('PATCH project default Session', () => {
 });
 
 describe('GET /api/opencode/sessions', () => {
-  it('rejects a non-http(s) explicit url', async () => {
-    const { app, cleanup } = await makeApp();
-    const res = await app.inject({ method: 'GET', url: '/api/opencode/sessions?url=file:///tmp/opencode' });
-    assert.equal(res.statusCode, 400);
-    assert.match(res.json<{ error: string }>().error, /^url:/);
-    cleanup();
+  it('ignores URL query overrides and uses the deployment URL', async () => {
+    await withOpenCodeEnv('http://127.0.0.1:4096', async () => {
+      const { app, cleanup } = await makeApp();
+      const requested: string[] = [];
+      stubSessions([{ id: 'ses_a', title: 'A', directory: 'D:/ws' }], requested);
+      const res = await app.inject({ method: 'GET', url: '/api/opencode/sessions?url=file:///tmp/opencode' });
+      assert.equal(res.statusCode, 200, res.body);
+      assert.ok(requested[0]?.startsWith('http://127.0.0.1:4096/session'));
+      cleanup();
+    });
   });
 
   it('resolves a blank url from TASKBOARD_OPENCODE_URL', async () => {
@@ -218,25 +223,21 @@ describe('GET /api/opencode/sessions', () => {
       stubSessions([{ id: 'ses_a', title: 'A', directory: 'D:/ws' }], requested);
       const res = await app.inject({ method: 'GET', url: '/api/opencode/sessions' });
       assert.equal(res.statusCode, 200, res.body);
-      assert.equal(res.json<{ serverUrl: string }>().serverUrl, 'http://127.0.0.1:4096');
       assert.ok(requested[0]?.startsWith('http://127.0.0.1:4096/session'));
       cleanup();
     });
   });
 
-  it('an explicit url overrides environment and Directory route defaults', async () => {
+  it('an explicit URL query cannot override deployment configuration', async () => {
     await withOpenCodeEnv('http://10.0.0.9:4096', async () => {
       const { app, cleanup } = await makeApp();
-      await createProject(app, { id: 'p1', name: 'P', wakeChannel: 'http://10.0.0.2:4096' });
       const requested: string[] = [];
       stubSessions([{ id: 'ses_a', title: 'A', directory: 'D:/ws' }], requested);
-      const explicit = 'http://127.0.0.1:4999';
       const res = await app.inject({
         method: 'GET', url: `/api/opencode/sessions?url=${encodeURIComponent(explicit)}`
       });
       assert.equal(res.statusCode, 200, res.body);
-      assert.equal(res.json<{ serverUrl: string }>().serverUrl, explicit);
-      assert.ok(requested[0]?.startsWith(`${explicit}/session`));
+      assert.ok(requested[0]?.startsWith('http://10.0.0.9:4096/session'));
       cleanup();
     });
   });
@@ -330,19 +331,3 @@ describe('deployment OpenCode URL configuration', () => {
       method: 'PUT', url: '/api/settings', headers: json,
       payload: { defaultWorkspacePath: 'D:/ws' }
     });
-    assert.equal(put.statusCode, 200, put.body);
-    assert.deepEqual((await app.inject({ method: 'GET', url: '/api/settings' })).json(), {
-      defaultWorkspacePath: 'D:/ws'
-    });
-    cleanup();
-  });
-});
-    assert.equal(put.statusCode, 200, put.body);
-    const got = (await app.inject({ method: 'GET', url: '/api/settings' })).json<{
-      defaultWorkspacePath: string; defaultOpenCodeServerUrl: string;
-    }>();
-    assert.equal(got.defaultWorkspacePath, 'D:/ws');
-    assert.equal(got.defaultOpenCodeServerUrl, 'http://127.0.0.1:4096');
-    cleanup();
-  });
-});
