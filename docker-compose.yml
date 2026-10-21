@@ -13,6 +13,8 @@ services:
     environment:
       # New-project dialog no longer asks for a server URL; default to the host.
       TASKBOARD_OPENCODE_URL: http://host.docker.internal:4096
+      # Browser-facing origin used only to build OpenCode Session links; set to an address reachable by users' browsers.
+      TASKBOARD_OPENCODE_PUBLIC_URL: ${TASKBOARD_OPENCODE_PUBLIC_URL:-}
       # Remote/LAN deployment always requires first-run admin setup + login cookie.
       TASKBOARD_HOST: 0.0.0.0
       TASKBOARD_PORT: 47824
