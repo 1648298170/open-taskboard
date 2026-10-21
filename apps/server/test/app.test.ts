@@ -323,14 +323,14 @@ describe('workspace directory API', () => {
     try {
       const directoryRes = await app.inject({
         method: 'POST', url: '/api/directories', headers: json,
-        payload: { name: 'Workspace A', workspacePath: '/workspace/a' }
+        payload: { name: 'Workspace A', workspacePath: '/workspace/a', serverUrl: 'http://127.0.0.1:4096' }
       });
       assert.equal(directoryRes.statusCode, 201);
       const directory = directoryRes.json<{ id: string; workspacePath: string }>();
       assert.equal(directory.workspacePath, '/workspace/a');
       const projectRes = await app.inject({
         method: 'POST', url: '/api/projects', headers: json,
-        payload: { name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a', wakeChannel: 'http://127.0.0.1:4096' }
+        payload: { name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a' }
       });
       assert.equal(projectRes.statusCode, 201);
       const project = projectRes.json<{ directoryId: string; defaultSessionId: string; workspacePath: string; wakeChannel: string }>();
@@ -710,7 +710,7 @@ describe('claim endpoints (lease + inherited Session)', () => {
     const { app, store, cleanup } = await makeApp();
     await seedProject(app);
     store.updateProject('p1', { defaultSessionId: 'ses_project' });
-    const issueId = await seedIssue(app.app);
+    const issueId = await seedIssue(app);
     const res = await app.inject({
       method: 'POST', url: `/api/issues/${issueId}/claim`, headers: json,
       payload: { agent: 'sisyphus', sessionId: 'ses_forged' }
@@ -727,7 +727,7 @@ describe('claim endpoints (lease + inherited Session)', () => {
     const { app, store, cleanup } = await makeApp();
     await seedProject(app);
     store.updateProject('p1', { defaultSessionId: 'ses_project' });
-    const issueId = await seedIssue(app.app);
+    const issueId = await seedIssue(app);
     const patched = await app.inject({
       method: 'PATCH', url: `/api/issues/${issueId}`, headers: json,
       payload: { sessionId: 'ses_owner' }
@@ -1061,9 +1061,10 @@ describe('server bind safety', () => {
 
 describe('Directory routing safety', () => {
   it('rejects inherited workspace/server changes while an Agent holds an active lease', async () => {
-    const { app, cleanup } = await makeApp();
+    const { app, store, cleanup } = await makeApp();
     try {
       await seedProject(app);
+      store.updateProject('p1', { defaultSessionId: 'ses_a' });
       const issueId = await seedIssue(app, {}, 'agent-a');
       const projectBefore = (await app.inject({ method: 'GET', url: '/api/projects/p1' })).json<{ directoryId: string }>();
       const claim = await app.inject({
@@ -1182,8 +1183,8 @@ describe('task Git worktree creation', () => {
   });
 });
 
-describe('task OpenCode Session binding', () => {
-  it('refuses to create a Session until the project OpenCode server is configured', async () => {
+describe('task-level OpenCode Session creation is removed', () => {
+  it('rejects the obsolete endpoint; Sessions are configured on Project only', async () => {
     const { app, cleanup } = await makeApp();
     try {
       await seedProject(app);
@@ -1192,8 +1193,7 @@ describe('task OpenCode Session binding', () => {
         method: 'POST', url: `/api/issues/${issueId}/opencode-session`,
         headers: { 'x-taskboard-actor': 'web' }
       });
-      assert.equal(response.statusCode, 400);
-      assert.match(response.json<{ error: string }>().error, /OpenCode Server URL/);
+      assert.equal(response.statusCode, 404);
     } finally {
       cleanup();
     }

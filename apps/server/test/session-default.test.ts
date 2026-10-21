@@ -87,11 +87,11 @@ describe('project creation with a default Session', () => {
     const { app, cleanup } = await makeApp();
     const res = await postProject(app, { id: 'no-session', name: 'P' }, 'web');
     assert.equal(res.statusCode, 400);
-    assert.match(res.json<{ error: string }>().error, /sessionId/);
+    assert.match(res.json<{ error: string }>().error, /OpenCode Session/);
     cleanup();
   });
 
-  it('web create resolves workspace and server so a Session alone is enough', async () => {
+  it('web create resolves the Directory workspace and server when only a Session is supplied', async () => {
     await withOpenCodeEnv(undefined, async () => {
       const { app, cleanup } = await makeApp();
       stubSessions([{ id: 'ses_x', title: 'X', directory: 'D:/ws' }]);
@@ -124,7 +124,7 @@ describe('project creation with a default Session', () => {
     });
   });
 
-  it('rejects a Session whose directory differs from the project workspace', async () => {
+  it('rejects a Session whose directory differs from the Directory workspace', async () => {
     const { app, cleanup } = await makeApp();
     stubSessions([{ id: 'ses_x', title: 'X', directory: 'D:/other' }]);
     const res = await postProject(
@@ -224,7 +224,7 @@ describe('GET /api/opencode/sessions', () => {
     });
   });
 
-  it('an explicit url overrides env and project wakeChannel', async () => {
+  it('an explicit url overrides environment and Directory route defaults', async () => {
     await withOpenCodeEnv('http://10.0.0.9:4096', async () => {
       const { app, cleanup } = await makeApp();
       await createProject(app, { id: 'p1', name: 'P', wakeChannel: 'http://10.0.0.2:4096' });

@@ -36,12 +36,13 @@ async function waitForSseFragment(
 
 describe('API 级 E2E：验收链路（真实 HTTP + SSE）', () => {
   let app: FastifyInstance;
+  let store: Store;
   let baseUrl: string;
   let dir: string;
 
   before(async () => {
     dir = mkdtempSync(join(tmpdir(), 'tb-e2e-'));
-    const store = new Store(join(dir, 'board.sqlite'), new DatabaseSync(':memory:'));
+    store = new Store(join(dir, 'board.sqlite'), new DatabaseSync(':memory:'));
     ({ app } = await buildApp({ store, env: { TASKBOARD_BACKUPS: '0' } }));
     await app.listen({ port: 0, host: '127.0.0.1' });
     const addr = app.server.address();
@@ -53,7 +54,7 @@ describe('API 级 E2E：验收链路（真实 HTTP + SSE）', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('建任务 → @agent 评论经 SSE 增强载荷实时送达 → claim 绑会话并自动流转 → done 门禁 403/403', async () => {
+  it('建任务 → @agent 评论经 SSE 增强载荷实时送达 → claim 继承项目会话并自动流转 → done 门禁 403/403', async () => {
     const json = { 'content-type': 'application/json', 'x-taskboard-actor': 'web' };
 
     // SSE 订阅先行（真实 TCP 流）
@@ -66,13 +67,13 @@ describe('API 级 E2E：验收链路（真实 HTTP + SSE）', () => {
     for (let i = 0; i < 50 && sseRes === undefined; i++) await new Promise(r => setTimeout(r, 20));
     assert.ok(sseRes, 'SSE 订阅未就绪');
 
-    // 建项目 + 任务（web 人工来源）。项目不绑定默认 Session（本条链路只验证
-    // web 建任务的显式 sessionId 与后续 claim 绑定）。
+    // 建项目并配置项目默认 Session，再由 Web 创建继承该会话的任务。
     const projectRes = await fetch(`${baseUrl}/api/projects`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ id: 'e2e', name: 'E2E', wakeChannel: 'http://127.0.0.1:4096' })
     });
     assert.equal(projectRes.status, 201, await projectRes.clone().text());
+    store.updateProject('e2e', { defaultSessionId: 'ses_e2e' });
     const issueRes = await fetch(`${baseUrl}/api/projects/e2e/issues`, {
       method: 'POST', headers: json, body: JSON.stringify({ title: '被唤醒的任务', sessionId: 'ses_e2e' })
     });
@@ -91,7 +92,7 @@ describe('API 级 E2E：验收链路（真实 HTTP + SSE）', () => {
     assert.ok(sseBuf.includes('"author":"web"'), 'SSE 携带作者');
     assert.ok(sseBuf.includes('被唤醒的任务'), 'SSE 携带 issueTitle');
 
-    // claim：绑定会话 + todo 自动流转 in_progress（认领即开工/绑定）
+    // claim：从项目继承会话 + todo 自动流转 in_progress（认领即开工）
     const claimed = await (await fetch(`${baseUrl}/api/issues/${issue.id}/claim`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ agent: 'e2e-agent', sessionId: 'ses_e2e' })

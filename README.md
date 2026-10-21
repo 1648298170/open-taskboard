@@ -94,7 +94,7 @@ todo → in_progress → in_review → done
 - **子任务开工，父任务自动流转**：任一子任务开工，父任务自动从待办进入进行中；所有子任务进入待验收或完成后，父任务自动进入待验收（in_review）；父任务的最终 done 始终人工
 - **删除都有二次确认**：小操作（评论/依赖边）原位两步确认，大操作（任务/批量）应用内弹窗，整个项目要手输 id
 - **每个 AI 干活都留痕**：活动流记录谁在何时做了什么；乐观锁保证多 AI 并发互不覆盖
-- **开工必绑（默认开启）**：agent 认领/流转任务必须带 `sessionId` 与当前分支名——缺了会被 403 挡住并给出补齐方法（`TASKBOARD_REQUIRE_SESSION=0` 退出）
+- **开工 Session 校验（默认开启）**：Agent 认领或将任务流转到进行中时，所属项目必须配置默认 OpenCode Session；请求中携带的任务级 `sessionId` 不会绕过校验。Git 分支、工作树和负责人由 Agent 维护（`TASKBOARD_REQUIRE_SESSION=0` 可退出该校验）。
 - **评论编辑权保护**：只有网页用户能编辑自己发的评论；agent 写下的评论永远原样，防止事后篡改
 
 ## 面板一览与功能速览
@@ -146,11 +146,11 @@ todo → in_progress → in_review → done
 - 时间线视图 📅（甘特 lite）、统计面板 📊（周吞吐/平均周期/贡献榜）
 - 快捷键：`/` 搜索 · `n` 新建 · `j/k` 上下移动 · `Enter` 打开 · `?` 全部帮助
 - 附件上传下载（每任务 ≤20 个/总量 ≤50MB）、桌面通知、暗/亮主题
-- 全局设置保存新建目录的默认工作目录与默认 OpenCode Server URL（跨浏览器共享）；左侧目录用于分组管理项目，并保存工作目录与 Server URL；在目录下新建项目时这两项自动继承且锁定，项目只需绑定默认 Session；绑定 Session 时服务端会校验该 Session 的实际目录。新建任务自动锁定项目的工作目录、默认 Session 与 Server URL，不必重复填写；任务保存实际执行的 `sessionId`，唤醒时继续原会话上下文。目录行「目录操作」菜单提供重命名、修改工作目录、修改 Server URL、移除目录；修改工作目录或 Server URL 时默认只更新目录默认值，也可勾选同步覆盖该目录下的已有项目。同步会清除受影响项目的默认 Session 与任务 Session 绑定，须重新绑定；若相关项目仍有有效的 agent 认领，服务端会拒绝本次同步，需先释放认领。移除目录需二次确认，并级联删除目录下的全部项目、任务、评论与附件。项目行支持右击菜单：修改项目名称、移除项目；移除项目需二次确认，并级联删除该项目下的全部任务、评论、依赖、活动与附件
+- 全局设置仅提供新建目录时的默认工作目录和默认 OpenCode Server URL。目录是这两项配置的唯一来源，目录下所有项目自动继承；目录右键菜单可修改工作目录、修改 Server URL 和查看 OpenCode 运行状态。路由变更会清除该目录下项目的默认 Session；相关任务存在有效 Agent 认领时会拒绝变更。项目右键菜单配置项目默认 Session，任务自动继承；任务属性里的 Session、Git 分支、工作树、工作树路径和负责人均只读，由项目配置或 Agent 写入。项目删除与目录删除仍会二次确认并级联删除对应数据。
 
 ## 评论唤醒 agent（watch 侧车）
 
-面板**不绑定任何 agent 工具**：Claude Code / Codex / Cursor / opencode / 任何「命令行接 prompt」的 CLI agent 都能被醒。`taskboard watch` 常驻订阅看板事件（macOS / Windows / Linux 均可，常驻方案见下表）。已绑定 `sessionId` 的任务会优先通过 OpenCode v1 `POST /session/:id/prompt_async` 发送到原会话；只有未绑定任务才走 TUI 输入框或 headless 新会话：
+面板**不绑定任何 agent 工具**：Codex、Cursor、OpenCode 或任意 CLI Agent 都可以通过 Taskboard API/MCP 协作。`taskboard watch` 常驻订阅看板事件；任务 Session 由 `Project.defaultSessionId` 统一提供，唤醒时继续使用项目配置的会话；项目尚未配置 Session 时才走项目 Directory 的 OpenCode Server 路由或 headless fallback。
 
 ```bash
 taskboard watch --tui-url http://127.0.0.1:4096   # ① 可选：指令进 opencode TUI 输入框（opencode 专属增强）
@@ -208,10 +208,10 @@ opencode attach http://127.0.0.1:4097        # 终端 2：接管绑定了 4097 �
 
 #### 细节备忘
 
-- 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47824`）；服务地址与默认会话都存在**项目数据**（`wakeChannel` + `defaultSessionId`），路由就是 `任务 → 项目 → 服务/会话`，没有中心化的路由表；Web 新建项目需选择目录、工作目录、OpenCode Server 与 Session，选中 Session 会自动回填项目名称与工作区，服务端校验 Session 的实际目录后才写入 `wakeChannel`；已有任务保留自己的 `sessionId`，不会被项目会话变更改写
-- 唤醒优先级：任务已绑定 `sessionId` → 对应 OpenCode 服务的 `prompt_async`；只有未绑定任务才使用项目 `wake_channel` / `--tui-url` 注入当前 TUI，最后才 headless。绑定会话投递失败时不会静默创建新会话，唤醒评论保持 pending 以便重试
+- 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47824`）。工作目录与 OpenCode Server URL 存在**Directory**（`workspacePath` + `serverUrl`），项目通过 `directoryId` 继承；默认会话保存在**Project**（`defaultSessionId`），所有任务从所属项目读取同一个 Session。任务表不再存储独立 `sessionId`，任务级会话输入不会覆盖项目绑定。新建项目需选择目录和项目默认 Session，服务端会按目录路由校验 Session 的实际工作目录。
+- 唤醒优先级：任务通过所属项目继承 `defaultSessionId` 时，watch 通过对应 OpenCode 服务的 `prompt_async` 发送到项目默认会话；项目未配置 Session 时才使用 Directory 的 `serverUrl` / `--tui-url` 注入 TUI，最后才 headless。任务的 claim/body `sessionId` 只为旧客户端保留兼容字段，服务端不会用它建立任务级绑定。
 - 同一 serve 端口被多终端 attach 时注入是**广播**（每窗都出现）——多终端请各用各的端口，绑定时不会串
-- 端口/项目/终端数量不受限：`wakeChannel` 是完整 URL（可绑局域网另一台机器），单实例锁按 server 端口 + 作用域自动命名字，headless 通道连端口都不需要
+- 端口/项目/终端数量不受限：项目返回的 `wakeChannel` 是从 Directory 计算出的兼容字段；实际 OpenCode Server URL 由 Directory 的 `serverUrl` 维护，可绑定局域网另一台机器。headless 通道连端口都不需要。
 - 唤醒评论有生命周期（`pending`→`processing`→`processed`）：watch 唤走一条评论时置「唤醒中」，headless 通道跑完（exit 0）自动置「已处理」；只有 `pending` 的评论可编辑、可被唤醒，编辑保存即重新入队（watch 会再次唤醒，无需重打指令）；已处理/唤醒中的评论锁定编辑，面板评论上直接显示徽章。人工把状态改回 `pending`（面板编辑保存 / CLI `comment edit` / MCP `update_comment`）即再次唤醒；无论新建还是重唤，只要任务停留在待验收/完成，都会自动重开为「进行中」——agent 不会在名义上已结案的看板下干活
 
 ## 接入 agent 工具
@@ -249,7 +249,7 @@ args = ["/abs/path/open-taskboard/apps/mcp/dist/mcp.js"]
 
 建议同时在 AGENTS.md / rules 中加入：
 
-> 管理任务时使用 taskboard MCP 工具；状态流转 todo → in_progress → in_review → done，**不流转不许开工**（服务端 claim 会把 todo 自动置为 in_progress，认领即开工），done 必须等用户确认；update_issue 必须携带 show_issue 返回的 version（乐观锁）；每次通过 update_issue/PATCH 实际变更状态都必须在同一请求传 statusNote（原因、验证证据、未覆盖项），服务端在同一事务保存状态和审计评论，缺少说明返回 403，禁止拆成 update_issue + add_comment；拆解需求时先建父任务再用 parentId 建子任务；多 agent 并发先 claim 再开工，长任务定期 heartbeat 续租，完成即 release；agent 创建任务带 sessionId（省略时继承项目默认会话），认领未绑定任务用 claim sessionId 绑定自己的会话（只绑空位，不抢绑）。
+> 管理任务时使用 Taskboard MCP 工具；状态流转 todo → in_progress → in_review → done，**不流转不许开工**（服务端 claim 会把 todo 自动置为 in_progress，认领即开工）；done 必须等用户确认。`update_issue` 必须携带 `show_issue` 返回的 version（乐观锁）；每次通过 `update_issue`/PATCH 实际变更状态都必须在同一请求传 `statusNote`（原因、验证证据、未覆盖项），服务端在同一事务保存状态和审计评论。拆解需求时先建父任务再用 `parentId` 建子任务；多 Agent 并发先 claim 再开工，长任务定期 heartbeat 续租，完成即 release。任务 Session 由 Project 默认 Session 继承；不要尝试通过任务级 `sessionId` 覆盖绑定。分支、工作树及负责人等执行属性由 Agent 写回任务。
 
 ### 方式二：Skill + CLI（opencode 或不支持 MCP 的工具）
 
@@ -281,7 +281,7 @@ docker compose up -d --build
 | `TASKBOARD_PORT` | `47824` | HTTP 端口 |
 | `TASKBOARD_DATA_DIR` | `.data` | SQLite 数据目录 |
 | `TASKBOARD_URL` | `http://127.0.0.1:47824` | CLI / MCP 指向的服务地址 |
-| `TASKBOARD_OPENCODE_URL` | 未设置 | Web 新建项目与无状态 `GET /api/opencode/sessions` 的默认 OpenCode 服务地址。服务端解析顺序：显式 `url` query（仅 API）→ 本环境变量 → 最近创建项目的 `wakeChannel` → `http://127.0.0.1:4096`；解析结果写入新项目的 `wakeChannel`（`未设置` 时走后面三级）。Docker Compose 示例已设为 `http://host.docker.internal:4096`，并加 `host.docker.internal:host-gateway`（Linux） |
+| `TASKBOARD_OPENCODE_URL` | 未设置 | Web 新建项目与无状态 `GET /api/opencode/sessions` 的默认 OpenCode 服务地址。服务端解析顺序：显式 `url` query（仅 API）→ 本环境变量 → 最近创建项目所属 Directory 的 `serverUrl` → `http://127.0.0.1:4096`；解析结果写入新建 Directory，而不是写入 Project。Docker Compose 示例已设为 `http://host.docker.internal:4096`，并加 `host.docker.internal:host-gateway`（Linux） |
 | `TASKBOARD_SESSION_ID` | 未设置 | CLI 每次请求自动带 `x-taskboard-session`；`--session-id` 优先于该环境变量 |
 | `TASKBOARD_WEB_DIST` | 自动探测 | 看板静态目录（默认 `apps/web/dist`，vite 构建产物） |
 | `TASKBOARD_AUTH_REQUIRED` | 未设置 | `1` 时强制浏览器登录；非回环监听地址也会自动强制登录。首次访问创建管理员，后续通过 HttpOnly Session Cookie 认证，无需手动输入 Token |\n| `TASKBOARD_TOKEN` | 未设置 | 可选的兼容凭证，供 CLI/MCP 等机器客户端使用；浏览器不再要求输入或保存此值 |
@@ -301,6 +301,6 @@ docker compose up -d --build
 - 评论、活动流、标签、负责人、分支/worktree 绑定、起止日期（校验真实日历）、归档（归档父任务连带其未归档子任务）
 - 全文搜索（FTS5 trigram，标题/描述/评论，短查询退化 LIKE）、导出/导入 JSON（taskboard export/import）、统计面板（周吞吐/平均周期/贡献榜）、时间线视图、Mermaid 图渲染
 - 附件（元数据入库、正文落盘 `attachments/`，单文件 ≤10MB，每任务限额 20 个/总量 50MB 超限 400）、桌面通知、暗/亮主题、泳道分组、批量操作、j/k 键盘导航
-- 评论唤醒 agent：`taskboard watch` 常驻订阅 SSE（`--exec` 适配任意 agent CLI）。已绑定 `sessionId` 的任务优先调用 OpenCode v1 `POST /session/:id/prompt_async`，复用原会话上下文；未绑定任务才走项目 `wake_channel` / `--tui-url` TUI 注入，再到 headless spawn。绑定会话投递失败时不创建新会话，评论保留 pending 供重试；`--on` 可改唤醒前缀，`--project` 可选作用域过滤，`--ignore-author a,b` 按作者忽略唤醒评论（防 agent 自我唤醒循环，`watch` 自身 actor 始终忽略）
+- 评论唤醒 Agent：`taskboard watch` 常驻订阅 SSE（`--exec` 适配任意 Agent CLI）。任务通过项目继承 `defaultSessionId` 时优先调用 OpenCode v1 `POST /session/:id/prompt_async` 复用原会话；项目未配置 Session 时才走 Directory `serverUrl` / `--tui-url` TUI 注入，再到 headless spawn。绑定会话投递失败时不创建新会话，评论保留 pending 供重试；`--on` 可改唤醒前缀，`--project` 可选作用域过滤，`--ignore-author a,b` 按作者忽略唤醒评论。
 - SSE 实时刷新（Web 多端 + 跨 agent 工具共享同一块板；25s 心跳保活，断线指数退避重连 + 全量兜底拉取）
 - LAN 共享（`TASKBOARD_HOST=0.0.0.0`）、首次初始化管理员 + Session Cookie 登录、只读模式、人工 done 门禁、webhook 事件转发

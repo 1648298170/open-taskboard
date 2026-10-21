@@ -206,7 +206,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
       return reply.code(400).send({ error: '请先在所属目录配置 OpenCode Server URL，再选择会话' });
     }
     if (!project.workspacePath.trim()) {
-      return reply.code(400).send({ error: '先在项目设置中配置工作目录，再查询 Session' });
+      return reply.code(400).send({ error: '请先在所属目录配置工作目录，再查询 OpenCode Session' });
     }
     try {
       const base = normalizeOpenCodeBase(project.wakeChannel);
