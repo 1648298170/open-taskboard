@@ -2028,3 +2028,19 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   .detail-extra-grid { grid-template-columns: minmax(0, 1fr); }
   .detail-disclosure .detail-summary-meta { max-width: 55%; }
 }
+
+
+.detail-attachments .attachment-upload {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.detail-attachments .attachment-upload .attach-input {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+}
