@@ -51,7 +51,7 @@ function normalizeOpenCodeDirectory(value: string): string {
   return /^[a-zA-Z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
-const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerConfig }> = async (app, { store, config }) => {
+const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerConfig; openCodeUrl?: string }> = async (app, { store, config, openCodeUrl }) => {
   app.get('/api/projects/:projectId/issues', async (req: FastifyRequest<{ Params: ProjectParams; Querystring: { status?: Status; parentId?: string; includeDone?: string; archived?: string } }>, reply) => {
     if (!store.getProject(req.params.projectId)) {
       return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
@@ -263,7 +263,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     const project = store.getProject(issue.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
     let serverUrl: string;
-    try { serverUrl = getConfiguredOpenCodeBase(); }
+    try { serverUrl = getConfiguredOpenCodeBase(openCodeUrl); }
     catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
     const directory = issue.worktreePath.trim() || project.workspacePath.trim();
     if (!directory) return reply.code(400).send({ error: '任务没有可用的工作目录' });
