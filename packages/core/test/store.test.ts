@@ -1479,38 +1479,38 @@ describe('review regression: confirm escape-hatch schema (T7-36)', () => {
   });
 });
 
-// --- (l) project wake channel (data-driven watch routing) -------------------------
+// --- Directory workspace metadata; OpenCode URL is deployment configuration. ----
 
-describe('Directory-owned OpenCode routing', () => {
-  it('legacy project creation seeds a Directory route', () => {
+describe('Directory-owned workspace metadata', () => {
+  it('legacy project creation seeds a Directory without an OpenCode URL', () => {
     const { store } = fresh();
-    const project = store.createProject({ id: 'p1', name: 'P', workspacePath: '/workspace/a', wakeChannel: 'http://127.0.0.1:4096' });
+    const project = store.createProject({ id: 'p1', name: 'P', workspacePath: '/workspace/a' });
     assert.equal(project.workspacePath, '/workspace/a');
-    assert.equal(project.wakeChannel, 'http://127.0.0.1:4096');
     assert.ok(project.directoryId);
     assert.equal(store.getDirectory(project.directoryId!)!.workspacePath, '/workspace/a');
-    assert.equal(store.getDirectory(project.directoryId!)!.serverUrl, 'http://127.0.0.1:4096');
+    assert.equal('serverUrl' in store.getDirectory(project.directoryId!)!, false);
+    assert.equal('wakeChannel' in project, false);
   });
 
-  it('updates routing on Directory and clears the Project Session', () => {
+  it('updates the Directory workspace and clears inherited Session bindings', () => {
     const { store, events } = fresh();
-    const directory = store.createDirectory({ id: 'dir-1', name: 'D', workspacePath: '/workspace/a', serverUrl: 'http://h:1' });
+    const directory = store.createDirectory({ id: 'dir-1', name: 'D', workspacePath: '/workspace/a' });
     const project = store.createProject({ id: 'p1', name: 'P', directoryId: directory.id, defaultSessionId: 'ses_project' });
     const issue = store.createIssue({ projectId: project.id, title: 'A' });
-    store.updateDirectory(directory.id, { workspacePath: '/workspace/b', serverUrl: 'http://h:2' });
+    store.updateDirectory(directory.id, { workspacePath: '/workspace/b' });
     assert.equal(store.getProject('p1')!.workspacePath, '/workspace/b');
-    assert.equal(store.getProject('p1')!.wakeChannel, 'http://h:2');
+    assert.equal('wakeChannel' in store.getProject('p1')!, false);
     assert.equal(store.getProject('p1')!.defaultSessionId, null);
     assert.equal(store.getIssue(issue.id)!.sessionId, null);
     assert.ok(store.listActivities(issue.id).some(activity => activity.action === 'session-unbound'));
     const upd = events.find(e => e.type === 'project.updated');
     assert.ok(upd);
-    assert.deepEqual(upd!.payload.fields, ['workspacePath', 'wakeChannel', 'defaultSessionId']);
+    assert.deepEqual(upd!.payload.fields, ['workspacePath', 'defaultSessionId']);
   });
 
-  it('does not allow routing changes while any task in the Directory has an active Agent lease', () => {
+  it('does not allow workspace changes while a task has an active Agent lease', () => {
     const { store } = fresh();
-    const directory = store.createDirectory({ id: 'dir-1', name: 'D', workspacePath: '/workspace/a', serverUrl: 'http://h:1' });
+    const directory = store.createDirectory({ id: 'dir-1', name: 'D', workspacePath: '/workspace/a' });
     const project = store.createProject({ id: 'p1', name: 'P', directoryId: directory.id });
     const issue = store.createIssue({ projectId: project.id, title: 'leased' });
     store.claimIssue(issue.id, 'agent-a', 30);
@@ -1524,8 +1524,7 @@ describe('workspace directories', () => {
   it('inherits the directory workspace path when creating a project without an override', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
     const directory = store.createDirectory({
-      id: 'work-a', name: 'Workspace A', workspacePath: 'D:\\workspace\\project-a',
-      serverUrl: 'http://127.0.0.1:4096'
+      id: 'work-a', name: 'Workspace A', workspacePath: 'D:\\workspace\\project-a'
     });
     const project = store.createProject({
       id: 'p-a', name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a'
@@ -1533,7 +1532,7 @@ describe('workspace directories', () => {
     assert.equal(project.directoryId, directory.id);
     assert.equal(directory.workspacePath, 'D:\\workspace\\project-a');
     assert.equal(project.workspacePath, 'D:\\workspace\\project-a');
-    assert.equal(project.wakeChannel, 'http://127.0.0.1:4096');
+    assert.equal('wakeChannel' in project, false);
     assert.equal(project.defaultSessionId, 'ses_a');
     assert.deepEqual(store.listDirectories().map(item => item.id), ['work-a']);
   });
@@ -1541,8 +1540,7 @@ describe('workspace directories', () => {
   it('Directory path changes are immediately inherited by existing and new projects', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
     const directory = store.createDirectory({
-      id: 'work-b', name: 'Workspace B', workspacePath: 'D:\\workspace\\old-root',
-      serverUrl: 'http://127.0.0.1:4096'
+      id: 'work-b', name: 'Workspace B', workspacePath: 'D:\\workspace\\old-root'
     });
     const existing = store.createProject({ id: 'p-existing', name: 'Existing Project', directoryId: directory.id });
     const updated = store.updateDirectory(directory.id, { workspacePath: 'D:\\workspace\\new-root' });
@@ -1553,44 +1551,33 @@ describe('workspace directories', () => {
     assert.equal(project.workspacePath, 'D:\\workspace\\new-root');
   });
 
-  it('routing changes clear every Project Session in the Directory, but no other Directory', () => {
+  it('workspace changes clear Sessions for projects in that Directory only', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
-    const directory = store.createDirectory({
-      id: 'sync-dir', name: 'Sync directory',
-      workspacePath: '/workspace/old', serverUrl: 'http://127.0.0.1:4096'
-    });
-    const otherDirectory = store.createDirectory({
-      id: 'other-dir', name: 'Other directory',
-      workspacePath: '/other', serverUrl: 'http://127.0.0.1:4100'
-    });
+    const directory = store.createDirectory({ id: 'sync-dir', name: 'Sync directory', workspacePath: '/workspace/old' });
+    const otherDirectory = store.createDirectory({ id: 'other-dir', name: 'Other directory', workspacePath: '/other' });
     store.createProject({ id: 'sync-a', name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses-project-a' });
     store.createProject({ id: 'sync-b', name: 'Project B', directoryId: directory.id, defaultSessionId: 'ses-project-b' });
     store.createProject({ id: 'other-project', name: 'Other Project', directoryId: otherDirectory.id, defaultSessionId: 'ses-other' });
     const issue = store.createIssue({ projectId: 'sync-a', title: 'Bound task' });
-
-    const updatedDirectory = store.updateDirectory(directory.id, {
-      workspacePath: '/workspace/new', serverUrl: 'http://127.0.0.1:4097'
-    });
+    const updatedDirectory = store.updateDirectory(directory.id, { workspacePath: '/workspace/new' });
     assert.equal(updatedDirectory.workspacePath, '/workspace/new');
-    assert.equal(updatedDirectory.serverUrl, 'http://127.0.0.1:4097');
     for (const id of ['sync-a', 'sync-b']) {
       const project = store.getProject(id)!;
       assert.equal(project.workspacePath, '/workspace/new');
-      assert.equal(project.wakeChannel, 'http://127.0.0.1:4097');
       assert.equal(project.defaultSessionId, null);
     }
     assert.equal(store.getIssue(issue.id)?.sessionId, null);
     assert.ok(store.listActivities(issue.id).some(activity => activity.action === 'session-unbound'));
     assert.deepEqual(
-      [store.getProject('other-project')!.workspacePath, store.getProject('other-project')!.wakeChannel, store.getProject('other-project')!.defaultSessionId],
-      ['/other', 'http://127.0.0.1:4100', 'ses-other']
+      [store.getProject('other-project')!.workspacePath, store.getProject('other-project')!.defaultSessionId],
+      ['/other', 'ses-other']
     );
   });
 
-  it('legacy project creation automatically creates or reuses a matching directory', () => {
+  it('legacy project creation reuses a matching Directory by workspace path', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
-    const first = store.createProject({ id: 'legacy-a', name: 'Legacy A', workspacePath: '/workspace/a', wakeChannel: 'http://127.0.0.1:4096' });
-    const second = store.createProject({ id: 'legacy-b', name: 'Legacy B', workspacePath: '/workspace/a', wakeChannel: 'http://127.0.0.1:4096' });
+    const first = store.createProject({ id: 'legacy-a', name: 'Legacy A', workspacePath: '/workspace/a' });
+    const second = store.createProject({ id: 'legacy-b', name: 'Legacy B', workspacePath: '/workspace/a' });
     assert.equal(first.directoryId, second.directoryId);
     assert.equal(store.listDirectories().length, 1);
   });
