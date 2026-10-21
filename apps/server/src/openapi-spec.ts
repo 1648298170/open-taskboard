@@ -409,7 +409,7 @@ export const openApiSpec: OpenApiDocument = {
       parameters: [{ name: 'directoryId', in: 'path', required: true, schema: { type: 'string' } }],
       patch: {
         operationId: 'updateDirectory',
-        summary: 'Update directory settings and optionally synchronize existing projects',
+        summary: 'Update a Directory; linked Projects automatically inherit route changes'
         tags: ['directories'],
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PatchDirectoryRequest' } } } },
         responses: {
@@ -440,12 +440,8 @@ export const openApiSpec: OpenApiDocument = {
       parameters: [{ name: 'directoryId', in: 'path', required: true, schema: { type: 'string' } }],
       get: {
         operationId: 'listDirectoryOpenCodeSessions',
-        summary: 'List OpenCode sessions for the supplied project workspace path and server',
+        summary: 'List OpenCode sessions using the Directory workspace path and Server URL',
         tags: ['directories'],
-        parameters: [
-          { name: 'workspacePath', in: 'query', required: true, schema: { type: 'string' } },
-          { name: 'serverUrl', in: 'query', required: true, schema: { type: 'string', format: 'uri' } }
-        ],
         responses: {
           200: { description: 'Sessions in the directory', ...jsonResponse({ type: 'object', additionalProperties: true }) },
           400: { $ref: '#/components/responses/BadRequest' },
@@ -768,8 +764,7 @@ export const openApiSpec: OpenApiDocument = {
         tags: ['issues'],
         parameters: [
           { $ref: '#/components/parameters/ProjectId' },
-          { $ref: '#/components/parameters/Actor' },
-          { $ref: '#/components/parameters/Session' }
+          { $ref: '#/components/parameters/Actor' }
         ],
         requestBody: {
           required: true,
@@ -1349,8 +1344,8 @@ export const openApiSpec: OpenApiDocument = {
           name: { type: 'string' },
           directoryId: { type: ['string', 'null'] },
           defaultSessionId: { type: ['string', 'null'], description: 'Optional default session preselected for new tasks' },
-          workspacePath: { type: 'string', description: 'Project-specific filesystem workspace path' },
-          wakeChannel: { type: 'string', description: 'Project-specific OpenCode Server URL' },
+          workspacePath: { type: 'string', readOnly: true, description: 'Inherited from the owning Directory; not stored on Project' },
+          wakeChannel: { type: 'string', readOnly: true, description: 'OpenCode Server URL inherited from the owning Directory; not stored on Project' },
           labels: { type: 'string' },
           createdAt: { type: 'string', format: 'date-time' }
         },
@@ -1371,7 +1366,7 @@ export const openApiSpec: OpenApiDocument = {
           labels: { type: 'string', description: 'Comma-separated free-form labels' },
           branch: { type: 'string', description: 'Bound git branch; empty string = unbound' },
           worktree: { type: 'string', description: 'Bound git worktree name; empty string = unbound' },
-          sessionId: { type: ['string', 'null'], description: 'opencode session this task was split from; null = unbound (@agent wakes continue the bound session)' },
+          sessionId: { type: ['string', 'null'], readOnly: true, description: 'Effective Session inherited from the owning Project defaultSessionId; tasks cannot bind a separate Session' },
           archivedAt: { type: ['string', 'null'], format: 'date-time', description: 'Archive timestamp; null = not archived' },
           claimedBy: { type: 'string', description: 'Exclusive claim holder (T7-34); empty string = unclaimed' },
           leaseExpiresAt: { type: ['string', 'null'], format: 'date-time', description: 'Claim lease deadline; null or past = no active claim' },
@@ -1590,7 +1585,6 @@ export const openApiSpec: OpenApiDocument = {
           name: { type: 'string', minLength: 1 },
           workspacePath: { type: 'string' },
           serverUrl: { type: 'string', maxLength: 500 },
-          syncProjects: { type: 'boolean', description: 'When true, also synchronize the submitted workspacePath and/or serverUrl to existing projects in this directory; affected Session bindings are cleared. Active agent leases cause the whole update to be rejected with 409.' }
         },
         additionalProperties: false
       },
@@ -1599,8 +1593,6 @@ export const openApiSpec: OpenApiDocument = {
         description: 'PATCH /api/projects/{projectId} body (strict)',
         properties: {
           name: { type: 'string', minLength: 1 },
-          workspacePath: { type: 'string' },
-          wakeChannel: { type: 'string', maxLength: 200 },
           defaultSessionId: { type: ['string', 'null'] },
           labels: { type: 'string' }
         },
@@ -1613,9 +1605,9 @@ export const openApiSpec: OpenApiDocument = {
           id: { type: 'string', description: 'Omit for a generated 8-char id; an existing id → 409' },
           name: { type: 'string', minLength: 1 },
           directoryId: { type: 'string', description: 'Workspace directory to create the project under' },
-          defaultSessionId: { type: ['string', 'null'], description: 'Selected OpenCode session for new tasks' },
-          workspacePath: { type: 'string', description: 'Project filesystem workspace path' },
-          wakeChannel: { type: 'string', description: 'Project OpenCode Server URL' },
+          defaultSessionId: { type: ['string', 'null'], description: 'Project default OpenCode Session inherited by every task' },
+          workspacePath: { type: 'string', description: 'Legacy create-only input used to create or find a Directory when directoryId is omitted; ignored when directoryId is supplied' },
+          wakeChannel: { type: 'string', description: 'Legacy create-only OpenCode Server URL used only when directoryId is omitted; ignored when directoryId is supplied' },
           labels: { type: 'string' }
         },
         required: ['name'],
@@ -1626,9 +1618,8 @@ export const openApiSpec: OpenApiDocument = {
         description: 'PATCH /api/projects/{projectId} body — all fields optional (strict)',
         properties: {
           name: { type: 'string', minLength: 1 },
-          wakeChannel: { type: 'string', description: 'OpenCode/TUI wake URL; empty string = unbound' },
-          labels: { type: 'string', description: 'Comma-separated project labels' },
-          sessionId: { type: 'string', description: 'Project default OpenCode session; empty string clears it' }
+          defaultSessionId: { type: ['string', 'null'], description: 'Project default Session inherited by every task; null clears it' },
+          labels: { type: 'string', description: 'Comma-separated project labels' }
         },
         additionalProperties: false
       },
@@ -1644,10 +1635,6 @@ export const openApiSpec: OpenApiDocument = {
           labels: { type: 'string' },
           branch: { type: 'string' },
           worktree: { type: ['string', 'null'], description: 'null = unbound' },
-          sessionId: {
-            type: ['string', 'null'],
-            description: 'opencode session to bind at creation. Precedence: explicit sessionId → x-taskboard-session header → project default session → null (unbound).'
-          },
           assignee: { type: 'string' },
           startDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
           dueDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
@@ -1667,7 +1654,6 @@ export const openApiSpec: OpenApiDocument = {
           labels: { type: 'string' },
           branch: { type: 'string' },
           worktree: { type: ['string', 'null'], description: 'null clears (stored as "")' },
-          sessionId: { type: ['string', 'null'], description: 'opencode session binding; null = unbind' },
           assignee: { type: 'string' },
           parentId: { type: ['string', 'null'] },
           startDate: { type: ['string', 'null'], format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
@@ -1701,13 +1687,11 @@ export const openApiSpec: OpenApiDocument = {
         description:
           'POST /api/issues/{id}/claim|heartbeat|release body (strict). ttlMinutes: lease duration on claim ' +
           '(default 30, max 1440), a fresh duration on heartbeat, tolerated-and-ignored on release. ' +
-          'sessionId (claim only): binds the claimer\'s opencode session when the issue is unbound; ' +
-          'an existing binding is never overwritten (tolerated-and-ignored on heartbeat/release).',
+          'The task Session is inherited from the Project and cannot be overridden.',
         properties: {
           agent: { type: 'string', minLength: 1, description: 'Claim holder identity' },
           ttlMinutes: { type: 'integer', minimum: 1, maximum: 1440 },
-          sessionId: { type: 'string', minLength: 1, description: 'Claimer\'s opencode session (bind-only-if-unbound)' }
-        },
+          },
         required: ['agent'],
         additionalProperties: false
       },
@@ -1783,7 +1767,7 @@ export const openApiSpec: OpenApiDocument = {
         name: 'x-taskboard-session',
         in: 'header',
         required: false,
-        description: 'Caller OpenCode session id used when creating an issue without an explicit body sessionId (overrides the project default, not the body)',
+        description: 'Legacy header retained for compatibility; task Session is inherited from the Project and this header is ignored',
         schema: { type: 'string' }
       }
     },

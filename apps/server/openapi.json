@@ -635,7 +635,7 @@
       ],
       "patch": {
         "operationId": "updateDirectory",
-        "summary": "Update directory settings and optionally synchronize existing projects",
+        "summary": "Update a Directory; linked Projects automatically inherit route changes",
         "tags": [
           "directories"
         ],
@@ -740,29 +740,11 @@
       ],
       "get": {
         "operationId": "listDirectoryOpenCodeSessions",
-        "summary": "List OpenCode sessions for the supplied project workspace path and server",
+        "summary": "List OpenCode sessions using the Directory workspace path and Server URL",
         "tags": [
           "directories"
         ],
-        "parameters": [
-          {
-            "name": "workspacePath",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "serverUrl",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uri"
-            }
-          }
-        ],
+        "parameters": [],
         "responses": {
           "200": {
             "description": "Sessions in the directory",
@@ -1483,9 +1465,6 @@
           },
           {
             "$ref": "#/components/parameters/Actor"
-          },
-          {
-            "$ref": "#/components/parameters/Session"
           }
         ],
         "requestBody": {
@@ -3151,11 +3130,13 @@
           },
           "workspacePath": {
             "type": "string",
-            "description": "Project-specific filesystem workspace path"
+            "readOnly": true,
+            "description": "Inherited from the owning Directory; not stored on Project"
           },
           "wakeChannel": {
             "type": "string",
-            "description": "Project-specific OpenCode Server URL"
+            "readOnly": true,
+            "description": "OpenCode Server URL inherited from the owning Directory; not stored on Project"
           },
           "labels": {
             "type": "string"
@@ -3223,7 +3204,8 @@
               "string",
               "null"
             ],
-            "description": "opencode session this task was split from; null = unbound (@agent wakes continue the bound session)"
+            "readOnly": true,
+            "description": "Effective Session inherited from the owning Project defaultSessionId; tasks cannot bind a separate Session"
           },
           "archivedAt": {
             "type": [
@@ -3787,7 +3769,7 @@
       },
       "PatchDirectoryRequest": {
         "type": "object",
-        "description": "PATCH /api/directories/{directoryId} body (strict)",
+        "description": "PATCH /api/directories/{directoryId} body (strict). Route changes automatically affect every linked Project; active Agent leases block route changes.",
         "properties": {
           "name": {
             "type": "string",
@@ -3799,28 +3781,17 @@
           "serverUrl": {
             "type": "string",
             "maxLength": 500
-          },
-          "syncProjects": {
-            "type": "boolean",
-            "description": "When true, also synchronize the submitted workspacePath and/or serverUrl to existing projects in this directory; affected Session bindings are cleared. Active agent leases cause the whole update to be rejected with 409."
           }
         },
         "additionalProperties": false
       },
       "PatchProjectRequest": {
         "type": "object",
-        "description": "PATCH /api/projects/{projectId} body (strict)",
+        "description": "PATCH /api/projects/{projectId} body (strict). Only project-owned fields are mutable; routing is inherited from Directory.",
         "properties": {
           "name": {
             "type": "string",
             "minLength": 1
-          },
-          "workspacePath": {
-            "type": "string"
-          },
-          "wakeChannel": {
-            "type": "string",
-            "maxLength": 200
           },
           "defaultSessionId": {
             "type": [
@@ -3855,15 +3826,15 @@
               "string",
               "null"
             ],
-            "description": "Selected OpenCode session for new tasks"
+            "description": "Project default OpenCode Session inherited by every task"
           },
           "workspacePath": {
             "type": "string",
-            "description": "Project filesystem workspace path"
+            "description": "Legacy create-only input used to create/find a Directory when directoryId is omitted; ignored when directoryId is supplied"
           },
           "wakeChannel": {
             "type": "string",
-            "description": "Project OpenCode Server URL"
+            "description": "Legacy create-only OpenCode Server URL used only when directoryId is omitted; ignored when directoryId is supplied"
           },
           "labels": {
             "type": "string"
@@ -3876,30 +3847,29 @@
       },
       "UpdateProjectRequest": {
         "type": "object",
-        "description": "PATCH /api/projects/{projectId} body — all fields optional (strict)",
+        "description": "PATCH /api/projects/{projectId} body — only name, defaultSessionId and labels are mutable (strict)",
         "properties": {
           "name": {
             "type": "string",
             "minLength": 1
           },
-          "wakeChannel": {
-            "type": "string",
-            "description": "OpenCode/TUI wake URL; empty string = unbound"
-          },
           "labels": {
             "type": "string",
             "description": "Comma-separated project labels"
           },
-          "sessionId": {
-            "type": "string",
-            "description": "Project default OpenCode session; empty string clears it"
+          "defaultSessionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Project default Session inherited by every task; null clears it"
           }
         },
         "additionalProperties": false
       },
       "CreateIssueRequest": {
         "type": "object",
-        "description": "POST /api/projects/{projectId}/issues body — projectId lives in the path (strict)",
+        "description": "POST /api/projects/{projectId}/issues body — projectId lives in the path; task Session inherits from Project (strict)",
         "properties": {
           "parentId": {
             "type": [
@@ -3932,13 +3902,6 @@
               "null"
             ],
             "description": "null = unbound"
-          },
-          "sessionId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "opencode session to bind at creation. Precedence: explicit sessionId → x-taskboard-session header → project default session → null (unbound)."
           },
           "assignee": {
             "type": "string"
@@ -3995,7 +3958,7 @@
       },
       "UpdateIssueRequest": {
         "type": "object",
-        "description": "PATCH /api/issues/{id} body — all fields optional, version optional on REST (strict); every actual non-web status transition must include statusNote; the status update and audit comment are committed atomically. Web status changes without a note receive an automatic labelled audit comment.",
+        "description": "PATCH /api/issues/{id} body — all fields optional, version optional on REST (strict); Session cannot be changed on a task; every actual non-web status transition must include statusNote; the status update and audit comment are committed atomically. Web status changes without a note receive an automatic labelled audit comment.",
         "properties": {
           "title": {
             "type": "string",
@@ -4022,13 +3985,6 @@
               "null"
             ],
             "description": "null clears (stored as \"\")"
-          },
-          "sessionId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "opencode session binding; null = unbind"
           },
           "assignee": {
             "type": "string"
@@ -4131,7 +4087,7 @@
       },
       "ClaimRequest": {
         "type": "object",
-        "description": "POST /api/issues/{id}/claim|heartbeat|release body (strict). ttlMinutes: lease duration on claim (default 30, max 1440), a fresh duration on heartbeat, tolerated-and-ignored on release. sessionId (claim only): binds the claimer's opencode session when the issue is unbound; an existing binding is never overwritten (tolerated-and-ignored on heartbeat/release).",
+        "description": "POST /api/issues/{id}/claim|heartbeat|release body (strict). Session is inherited from the Project and cannot be overridden. ttlMinutes: lease duration on claim (default 30, max 1440), refreshed duration on heartbeat, tolerated-and-ignored on release.",
         "properties": {
           "agent": {
             "type": "string",
@@ -4142,11 +4098,6 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 1440
-          },
-          "sessionId": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Claimer's opencode session (bind-only-if-unbound)"
           }
         },
         "required": [
@@ -4312,15 +4263,6 @@
         "in": "header",
         "required": false,
         "description": "Acting agent/user name, recorded in the issue activity log",
-        "schema": {
-          "type": "string"
-        }
-      },
-      "Session": {
-        "name": "x-taskboard-session",
-        "in": "header",
-        "required": false,
-        "description": "Caller OpenCode session id used when creating an issue without an explicit body sessionId (overrides the project default, not the body)",
         "schema": {
           "type": "string"
         }
