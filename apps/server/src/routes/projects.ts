@@ -3,7 +3,7 @@ import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { Store, ValidationError } from '@taskboard/core';
 import { createProjectSchema, projectPatchSchema, z } from '@taskboard/core/schemas';
 import { listCommits, scanGitRefs } from '../git-refs.js';
-import { getConfiguredOpenCodeBase, listOpenCodeSessions, normalizeOpenCodeBase, resolveOpenCodeBase } from '../opencode.js';
+import { getConfiguredOpenCodeBase, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
 
 interface ProjectParams { projectId: string }
 interface CommitsQuery { ref?: string }
@@ -17,17 +17,6 @@ function normalizeDirectoryPath(value: string): string {
 
 const validationMessage = (error: z.ZodError): string =>
   error.issues.map(i => (i.path.length > 0 ? `${i.path.map(String).join('.')}: ` : '') + i.message).join('; ');
-
-// Newest-first wake channels, skipping unbound projects. `listProjects()`
-// returns oldest first (ORDER BY created_at); reversing before the stable
-// sort also puts later rows first when two projects share a timestamp.
-const recentProjectChannels = (store: Store): string[] =>
-  store.listProjects()
-    .slice()
-    .reverse()
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .map(project => project.wakeChannel)
-    .filter(channel => channel.trim().length > 0);
 
 const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }) => {
   app.get('/api/projects', async () => store.listProjects());
