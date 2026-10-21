@@ -43,8 +43,8 @@ export class ProjectRepo {
       else {
         directoryId = shortId();
         this.db.prepare(
-          'INSERT INTO directories (id, name, workspace_path, server_url, created_at) VALUES (?, ?, ?, ?, ?)'
-        ).run(directoryId, label, workspacePath, '', now());
+          'INSERT INTO directories (id, name, workspace_path, created_at) VALUES (?, ?, ?, ?) '
+        ).run(directoryId, label, workspacePath, now());
       }
     }
 
