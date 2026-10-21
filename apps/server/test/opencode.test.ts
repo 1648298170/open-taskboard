@@ -1,8 +1,20 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { abortOpenCodeSession, filterSessionsByWorkspace, getOpenCodeSessionRuntimeState, isWindowsDriveRoot, normalizeOpenCodeBase, parentDirectoryPath } from '../src/opencode.js';
+import { abortOpenCodeSession, buildOpenCodePublicSessionUrl, filterSessionsByWorkspace, getOpenCodeSessionRuntimeState, isWindowsDriveRoot, normalizeOpenCodeBase, parentDirectoryPath } from '../src/opencode.js';
 import type { OpenCodeSessionOption } from '../src/opencode.js';
+
+describe('browser-facing OpenCode Session links', () => {
+  it('uses the public origin rather than the internal Docker URL', () => {
+    const url = buildOpenCodePublicSessionUrl('D:\\JERRY\\dsh\\open-taskboard', 'ses_123', 'http://192.168.3.7:4096');
+    assert.equal(url, 'http://192.168.3.7:4096/RDpcSkVSUllcZHNoXG9wZW4tdGFza2JvYXJk/session/ses_123');
+  });
+
+  it('does not produce a browser link without public deployment configuration', () => {
+    assert.equal(buildOpenCodePublicSessionUrl('/workspace', 'ses_123', ''), null);
+    assert.equal(buildOpenCodePublicSessionUrl('/workspace', 'ses_123', 'file:///tmp/opencode'), null);
+  });
+});
 
 describe('normalizeOpenCodeBase', () => {
   it('accepts an HTTP origin with a port', () => {
