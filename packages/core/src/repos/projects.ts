@@ -3,15 +3,13 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Project } from '../types.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
-const PROJECT_COLS = 'id, name, directory_id AS directoryId, default_session_id AS defaultSessionId, workspace_path AS workspacePath, wake_channel AS wakeChannel, labels, created_at AS createdAt';
+const PROJECT_COLS = `p.id, p.name, p.directory_id AS directoryId, p.default_session_id AS defaultSessionId, COALESCE(d.workspace_path, '') AS workspacePath, COALESCE(d.server_url, '') AS wakeChannel, p.labels, p.created_at AS createdAt`;
 const now = (): string => new Date().toISOString();
 const shortId = (): string => randomUUID().slice(0, 8);
 
 export interface ProjectPatch {
   name?: string;
   labels?: string;
-  workspacePath?: string;
-  wakeChannel?: string;
   defaultSessionId?: string | null;
 }
 
@@ -20,41 +18,38 @@ export class ProjectRepo {
 
   create(input: {
     id?: string; name: string; directoryId?: string;
+    /** Legacy route values are used only to create a Directory for older callers. */
     workspacePath?: string; wakeChannel?: string; labels?: string;
     defaultSessionId?: string | null;
   }): string {
     const id = input.id || shortId();
     if (this.get(id)) throw new ConflictError(`project already exists: ${id}`);
     if (!input.name.trim()) throw new ValidationError('name: must not be blank');
-
-    let workspacePath = input.workspacePath?.trim() ?? '';
-    const wakeChannel = input.wakeChannel?.trim() ?? '';
+    const workspacePath = input.workspacePath?.trim() ?? '';
+    const serverUrl = input.wakeChannel?.trim() ?? '';
     let directoryId = input.directoryId;
     if (directoryId) {
-      const directory = this.db.prepare('SELECT id, workspace_path AS workspacePath FROM directories WHERE id = ?').get(directoryId) as { id: string; workspacePath: string } | undefined;
-      if (!directory) throw new NotFoundError(`directory not found: ${directoryId}`);
-      if (!workspacePath) workspacePath = directory.workspacePath;
+      if (!this.db.prepare('SELECT id FROM directories WHERE id = ?').get(directoryId)) {
+        throw new NotFoundError(`directory not found: ${directoryId}`);
+      }
+      // Directory route is authoritative; ignore route fields sent with a project.
     } else {
-      // Legacy CLI/MCP clients do not send directoryId. Directories are only
-      // sidebar groups now: reuse a group with the same display name, or create
-      // one from the workspace basename and initialize its default workspace path.
-      const label = workspacePath.split(/[\\/]/).filter(Boolean).at(-1) || '默认目录';
+      // Compatibility for older CLI/MCP clients: turn their route inputs into a Directory.
+      const normalizedPath = workspacePath.replaceAll(String.fromCharCode(92), '/');
+      const label = normalizedPath.split('/').filter(Boolean).at(-1) || '默认目录';
       const existing = this.db.prepare(
-        'SELECT id FROM directories WHERE name = ? ORDER BY created_at LIMIT 1'
-      ).get(label) as { id: string } | undefined;
-      if (existing) {
-        directoryId = existing.id;
-      } else {
+        'SELECT id FROM directories WHERE name = ? AND workspace_path = ? AND server_url = ? ORDER BY created_at LIMIT 1'
+      ).get(label, workspacePath, serverUrl) as { id: string } | undefined;
+      if (existing) directoryId = existing.id;
+      else {
         directoryId = shortId();
-        this.db.prepare(
-          'INSERT INTO directories (id, name, workspace_path, created_at) VALUES (?, ?, ?, ?)'
-        ).run(directoryId, label, workspacePath, now());
+        this.db.prepare('INSERT INTO directories (id, name, workspace_path, server_url, created_at) VALUES (?, ?, ?, ?, ?)')
+          .run(directoryId, label, workspacePath, serverUrl, now());
       }
     }
-
     this.db.prepare(
-      'INSERT INTO projects (id, name, workspace_path, wake_channel, labels, created_at, directory_id, default_session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(id, input.name.trim(), workspacePath, wakeChannel, input.labels ?? '', now(), directoryId, input.defaultSessionId ?? null);
+      'INSERT INTO projects (id, name, labels, created_at, directory_id, default_session_id) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(id, input.name.trim(), input.labels ?? '', now(), directoryId, input.defaultSessionId ?? null);
     return id;
   }
 
@@ -67,20 +62,18 @@ export class ProjectRepo {
     if (patch.name !== undefined) { sets.push('name = ?'); vals.push(patch.name.trim()); }
     if (patch.labels !== undefined) { sets.push('labels = ?'); vals.push(patch.labels); }
     if (patch.defaultSessionId !== undefined) { sets.push('default_session_id = ?'); vals.push(patch.defaultSessionId); }
-    if (patch.workspacePath !== undefined) { sets.push('workspace_path = ?'); vals.push(patch.workspacePath.trim()); }
-    if (patch.wakeChannel !== undefined) { sets.push('wake_channel = ?'); vals.push(patch.wakeChannel.trim()); }
-    if (sets.length > 0) {
+        if (sets.length > 0) {
       vals.push(id);
       this.db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
     }
   }
 
   list(): Project[] {
-    return this.db.prepare(`SELECT ${PROJECT_COLS} FROM projects ORDER BY created_at`).all() as unknown as Project[];
+    return this.db.prepare(`SELECT ${PROJECT_COLS} FROM projects p LEFT JOIN directories d ON d.id = p.directory_id ORDER BY p.created_at`).all() as unknown as Project[];
   }
 
   get(id: string): Project | null {
-    return this.db.prepare(`SELECT ${PROJECT_COLS} FROM projects WHERE id = ?`).get(id) as unknown as Project | null;
+    return (this.db.prepare(`SELECT ${PROJECT_COLS} FROM projects p LEFT JOIN directories d ON d.id = p.directory_id WHERE p.id = ?`).get(id) as unknown as Project | undefined) ?? null;
   }
 
   // Deletes the whole project aggregate — comments of its issues, then issues,

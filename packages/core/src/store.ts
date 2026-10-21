@@ -39,7 +39,7 @@ const isoDay = (d: Date): string =>
 // build the activity detail ("status,title", "startDate", ...).
 const PATCH_KEYS: (keyof IssuePatch)[] = [
   'title', 'description', 'status', 'priority', 'labels', 'branch', 'worktree', 'worktreePath',
-  'sessionId', 'assignee', 'parentId', 'startDate', 'dueDate', 'acceptanceCriteria', 'reviewStatus', 'reviewNotes'
+  'assignee', 'parentId', 'startDate', 'dueDate', 'acceptanceCriteria', 'reviewStatus', 'reviewNotes'
 ];
 
 /**
@@ -160,84 +160,26 @@ export class Store {
     return this.directories.get(id)!;
   }
 
-  updateDirectory(
-    id: string,
-    patch: DirectoryPatchInput,
-    options: { syncProjects?: boolean } = {}
-  ): WorkspaceDirectory {
+  updateDirectory(id: string, patch: DirectoryPatchInput): WorkspaceDirectory {
     const directory = this.directories.get(id);
     if (!directory) throw new NotFoundError(`directory not found: ${id}`);
-
-    const syncRouting = options.syncProjects === true &&
-      (patch.workspacePath !== undefined || patch.serverUrl !== undefined);
+    const routingChanged =
+      (patch.workspacePath !== undefined && patch.workspacePath.trim() !== directory.workspacePath) ||
+      (patch.serverUrl !== undefined && patch.serverUrl.trim() !== directory.serverUrl);
     const directoryProjects = this.projects.list().filter(project => project.directoryId === id);
-    const projectUpdates = syncRouting
-      ? directoryProjects.flatMap(project => {
-          const projectPatch: { workspacePath?: string; wakeChannel?: string } = {};
-          if (patch.workspacePath !== undefined) {
-            const workspacePath = patch.workspacePath.trim();
-            if (workspacePath !== project.workspacePath) projectPatch.workspacePath = workspacePath;
-          }
-          if (patch.serverUrl !== undefined) {
-            const wakeChannel = patch.serverUrl.trim();
-            if (wakeChannel !== project.wakeChannel) projectPatch.wakeChannel = wakeChannel;
-          }
-          return Object.keys(projectPatch).length > 0 ? [{ project, patch: projectPatch }] : [];
-        })
+    const activeIssueIds = routingChanged
+      ? directoryProjects.flatMap(project => this.issues.list(project.id, { archived: 'all' }).filter(issue => activeClaim(issue)).map(issue => issue.id))
       : [];
-
-    // Changing a project's path or Server URL invalidates its current Session
-    // context. Refuse the whole directory operation before writing anything if
-    // any affected project still has an active agent lease.
-    const activeIssueIds = projectUpdates.flatMap(({ project }) =>
-      this.issues.list(project.id, { archived: 'all' }).filter(issue => activeClaim(issue)).map(issue => issue.id)
-    );
     if (activeIssueIds.length > 0) {
-      throw new ConflictError(
-        `cannot sync directory workspace/server while ${activeIssueIds.length} task(s) have active agent leases; release or wait for the leases to expire first`
-      );
+      throw new ConflictError(`cannot change directory workspace/server while ${activeIssueIds.length} task(s) have active agent leases; release or wait for the leases to expire first`);
     }
-
-    const projectEvents: Array<{ id: string; fields: string[]; unboundIssueIds: string[] }> = [];
+    const projectsToUnbind = routingChanged ? directoryProjects.filter(project => project.defaultSessionId !== null) : [];
     inTransaction(this.db, () => {
       this.directories.update(id, patch);
-      for (const { project, patch: routePatch } of projectUpdates) {
-        // Keep this cascade atomic with the directory update. Clear both the
-        // project default Session and task-level Session bindings because IDs
-        // from the old server/path must not be sent to the new context.
-        const effectivePatch = { ...routePatch, defaultSessionId: null };
-        this.projects.update(project.id, effectivePatch);
-        const unboundIssueIds: string[] = [];
-        for (const issue of this.issues.list(project.id, { archived: 'all' })) {
-          if (!issue.sessionId) continue;
-          this.issues.update(issue.id, { sessionId: null });
-          this.logActivity(
-            issue.id,
-            'system',
-            'session-unbound',
-            'Directory workspace/server changed; bind a session again'
-          );
-          unboundIssueIds.push(issue.id);
-        }
-        projectEvents.push({
-          id: project.id,
-          fields: Object.keys(effectivePatch),
-          unboundIssueIds
-        });
-      }
+      for (const project of projectsToUnbind) this.projects.update(project.id, { defaultSessionId: null });
     });
-
     this.emit('directory.updated', { id, fields: Object.keys(patch) });
-    for (const event of projectEvents) {
-      for (const issueId of event.unboundIssueIds) {
-        this.emit('issue.updated', { id: issueId, fields: ['sessionId'] });
-      }
-      this.emit('project.updated', {
-        id: event.id,
-        fields: event.fields,
-        unboundIssueIds: event.unboundIssueIds
-      });
-    }
+    for (const project of projectsToUnbind) this.emit('project.updated', { id: project.id, fields: ['defaultSessionId'], reason: 'directory-routing-changed' });
     return this.directories.get(id)!;
   }
 
@@ -273,41 +215,12 @@ export class Store {
     return this.projects.get(id)!;
   }
 
-  updateProject(id: string, patch: { name?: string; workspacePath?: string; wakeChannel?: string; labels?: string; defaultSessionId?: string | null }): Project {
+  updateProject(id: string, patch: { name?: string; labels?: string; defaultSessionId?: string | null }): Project {
     const current = this.projects.get(id);
     if (!current) throw new NotFoundError(`project not found: ${id}`);
     if (patch.name !== undefined && patch.name.trim() === '') throw new ValidationError('name: must not be blank');
-    const routingChanged =
-      (patch.workspacePath !== undefined && patch.workspacePath.trim() !== current.workspacePath) ||
-      (patch.wakeChannel !== undefined && patch.wakeChannel.trim() !== current.wakeChannel);
-    if (routingChanged) {
-      const activeIssues = this.issues.list(id, { archived: 'all' }).filter(issue => activeClaim(issue));
-      if (activeIssues.length > 0) {
-        throw new ConflictError(
-          `cannot change project workspace/server while ${activeIssues.length} task(s) have active agent leases; release or wait for the leases to expire first`
-        );
-      }
-    }
-    const effectivePatch = routingChanged && patch.defaultSessionId === undefined
-      ? { ...patch, defaultSessionId: null }
-      : patch;
-    const unboundIssueIds: string[] = [];
-    inTransaction(this.db, () => {
-      this.projects.update(id, effectivePatch);
-      if (routingChanged) {
-        // A task's sessionId is meaningful only in the project server + path
-        // context. Clear bindings when that context changes to prevent routing
-        // an old session ID to a different OpenCode server or directory.
-        for (const issue of this.issues.list(id, { archived: 'all' })) {
-          if (!issue.sessionId) continue;
-          this.issues.update(issue.id, { sessionId: null });
-          this.logActivity(issue.id, 'system', 'session-unbound', 'Project workspace/server changed; bind a session again');
-          unboundIssueIds.push(issue.id);
-        }
-      }
-    });
-    for (const issueId of unboundIssueIds) this.emit('issue.updated', { id: issueId, fields: ['sessionId'] });
-    this.emit('project.updated', { id, fields: Object.keys(effectivePatch), unboundIssueIds });
+    this.projects.update(id, patch);
+    this.emit('project.updated', { id, fields: Object.keys(patch) });
     return this.projects.get(id)!;
   }
 
@@ -346,8 +259,8 @@ export class Store {
     const parentId = input.parentId ?? null;
     const project = this.projects.get(input.projectId);
     if (!project) throw new NotFoundError(`project not found: ${input.projectId}`);
-    // Explicit body → caller's agent session → project default → unbound.
-    const sessionId = resolveIssueSessionId(input.sessionId, agentSessionId, project.defaultSessionId);
+    // Effective task Session is resolved from the current project default, never stored per task.
+    void agentSessionId;
     const parent = parentId ? this.issues.get(parentId) : null;
     if (parentId && !parent) throw new NotFoundError(`parent issue not found: ${parentId}`);
     if (parent && parent.parentId) throw new ValidationError('only one level of nesting is supported (parent must be a top-level issue)');
@@ -357,7 +270,6 @@ export class Store {
         projectId: input.projectId, parentId, title: input.title,
         description: input.description, status: input.status, priority: input.priority,
         labels: input.labels, branch: input.branch, worktree: input.worktree, worktreePath: input.worktreePath,
-        sessionId,
         assignee: input.assignee,
         startDate: input.startDate, dueDate: input.dueDate,
         acceptanceCriteria: input.acceptanceCriteria, reviewStatus: input.reviewStatus, reviewNotes: input.reviewNotes
@@ -570,14 +482,17 @@ export class Store {
    * like archiveIssue and logs a 'claimed' activity. A claimable `todo` is
    * auto-moved to `in_progress` in the same transaction (认领即开工，dashi
    * 语义): the board's in_progress column never lies about started work.
-   * When `sessionId` is given and the issue is unbound, it binds the
-   * claimer's session in the same transaction (认领即绑定); an existing
-   * binding is never overwritten (只绑空位，不抢绑).
+   * Any supplied `sessionId` must match the project default; tasks cannot
+   * bind their own Session independently from their project.
    */
   claimIssue(id: string, agent: string, ttlMinutes = 30, actor = agent, sessionId?: string, branch?: string): Issue {
     if (!agent) throw new ValidationError('agent must be non-empty');
     const issue = this.issues.get(id);
     if (!issue) throw new NotFoundError(`issue not found: ${id}`);
+    const inheritedSessionId = this.projects.get(issue.projectId)?.defaultSessionId ?? null;
+    if (sessionId && sessionId !== inheritedSessionId) {
+      throw new ValidationError('task Session is inherited from the project default and cannot be overridden');
+    }
     const holder = activeClaim(issue);
     if (holder !== null && holder !== agent) {
       throw new ConflictError(`issue claimed by ${holder} until ${issue.leaseExpiresAt}`);
@@ -596,11 +511,6 @@ export class Store {
       if (issue.status === 'todo') {
         this.issues.update(id, { status: 'in_progress', ...(issue.startedAt === null ? { startedAt: t } : {}) });
         this.logActivity(id, actor, 'status', 'todo → in_progress (claim)');
-      }
-      // 认领即绑定：只绑空位，绝不接管他人会话的绑定（所有权语义）。
-      if (sessionId && !issue.sessionId) {
-        this.issues.update(id, { sessionId });
-        this.logActivity(id, actor, 'session-bound', sessionId);
       }
       // 同一规则的分支版：开工即绑当前分支，只绑空位（branch-bound 留痕）。
       if (branch && !issue.branch) {

@@ -106,7 +106,7 @@ function ensureSchemaCompatibility(db: DatabaseSync, version: number): void {
   }
   if (version >= 14 && !hasColumn(db, 'directories', 'workspace_path')) {
     db.exec("ALTER TABLE directories ADD COLUMN workspace_path TEXT NOT NULL DEFAULT ''");
-    db.exec(`
+    if (hasColumn(db, 'projects', 'workspace_path')) db.exec(`
       UPDATE directories
       SET workspace_path = COALESCE((
         SELECT p.workspace_path FROM projects p
@@ -314,6 +314,34 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       ALTER TABLE issues ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending';
       ALTER TABLE issues ADD COLUMN review_notes TEXT NOT NULL DEFAULT '';
     `);
+  },
+  // v17 -> v18: Directory is the only route source; task Session is projected from the Project.
+  (db: DatabaseSync) => {
+    if (hasColumn(db, 'projects', 'workspace_path')) db.exec(`
+      UPDATE directories SET workspace_path = COALESCE(NULLIF(workspace_path, ''), (
+        SELECT p.workspace_path FROM projects p
+        WHERE p.directory_id = directories.id AND p.workspace_path <> '' ORDER BY p.created_at LIMIT 1
+      ), '')
+    `);
+    if (hasColumn(db, 'projects', 'wake_channel')) db.exec(`
+      UPDATE directories SET server_url = COALESCE(NULLIF(server_url, ''), (
+        SELECT p.wake_channel FROM projects p
+        WHERE p.directory_id = directories.id AND p.wake_channel <> '' ORDER BY p.created_at LIMIT 1
+      ), '')
+    `);
+    if (hasColumn(db, 'issues', 'session_id')) {
+      db.exec(`
+        UPDATE projects SET default_session_id = (
+          SELECT i.session_id FROM issues i WHERE i.project_id = projects.id
+            AND i.session_id IS NOT NULL AND i.session_id <> '' ORDER BY i.created_at LIMIT 1
+        )
+        WHERE (default_session_id IS NULL OR default_session_id = '')
+          AND EXISTS (SELECT 1 FROM issues i WHERE i.project_id = projects.id AND i.session_id IS NOT NULL AND i.session_id <> '')
+      `);
+      db.exec('ALTER TABLE issues DROP COLUMN session_id');
+    }
+    if (hasColumn(db, 'projects', 'workspace_path')) db.exec('ALTER TABLE projects DROP COLUMN workspace_path');
+    if (hasColumn(db, 'projects', 'wake_channel')) db.exec('ALTER TABLE projects DROP COLUMN wake_channel');
   },
 ];
 
