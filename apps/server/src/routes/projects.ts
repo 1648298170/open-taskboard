@@ -50,11 +50,10 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store; openCodeUrl?: string }>
     }
 
     let workspacePath = directory.workspacePath.trim();
-    let serverUrl: string;
-    try { serverUrl = getConfiguredOpenCodeBase(openCodeUrl); }
-    catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
-
     if (defaultSessionId) {
+      let serverUrl: string;
+      try { serverUrl = getConfiguredOpenCodeBase(openCodeUrl); }
+      catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
       if (input.directoryId && !workspacePath) {
         return reply.code(400).send({ error: '请先在所属目录中配置工作目录，再绑定项目默认 Session' });
       }
