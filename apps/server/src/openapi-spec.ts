@@ -409,13 +409,14 @@ export const openApiSpec: OpenApiDocument = {
       parameters: [{ name: 'directoryId', in: 'path', required: true, schema: { type: 'string' } }],
       patch: {
         operationId: 'updateDirectory',
-        summary: 'Update directory name or default workspace path',
+        summary: 'Update directory settings and optionally synchronize existing projects',
         tags: ['directories'],
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PatchDirectoryRequest' } } } },
         responses: {
           200: { description: 'Updated directory', ...jsonResponse({ $ref: '#/components/schemas/WorkspaceDirectory' }) },
           400: { $ref: '#/components/responses/BadRequest' },
           404: { $ref: '#/components/responses/NotFound' },
+          409: { $ref: '#/components/responses/Conflict' },
           ...commonResponses(true)
         }
       },
@@ -1588,7 +1589,8 @@ export const openApiSpec: OpenApiDocument = {
         properties: {
           name: { type: 'string', minLength: 1 },
           workspacePath: { type: 'string' },
-          serverUrl: { type: 'string', maxLength: 500 }
+          serverUrl: { type: 'string', maxLength: 500 },
+          syncProjects: { type: 'boolean', description: 'When true, also synchronize the submitted workspacePath and/or serverUrl to existing projects in this directory; affected Session bindings are cleared. Active agent leases cause the whole update to be rejected with 409.' }
         },
         additionalProperties: false
       },
