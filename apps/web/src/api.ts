@@ -62,6 +62,14 @@ export interface DirectoryOpenCodeProjectStatus {
   error?: string;
 }
 
+export interface GlobalOpenCodeStatus {
+  checkedAt: string;
+  serverUrl: string;
+  serverStatus: 'connected' | 'unavailable';
+  error?: string;
+  projects: (DirectoryOpenCodeProjectStatus & { directoryName: string; workspacePath: string })[];
+}
+
 export interface DirectoryOpenCodeStatus {
   directoryId: string;
   name: string;
@@ -134,17 +142,19 @@ export const api_ = {
 
   getSettings: () => api<AppSettings>('GET', '/api/settings'),
   updateSettings: (p: Partial<AppSettings>) => api<AppSettings>('PUT', '/api/settings', p),
-  browseWorkspaceDirectories: (serverUrl: string, path?: string) => {
-    const query = new URLSearchParams({ serverUrl });
+  browseWorkspaceDirectories: (path?: string) => {
+    const query = new URLSearchParams();
     if (path?.trim()) query.set('path', path.trim());
-    return api<WorkspaceDirectoryListing>('GET', `/api/directories/browse?${query.toString()}`);
+    const qs = query.toString();
+    return api<WorkspaceDirectoryListing>('GET', `/api/directories/browse${qs ? `?${qs}` : ''}`);
   },
+  openCodeStatus: () => api<GlobalOpenCodeStatus>('GET', '/api/opencode/status'),
   listDirectories: () => api<WorkspaceDirectory[]>('GET', '/api/directories'),
   directoryOpenCodeStatus: (id: string) =>
     api<DirectoryOpenCodeStatus>('GET', `/api/directories/${encodeURIComponent(id)}/opencode-status`),
-  createDirectory: (p: { id?: string; name: string; workspacePath?: string; serverUrl?: string }) =>
+  createDirectory: (p: { id?: string; name: string; workspacePath?: string }) =>
     api<WorkspaceDirectory>('POST', '/api/directories', p),
-  updateDirectory: (id: string, p: { name?: string; workspacePath?: string; serverUrl?: string }) =>
+  updateDirectory: (id: string, p: { name?: string; workspacePath?: string }) =>
     api<WorkspaceDirectory>('PATCH', `/api/directories/${encodeURIComponent(id)}`, p),
   deleteDirectory: (id: string, options?: { cascade?: boolean }) =>
     api<{ ok: true }>('DELETE', `/api/directories/${encodeURIComponent(id)}${options?.cascade ? '?cascade=1' : ''}`),
