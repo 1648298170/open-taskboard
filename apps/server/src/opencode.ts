@@ -46,8 +46,8 @@ export function resolveOpenCodeBase(explicitUrl: string | undefined, projectChan
 }
 
 /** Build a browser-facing OpenCode Session URL without exposing the server's internal Docker address. */
-export function buildOpenCodePublicSessionUrl(workspacePath: string, sessionId: string): string | null {
-  const publicOrigin = (process.env.TASKBOARD_OPENCODE_PUBLIC_URL ?? '').trim();
+export function buildOpenCodePublicSessionUrl(workspacePath: string, sessionId: string, configuredPublicOrigin = process.env.TASKBOARD_OPENCODE_PUBLIC_URL): string | null {
+  const publicOrigin = (configuredPublicOrigin ?? '').trim();
   if (!publicOrigin || !workspacePath.trim() || !sessionId.trim()) return null;
   const base = normalizeOpenCodeBase(publicOrigin);
   const encodedPath = Buffer.from(workspacePath.trim(), 'utf8').toString('base64').replace(/=+$/, '');
@@ -55,8 +55,8 @@ export function buildOpenCodePublicSessionUrl(workspacePath: string, sessionId: 
 }
 
 /** Resolve the single deployment-configured OpenCode endpoint. Directory and project records must not override it. */
-export function getConfiguredOpenCodeBase(): string {
-  const configured = (process.env.TASKBOARD_OPENCODE_URL ?? '').trim();
+export function getConfiguredOpenCodeBase(configuredUrl = process.env.TASKBOARD_OPENCODE_URL): string {
+  const configured = (configuredUrl ?? '').trim();
   if (!configured) throw new Error('TASKBOARD_OPENCODE_URL must be configured on the Taskboard server');
   return normalizeOpenCodeBase(configured);
 }
