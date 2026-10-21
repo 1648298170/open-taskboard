@@ -19,6 +19,7 @@ import searchRoutes from './routes/search.js';
 import attachmentRoutes from './routes/attachments.js';
 import backupRoutes from './routes/backup.js';
 import openapiRoutes from './routes/openapi.js';
+import type { WakeEmbeddedOverrides } from './wake-embedded.js';
 
 export interface ServerOptions {
   host?: string;
@@ -29,6 +30,11 @@ export interface ServerOptions {
   store?: Store;
   /** Test seam: resolve every TASKBOARD_* from this env instead of process.env. */
   env?: TaskboardEnv;
+  /**
+   * Embedded wake engine seams (startServer only — buildApp ignores this).
+   * Tests inject a fake fetch and a short poll instead of hitting OpenCode.
+   */
+  wake?: WakeEmbeddedOverrides;
 }
 
 const WEBHOOK_TIMEOUT_MS = 3000;

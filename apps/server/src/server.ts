@@ -8,6 +8,7 @@ import type { Store } from '@taskboard/core';
 import { buildApp } from './app.js';
 import { ServerOptions } from './app.js';
 import { registerStatic, WEB_DIST } from './static.js';
+import { startEmbeddedWake } from './wake-embedded.js';
 
 /** Backups kept per data dir before the oldest start getting pruned. */
 const BACKUP_RETENTION = 10;
@@ -46,22 +47,41 @@ export function lanUrls(port: number): string[] {
 }
 
 export async function startServer(opts: ServerOptions = {}) {
-  const config = resolveServerConfig(process.env);
+  // One env resolution for the whole process; tests inject opts.env so the
+  // embedded wake gate and the backup flag can be exercised without mutating
+  // process.env.
+  const env = opts.env ?? process.env;
+  const config = resolveServerConfig(env);
   const host = opts.host ?? config.host;
   const port = opts.port ?? config.port;
   const dataDir = opts.dataDir ?? config.dataDir;
   const { app, store } = await buildApp({ ...opts, dataDir });
 
-  await registerStatic(app, {
-    webDist: opts.webDist ?? process.env.TASKBOARD_WEB_DIST ?? WEB_DIST
-  });
+  // Phase 2: embed the wake engine in the server process. It is started HERE,
+  // not in buildApp, so app-only unit tests never create a background timer.
+  // The host sidecar (`taskboard watch`) keeps the file lock / TUI / headless
+  // channels; this engine only delivers bound-session prompts and polls the
+  // pending set as a safety net.
+  const wake = await startEmbeddedWake({ store, env, ...opts.wake });
+  // onClose runs on app.close() (tests, graceful shutdown). Must be registered
+  // before listen — Fastify rejects addHook once the instance has started.
+  app.addHook('onClose', async () => { await wake.stop(); });
 
-  await app.listen({ host, port });
+  try {
+    await registerStatic(app, {
+      webDist: opts.webDist ?? env.TASKBOARD_WEB_DIST ?? WEB_DIST
+    });
+
+    await app.listen({ host, port });
+  } catch (err) {
+    await wake.stop();
+    throw err;
+  }
 
   // T6-32: post-listen startup backup. On by default; TASKBOARD_BACKUPS=0
   // disables. dataDir mirrors the Store's dir (explicit opt → config).
   if (config.backupsEnabled) backupAndPrune(store, dataDir);
-  return { app, store, url: `http://${host}:${port}` };
+  return { app, store, wake, url: `http://${host}:${port}` };
 }
 
 // direct run: node dist/server.js (or tsx src/server.ts). dist/index.js is

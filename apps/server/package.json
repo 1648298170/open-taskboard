@@ -22,6 +22,7 @@
     "@fastify/multipart": "^10.1.4",
     "@fastify/static": "^8.0.3",
     "@taskboard/core": "workspace:*",
+    "@taskboard/wake": "workspace:^",
     "fastify": "^5.2.1"
   },
   "devDependencies": {

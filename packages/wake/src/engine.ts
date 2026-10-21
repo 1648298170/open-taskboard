@@ -45,8 +45,12 @@ export interface WakeEngineConfig {
   opencodeBase?: string;
   /** TUI base for unbound tasks (--tui-url fallback). */
   tuiBase?: string;
-  /** Headless command split on spaces (default `opencode run`). */
-  execParts: string[];
+  /**
+   * Headless command split on spaces (default `opencode run`). Omit it in the
+   * embedded server engine: spawning a brand-new agent session is an
+   * external-sidecar capability, so an unbound task must fail closed instead.
+   */
+  execParts?: string[];
   /** Explicit model id; falls back to env.OPENCODE_MODEL. */
   model?: string;
   /** Optional project scope (--project). */
@@ -76,6 +80,15 @@ export interface WakeEngineOptions {
    * when absent (embedded phase 2) it skips locking entirely.
    */
   lockKey?: string;
+  /**
+   * Durability trigger for the embedded engine: run the same startup sweep
+   * every `pollMs` milliseconds. It deliberately reuses `sweep()` → `enqueue`,
+   * so the serialized delivery queue stays the single execution path and an
+   * event-driven wake can never race a polled one. Event subscription stays
+   * for latency; this poll is the safety net that removes silent backlogs.
+   * Undefined (external sidecar) means no timer at all.
+   */
+  pollMs?: number;
 }
 
 export interface WakeEngine {
@@ -115,10 +128,14 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   let running = false;
   let unsubscribe: (() => void) | null = null;
   let releaseLock: (() => void) | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
   let queue: Promise<void> = Promise.resolve();
   let lifecycle = new AbortController();
   const seen = new Set<string>();
   const monitoredSessions = new Set<string>();
+  // Comments this engine can never deliver (no binding, no unbound channel).
+  // They stay pending for an external sidecar; log once instead of every poll.
+  const parked = new Set<string>();
 
   const request = (input: string | URL, init: RequestInit = {}, timeoutMs = deps.requestTimeoutMs): Promise<Response> =>
     fetchWithTimeout(input, init, timeoutMs, deps.fetchImpl);
@@ -251,19 +268,33 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       error(`watch: cannot load task ${item.issueId} (not found); wake skipped`);
       return false;
     }
-    // CAS claim FIRST: the comment is already 'processing' before any HTTP
-    // side effect, so a crash cannot leave two attempts believing they own it.
-    const claimToken = store.claimWake(item.commentId, 'watch');
-    if (!claimToken) {
-      error(`watch: wake skipped for comment ${item.commentId}; it is no longer pending`);
-      return true;
-    }
-
     const prompt = buildWakePrompt(item.issueId, item.issueTitle, item.instruction);
     // Routing URLs are deployment configuration now: no per-project channel is
     // persisted, so only the explicit opencode base and --tui-url fallback apply.
     const projectChannel: string | null = null;
     const tuiUrl = channelFor(projectChannel, config.tuiBase);
+    const execParts = config.execParts;
+
+    // An unbound task needs a TUI or headless channel. The embedded engine has
+    // neither, so it must skip BEFORE claiming: claim+revert cycles would starve
+    // a coexisting external sidecar (which also sees 'no longer pending') and
+    // leave the wake pending forever. Skipping keeps it claimable by the sidecar.
+    if (!issue.sessionId && !tuiUrl && (!execParts || execParts.length === 0)) {
+      if (!parked.has(item.key)) {
+        parked.add(item.key);
+        log(`watch: task ${item.issueId} has no bound session and no unbound channel; leaving wake pending for the external sidecar`);
+      }
+      return false;
+    }
+
+    // CAS claim AFTER routing is known: the comment is already 'processing'
+    // before any HTTP side effect, so a crash cannot leave two attempts
+    // believing they own it.
+    const claimToken = store.claimWake(item.commentId, 'watch');
+    if (!claimToken) {
+      error(`watch: wake skipped for comment ${item.commentId}; it is no longer pending`);
+      return true;
+    }
 
     await reportExecution(item.issueId, 'started', '收到唤醒请求，开始解析任务路由');
 
@@ -373,7 +404,17 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       }
     }
 
-    // Headless is reserved for tasks without a session binding.
+    // Headless is reserved for tasks without a session binding. Reaching this
+    // with no execParts means only a TUI channel existed and it failed; fail
+    // closed and leave the comment pending for a human / the external sidecar.
+    if (!execParts || execParts.length === 0) {
+      const reason = '没有可用的 headless 执行命令；嵌入式唤醒只投递绑定会话，评论保持待处理';
+      error(`watch: task ${item.issueId} has no bound session and headless delivery is disabled; reverting wake to pending`);
+      await reportExecution(item.issueId, 'failed', reason);
+      revertClaim(item, claimToken);
+      return false;
+    }
+
     const attempts = [0, 10_000, 25_000];
     for (let i = 0; i < attempts.length; i++) {
       if (attempts[i]! > 0) await sleep(attempts[i]!);
@@ -382,7 +423,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         return false;
       }
       const outcome = await new Promise<'ok' | 'failed' | 'missing'>(resolve => {
-        const child = deps.spawn(config.execParts[0]!, [...config.execParts.slice(1), ...modelArgs, prompt], { stdio: 'inherit' });
+        const child = deps.spawn(execParts[0]!, [...execParts.slice(1), ...modelArgs, prompt], { stdio: 'inherit' });
         child.on('exit', code => resolve(code === 0 ? 'ok' : 'failed'));
         child.on('error', () => resolve('missing'));
       });
@@ -394,8 +435,8 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         return true;
       }
       if (outcome === 'missing') {
-        error(`watch: exec ${config.execParts[0]} not found in PATH`);
-        await reportExecution(item.issueId, 'failed', `找不到执行命令 ${config.execParts[0]}，请检查 PATH 配置`);
+        error(`watch: exec ${execParts[0]} not found in PATH`);
+        await reportExecution(item.issueId, 'failed', `找不到执行命令 ${execParts[0]}，请检查 PATH 配置`);
         revertClaim(item, claimToken);
         return false;
       }
@@ -427,12 +468,14 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   };
 
   /**
-   * Startup sweep: one direct query over pending comments replaces the old
+   * Pending sweep: one direct query over pending comments replaces the old
    * project→issue→detail N+1 backfill. The pending set is tiny; filtering by
    * prefix/author/project happens in JS against the same predicates the event
-   * path uses. The 60s periodic poll is phase 2 and deliberately absent here.
+   * path uses. It runs once on start() and, when options.pollMs is set, on a
+   * periodic timer; both feed the same serialized queue.
    */
   const sweep = (): void => {
+    if (!running) return;
     let found = 0;
     try {
       for (const comment of store.listPendingWakeComments()) {
@@ -462,24 +505,30 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   };
 
   const onEvent = (event: StoreEvent): void => {
-    if (!shouldWake({ type: event.type, payload: event.payload }, config.prefix)) return;
-    const payload = event.payload;
-    const author = typeof payload.author === 'string' ? payload.author : undefined;
-    if (isIgnoredAuthor(author, config.ignoreAuthors)) return;
-    const issueId = String(payload.issueId ?? '');
-    if (!issueId) return;
-    const projectId = store.getIssue(issueId)?.projectId ?? null;
-    if (!wantsProject(config.projectFilter, projectId)) return;
-    const commentId = String(payload.id ?? '');
-    if (!commentId) return;
-    const key = wakeKey(issueId, commentId);
-    if (seen.has(key)) return;
-    seen.add(key);
-    const issueTitle = String(payload.issueTitle ?? '');
-    const instruction = String(payload.body ?? '').trimStart().slice(config.prefix.length).trim();
-    const by = author ? ` (${author})` : '';
-    log(`watch: wake${by}: ${instruction}`);
-    enqueue({ issueId, commentId, issueTitle, instruction, author, key, source: 'event' });
+    // The EventBus already swallows listener throws; logging here keeps a
+    // broken event path observable instead of silently dropping a wake.
+    try {
+      if (!shouldWake({ type: event.type, payload: event.payload }, config.prefix)) return;
+      const payload = event.payload;
+      const author = typeof payload.author === 'string' ? payload.author : undefined;
+      if (isIgnoredAuthor(author, config.ignoreAuthors)) return;
+      const issueId = String(payload.issueId ?? '');
+      if (!issueId) return;
+      const projectId = store.getIssue(issueId)?.projectId ?? null;
+      if (!wantsProject(config.projectFilter, projectId)) return;
+      const commentId = String(payload.id ?? '');
+      if (!commentId) return;
+      const key = wakeKey(issueId, commentId);
+      if (seen.has(key)) return;
+      seen.add(key);
+      const issueTitle = String(payload.issueTitle ?? '');
+      const instruction = String(payload.body ?? '').trimStart().slice(config.prefix.length).trim();
+      const by = author ? ` (${author})` : '';
+      log(`watch: wake${by}: ${instruction}`);
+      enqueue({ issueId, commentId, issueTitle, instruction, author, key, source: 'event' });
+    } catch (err) {
+      error(`watch: event handling failed: ${(err as Error).message}`);
+    }
   };
 
   const start = async (): Promise<void> => {
@@ -498,10 +547,20 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     running = true;
     unsubscribe = store.subscribe(onEvent);
     sweep();
+    if (options.pollMs !== undefined && options.pollMs > 0) {
+      // unref: the poll must never be the only thing keeping a test or a
+      // shutting-down process alive; stop() clears it as well.
+      pollTimer = setInterval(sweep, options.pollMs);
+      pollTimer.unref?.();
+    }
   };
 
   const stop = async (): Promise<void> => {
     running = false;
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
     lifecycle.abort();
     if (unsubscribe) {
       unsubscribe();
@@ -514,6 +573,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     }
     await queue.catch(() => undefined);
     monitoredSessions.clear();
+    parked.clear();
   };
 
   return {

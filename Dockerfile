@@ -17,6 +17,9 @@ RUN corepack enable
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/core/package.json packages/core/
+# The server embeds @taskboard/wake (phase 2), so its workspace manifest must
+# exist before the frozen-lockfile install.
+COPY packages/wake/package.json packages/wake/
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY apps/cli/package.json apps/cli/

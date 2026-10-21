@@ -67,6 +67,9 @@ importers:
       '@taskboard/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@taskboard/wake':
+        specifier: workspace:^
+        version: link:../../packages/wake
       fastify:
         specifier: ^5.2.1
         version: 5.12.7

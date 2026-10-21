@@ -152,6 +152,8 @@ todo → in_progress → in_review → done
 
 面板**不绑定任何 agent 工具**：Codex、Cursor、OpenCode 或任意 CLI Agent 都可以通过 Taskboard API/MCP 协作。`taskboard watch` 常驻订阅看板事件；任务 Session 由 `Project.defaultSessionId` 统一提供，唤醒时继续使用项目配置的会话；项目尚未配置 Session 时才走项目 Directory 的 OpenCode Server 路由或 headless fallback。
 
+**Docker 部署默认内嵌唤醒引擎（开箱即用）**：服务端进程在配置了 `TASKBOARD_OPENCODE_URL` 时自动启动内嵌唤醒引擎（默认开启，设 `TASKBOARD_WAKE_EMBEDDED=0` 关闭）。绑定 Session 的任务收到 `@agent` 评论后由服务端直接投递 `prompt_async`，无需额外运行侧车；引擎还会每 60 秒（`TASKBOARD_WAKE_POLL_MS` 可调，最小 5000ms）补拉一次待处理评论，即使事件丢失也不会静默积压。宿主部署、或需要 TUI 输入框 / headless 新会话通道时，仍使用 `taskboard watch`（直连本地数据目录）；外部侧车自启继续由 `taskboard setup` 管理。
+
 ```bash
 taskboard watch --tui-url http://127.0.0.1:4096   # ① 可选：指令进 opencode TUI 输入框（opencode 专属增强）
 taskboard watch --opencode http://127.0.0.1:4096  # ② 建议：绑定任务通过 OpenCode v1 prompt_async 续原会话
@@ -298,6 +300,8 @@ docker compose up -d --build
 | `TASKBOARD_URL` | `http://127.0.0.1:47824` | CLI / MCP 指向的服务地址 |
 | `TASKBOARD_OPENCODE_URL` | Docker Compose 默认 `http://host.docker.internal:4096` | Taskboard 服务端访问 OpenCode 的内部地址。该值仅由部署环境配置，不存入目录、项目或应用设置。 |
 | `TASKBOARD_OPENCODE_PUBLIC_URL` | 未设置 | 浏览器可访问的 OpenCode 地址，用于生成 Session 跳转链接。Docker 部署时不要填写 `host.docker.internal`；请设置为浏览器能访问的宿主机 IP、域名及端口。 |
+| `TASKBOARD_WAKE_EMBEDDED` | 默认开启 | 服务端内嵌唤醒引擎开关：任何非 `0` 值启用，`0` 关闭。仅在 `TASKBOARD_OPENCODE_URL` 已配置时启动；未配置时日志提示 `wake embedded: off (no OpenCode URL configured)` 并跳过 |
+| `TASKBOARD_WAKE_POLL_MS` | `60000` | 内嵌引擎兜底轮询间隔（毫秒，最小 `5000`，非法值回落 `60000`）。事件订阅负责实时性，轮询负责补拉漏网评论 |
 | `TASKBOARD_SESSION_ID` | 未设置 | CLI 每次请求自动带 `x-taskboard-session`；`--session-id` 优先于该环境变量 |
 | `TASKBOARD_WEB_DIST` | 自动探测 | 看板静态目录（默认 `apps/web/dist`，vite 构建产物） |
 | `TASKBOARD_AUTH_REQUIRED` | 未设置 | `1` 时强制浏览器登录；非回环监听地址也会自动强制登录。首次访问创建管理员，后续通过 HttpOnly Session Cookie 认证，无需手动输入 Token |\n| `TASKBOARD_TOKEN` | 未设置 | 可选的兼容凭证，供 CLI/MCP 等机器客户端使用；浏览器不再要求输入或保存此值 |
@@ -317,6 +321,6 @@ docker compose up -d --build
 - 评论、活动流、标签、负责人、分支/worktree 绑定、起止日期（校验真实日历）、归档（归档父任务连带其未归档子任务）
 - 全文搜索（FTS5 trigram，标题/描述/评论，短查询退化 LIKE）、导出/导入 JSON（taskboard export/import）、统计面板（周吞吐/平均周期/贡献榜）、时间线视图、Mermaid 图渲染
 - 附件（元数据入库、正文落盘 `attachments/`，单文件 ≤10MB，每任务限额 20 个/总量 50MB 超限 400）、桌面通知、暗/亮主题、泳道分组、批量操作、j/k 键盘导航
-- 评论唤醒 Agent：`taskboard watch` 常驻订阅 SSE。绑定项目默认 Session 时，服务端通过部署配置的 OpenCode 地址投递 `prompt_async`；目录、项目和全局设置均不维护 OpenCode URL。
+- 评论唤醒 Agent：Docker/服务端默认内嵌唤醒引擎（`TASKBOARD_WAKE_EMBEDDED=0` 可关），配置了 `TASKBOARD_OPENCODE_URL` 即开箱即用；宿主部署可继续用 `taskboard watch` 常驻订阅。绑定项目默认 Session 时通过部署配置的 OpenCode 地址投递 `prompt_async`；目录、项目和全局设置均不维护 OpenCode URL。
 - SSE 实时刷新（Web 多端 + 跨 agent 工具共享同一块板；25s 心跳保活，断线指数退避重连 + 全量兜底拉取）
 - LAN 共享（`TASKBOARD_HOST=0.0.0.0`）、首次初始化管理员 + Session Cookie 登录、只读模式、人工 done 门禁、webhook 事件转发

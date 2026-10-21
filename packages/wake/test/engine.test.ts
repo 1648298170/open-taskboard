@@ -14,6 +14,7 @@ import {
   type WakeChildProcess,
   type WakeDeps,
   type WakeEngine,
+  type WakeEngineOptions,
 } from '../src/index.js';
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -41,6 +42,9 @@ function fixture(options: {
   fetchImpl: (url: string, init?: RequestInit) => Promise<Response>;
   spawn?: SpawnFn;
   engineAlreadyStarted?: boolean;
+  config?: Partial<WakeDeps['config']>;
+  engineOptions?: WakeEngineOptions;
+  wrapStore?: (store: Store) => Store;
 }): Fixture {
   const db = new DatabaseSync(':memory:');
   const store = new Store('.unused', db);
@@ -49,7 +53,7 @@ function fixture(options: {
   const fetchCalls: string[] = [];
   const logs: { message: string; level?: string }[] = [];
   const deps: WakeDeps = {
-    store,
+    store: options.wrapStore ? options.wrapStore(store) : store,
     fetchImpl: (url, init) => {
       fetchCalls.push(String(url));
       return options.fetchImpl(String(url), init);
@@ -66,9 +70,10 @@ function fixture(options: {
       opencodeBase: 'http://oc.test',
       execParts: ['opencode', 'run'],
       ignoreAuthors: new Set(['watch']),
+      ...options.config,
     },
   };
-  const engine = createWakeEngine(deps);
+  const engine = createWakeEngine(deps, options.engineOptions);
   return { store, db, issueId, engine, fetchCalls, logs };
 }
 
@@ -267,6 +272,92 @@ describe('wake engine: serialized queue', () => {
       await waitFor(() => promptCount === 2);
     } finally {
       firstPrompt.resolve();
+      await engine.stop();
+    }
+  });
+});
+
+describe('wake engine: periodic poll', () => {
+  it('drains a pending wake inserted after start() without an event', async () => {
+    const { store, db, issueId, engine, fetchCalls } = fixture({
+      sessionId: 'ses_1',
+      fetchImpl: url => healthOk(url) ?? okResponse(),
+      engineOptions: { pollMs: 20 },
+    });
+    await engine.start();
+    try {
+      // Direct insert bypasses Store.addComment, so the event subscription can
+      // never see it — only the periodic sweep can deliver this wake.
+      const t = new Date().toISOString();
+      db.prepare(
+        'INSERT INTO comments (id, issue_id, author, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run('poll-comment', issueId, 'web', '@agent 轮询补拉', t, t);
+
+      await waitFor(() => store.getComment('poll-comment')!.status === 'processing');
+      assert.ok(fetchCalls.some(url => url.includes('/prompt_async')), 'the polled wake must reach prompt_async');
+    } finally {
+      await engine.stop();
+    }
+  });
+});
+
+describe('wake engine: fault isolation', () => {
+  it('logs a throwing event path and keeps delivering later wakes', async () => {
+    let failNext = true;
+    const { store, issueId, engine, logs } = fixture({
+      sessionId: 'ses_1',
+      fetchImpl: url => healthOk(url) ?? okResponse(),
+      wrapStore: base => {
+        const flaky = Object.create(base) as Store;
+        flaky.getIssue = (id: string) => {
+          if (failNext) {
+            failNext = false;
+            throw new Error('boom');
+          }
+          return base.getIssue(id);
+        };
+        return flaky;
+      },
+    });
+    await engine.start();
+    try {
+      // A throwing third-party listener must not stop the emitter either.
+      const unsubscribe = store.subscribe(() => { throw new Error('listener boom'); });
+      const broken = store.addComment(issueId, { author: 'web', body: '@agent 第一条' }).id;
+      unsubscribe();
+
+      await waitFor(() => logs.some(entry => entry.message.includes('event handling failed')));
+      assert.equal(store.getComment(broken)!.status, 'pending');
+
+      const delivered = store.addComment(issueId, { author: 'web', body: '@agent 第二条' }).id;
+      await waitFor(() => store.getComment(delivered)!.status === 'processing');
+      assert.equal(engine.isRunning(), true);
+    } finally {
+      await engine.stop();
+    }
+  });
+});
+
+describe('wake engine: embedded mode', () => {
+  it('never spawns and leaves unbound wakes pending for the external sidecar', async () => {
+    let spawned = 0;
+    const { store, issueId, engine, logs } = fixture({
+      sessionId: null,
+      fetchImpl: () => okResponse(),
+      spawn: () => {
+        spawned++;
+        return failingChild();
+      },
+      config: { execParts: undefined },
+    });
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 无绑定任务' }).id;
+      await waitFor(() => logs.some(entry => entry.message.includes('leaving wake pending for the external sidecar')));
+      assert.equal(spawned, 0, 'the embedded engine must never spawn a new session');
+      // Not claimed at all: a coexisting `taskboard watch` can still take it.
+      assert.equal(store.getComment(commentId)!.status, 'pending');
+    } finally {
       await engine.stop();
     }
   });
