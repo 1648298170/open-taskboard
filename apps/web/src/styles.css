@@ -741,21 +741,6 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 }
 .child-progress .dot-prog { color: var(--warning, #e0a80d); }
 
-/* 进行中卡片的状态点升级为 mini 旋转环（明确的 loading 语义）。 */
-.card-status-mark[data-status="in_progress"] {
-  width: 10px;
-  height: 10px;
-  margin-top: 4px;
-  border-radius: 50%;
-  background: transparent;
-  border: 2px solid color-mix(in srgb, var(--in-progress) 30%, transparent);
-  border-top-color: var(--in-progress);
-  animation: card-running-spin .8s linear infinite;
-}
-@keyframes card-running-spin {
-  to { transform: rotate(360deg); }
-}
-
 /* v0.4: 新建对话框的唤醒勾选行 */
 .wake-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-dim); cursor: pointer; }
 .wake-check input { width: auto; }
@@ -1054,7 +1039,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .side-directory-name,.side-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .side-directory-meta { padding-left:39px; margin:1px 0 5px; color:var(--ink-dim); font-size:10px; }
 .side-project-item { margin:2px 0; padding:9px 10px 9px 13px; border:1px solid transparent; border-radius:8px; text-align:left; transition:background .14s ease,border-color .14s ease; }
-.side-project-item.active { border-color:var(--line); background:var(--bg-raised); box-shadow:inset 2px 0 0 var(--ink); }
+.side-project-item.active { border-color: var(--line); background: var(--bg-raised); }
 .side-project-path { display:block; overflow:hidden; max-width:100%; margin-top:4px; color:var(--ink-dim); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
 .topbar { min-height:64px; gap:18px; }
 .topbar-context span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1486,22 +1471,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   min-width: 0;
 }
 .card:has(.card-check) .card-title-row { padding-right: 18px; }
-.card-status-mark {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  margin-top: 6px;
-  border-radius: 50%;
-  background: var(--todo);
-}
-.card-status-mark[data-status="todo"] { background: var(--todo); }
-.card-status-mark[data-status="in_progress"] {
-  background: var(--in-progress);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--in-progress) 13%, transparent);
-  animation: pulse-in-progress 1.5s ease-in-out infinite;
-}
-.card-status-mark[data-status="in_review"] { background: var(--in-review); }
-.card-status-mark[data-status="done"] { background: var(--done); }
+.card-status-mark { display: none; }
 .card-title {
   flex: 1;
   min-width: 0;
@@ -1609,9 +1579,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   background: var(--bg-raised);
 }
 .side-project-item.active {
-  border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
-  background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel));
-  box-shadow: inset 3px 0 0 var(--accent);
+  border-color: var(--line);
+  background: var(--bg-raised);
   color: var(--ink);
 }
 .side-project-item.active .side-name { color: var(--ink); font-weight: 650; }
@@ -1644,16 +1613,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   .child-progress-fill {
     transition: none;
   }
-  .card-status-mark[data-status="in_progress"],
   .column-heading .dot.in_progress {
     animation: none;
-  }
-  /* reduced-motion 下旋转环退化为实心点（保留状态可辨）。 */
-  .card-status-mark[data-status="in_progress"] {
-    width: 7px;
-    height: 7px;
-    background: var(--in-progress);
-    border: none;
   }
 }
 
