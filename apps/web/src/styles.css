@@ -1893,3 +1893,138 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   font-size: 12px;
   line-height: 1.5;
 }
+
+
+/* Task detail: short primary row, secondary fields folded away, actions grouped. */
+.detail-primary-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(110px, .8fr);
+  align-items: end;
+  gap: 10px;
+  margin: 12px 0 8px;
+}
+.detail-status-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+.detail-status-fields > .tb-select {
+  width: 100%;
+  min-width: 0;
+  justify-content: space-between;
+}
+.detail-assignee-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  margin: 0 !important;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.detail-assignee-field input {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  box-sizing: border-box;
+}
+.detail-extra-properties {
+  margin: 6px 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.detail-extra-properties > summary {
+  width: fit-content;
+  color: var(--ink-dim);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+.detail-extra-properties > summary:hover { color: var(--ink); }
+.detail-extra-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.detail-extra-grid .detail-field { min-width: 0; margin: 0; }
+.detail-extra-grid .detail-field input { width: 100%; min-width: 0; box-sizing: border-box; margin: 0; }
+.detail-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 10px 0 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.detail-actions .btn {
+  min-height: 29px;
+  padding: 5px 9px;
+  border-radius: 7px;
+}
+.detail-actions .detail-danger-action { color: var(--danger); }
+.detail-actions .detail-wake-action {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel));
+}
+.detail-field > .tb-select {
+  width: 100%;
+  justify-content: space-between;
+}
+.detail-disclosure {
+  margin-top: 14px;
+  padding-top: 10px;
+}
+.detail-disclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  user-select: none;
+}
+.detail-disclosure > summary::-webkit-details-marker { display: none; }
+.detail-disclosure > summary::after {
+  content: '+';
+  flex: none;
+  color: var(--ink-dim);
+  font-size: 16px;
+  font-weight: 400;
+}
+.detail-disclosure[open] > summary::after { content: '−'; }
+.detail-disclosure[open] > summary { margin-bottom: 12px; }
+.detail-disclosure .detail-summary-meta {
+  min-width: 0;
+  margin-left: auto;
+  color: var(--ink-dim);
+  font-size: 10px;
+  font-weight: 400;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.detail-disclosure .detail-context-grid { gap: 8px; }
+.detail-disclosure .detail-context-item { padding: 8px 9px; border-radius: 8px; }
+.detail-disclosure .detail-field { min-width: 0; margin: 0 0 8px; }
+.detail-disclosure .detail-field input { min-width: 0; box-sizing: border-box; }
+.detail-disclosure .detail-field textarea { box-sizing: border-box; }
+.detail-disclosure .detail-context-item > span,
+.detail-disclosure .detail-field > span { font-size: 10px; }
+.detail-disclosure .execution-history { padding-top: 0; }
+.detail-disclosure .execution-history-title { margin-bottom: 6px; }
+.detail-disclosure.review-context .detail-field { margin-bottom: 12px; }
+.detail-disclosure.review-context .detail-field textarea { min-height: 68px; }
+.detail-disclosure .worktree-action-row { margin: 6px 0 10px; }
+
+@media (max-width: 520px) {
+  .detail-primary-fields { grid-template-columns: minmax(0, 1fr); }
+  .detail-extra-grid { grid-template-columns: minmax(0, 1fr); }
+  .detail-disclosure .detail-summary-meta { max-width: 55%; }
+}
