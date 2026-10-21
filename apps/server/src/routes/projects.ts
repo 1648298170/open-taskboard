@@ -75,39 +75,37 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
       });
     }
 
-    let serverUrl: string;
-    try {
-      serverUrl = normalizeOpenCodeBase(
-        directory.serverUrl.trim() || settings.defaultOpenCodeServerUrl.trim() || resolveOpenCodeBase(undefined, recentProjectChannels(store))
-      );
-    } catch (err) {
-      return reply.code(400).send({ error: `OpenCode Server URL 无效：${(err as Error).message}` });
+    const workspacePath = directory.workspacePath.trim();
+    const configuredServerUrl = directory.serverUrl.trim();
+    let serverUrl = '';
+    if (!configuredServerUrl && input.directoryId && defaultSessionId) {
+      return reply.code(400).send({ error: '请先在所属目录中配置工作目录和 OpenCode Server URL，再绑定项目默认 Session' });
     }
-    let workspacePath = directory.workspacePath.trim();
+    if (configuredServerUrl) {
+      try {
+        serverUrl = normalizeOpenCodeBase(configuredServerUrl);
+      } catch (err) {
+        return reply.code(400).send({ error: `OpenCode Server URL 无效：${(err as Error).message}` });
+      }
+    }
 
     if (defaultSessionId) {
+      if (!workspacePath || !serverUrl) {
+        return reply.code(400).send({ error: '请先在所属目录中配置工作目录和 OpenCode Server URL，再绑定项目默认 Session' });
+      }
       try {
         const sessions = await listOpenCodeSessions(serverUrl, workspacePath);
         const session = sessions.find(item => item.id === defaultSessionId);
         if (!session) {
           return reply.code(400).send({ error: '默认 Session 不存在，或无法从目录配置的 OpenCode Server 读取；未创建项目' });
         }
-        if (!workspacePath) workspacePath = (session.directory ?? '').trim();
-        if (!workspacePath || !session.directory || normalizeDirectoryPath(session.directory) !== normalizeDirectoryPath(workspacePath)) {
+        if (!session.directory || normalizeDirectoryPath(session.directory) !== normalizeDirectoryPath(workspacePath)) {
           return reply.code(400).send({ error: '默认 Session 的实际工作目录与目录工作目录不一致；未创建项目' });
         }
-        // First-run compatibility: if the Directory had an incomplete route,
-        // complete the Directory itself. No route value is written to Project.
-        const routePatch: { workspacePath?: string; serverUrl?: string } = {};
-        if (!directory.workspacePath.trim()) routePatch.workspacePath = workspacePath;
-        if (!directory.serverUrl.trim()) routePatch.serverUrl = serverUrl;
-        if (Object.keys(routePatch).length) directory = store.updateDirectory(directory.id, routePatch);
       } catch (err) {
         if (err instanceof ValidationError) throw err;
         return reply.code(502).send({ error: `无法验证 OpenCode Session：${(err as Error).message}` });
       }
-    } else if (!directory.serverUrl.trim() && serverUrl) {
-      directory = store.updateDirectory(directory.id, { serverUrl });
     }
 
     return reply.code(201).send(store.createProject({
@@ -141,25 +139,20 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     if (typeof defaultSessionId === 'string') {
       const directory = current.directoryId ? store.getDirectory(current.directoryId) : null;
       if (!directory) return reply.code(409).send({ error: '项目未关联目录，无法解析 OpenCode 路由' });
+      const workspacePath = directory.workspacePath.trim();
+      const configuredServerUrl = directory.serverUrl.trim();
+      if (!workspacePath || !configuredServerUrl) {
+        return reply.code(400).send({ error: '请先在所属目录中配置工作目录和 OpenCode Server URL，再绑定默认 Session' });
+      }
       try {
-        const serverUrl = normalizeOpenCodeBase(
-          directory.serverUrl.trim() || store.getAppSettings().defaultOpenCodeServerUrl.trim() || resolveOpenCodeBase(undefined, recentProjectChannels(store))
-        );
-        let workspacePath = directory.workspacePath.trim();
+        const serverUrl = normalizeOpenCodeBase(configuredServerUrl);
         const sessions = await listOpenCodeSessions(serverUrl, workspacePath);
         const session = sessions.find(item => item.id === defaultSessionId);
         if (!session) {
           return reply.code(400).send({ error: '默认 Session 不存在，或无法从目录配置的 OpenCode Server 读取；项目未更新' });
         }
-        if (!workspacePath) workspacePath = (session.directory ?? '').trim();
-        if (!workspacePath || !session.directory || normalizeDirectoryPath(session.directory) !== normalizeDirectoryPath(workspacePath)) {
+        if (!session.directory || normalizeDirectoryPath(session.directory) !== normalizeDirectoryPath(workspacePath)) {
           return reply.code(400).send({ error: '默认 Session 的实际工作目录与目录工作目录不一致；项目未更新' });
-        }
-        if (!directory.serverUrl.trim() || !directory.workspacePath.trim()) {
-          const routePatch: { workspacePath?: string; serverUrl?: string } = {};
-          if (!directory.workspacePath.trim()) routePatch.workspacePath = workspacePath;
-          if (!directory.serverUrl.trim()) routePatch.serverUrl = serverUrl;
-          store.updateDirectory(directory.id, routePatch);
         }
       } catch (err) {
         if (err instanceof ValidationError) throw err;
