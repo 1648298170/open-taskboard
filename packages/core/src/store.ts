@@ -160,9 +160,84 @@ export class Store {
     return this.directories.get(id)!;
   }
 
-  updateDirectory(id: string, patch: DirectoryPatchInput): WorkspaceDirectory {
-    inTransaction(this.db, () => this.directories.update(id, patch));
+  updateDirectory(
+    id: string,
+    patch: DirectoryPatchInput,
+    options: { syncProjects?: boolean } = {}
+  ): WorkspaceDirectory {
+    const directory = this.directories.get(id);
+    if (!directory) throw new NotFoundError(`directory not found: ${id}`);
+
+    const syncRouting = options.syncProjects === true &&
+      (patch.workspacePath !== undefined || patch.serverUrl !== undefined);
+    const directoryProjects = this.projects.list().filter(project => project.directoryId === id);
+    const projectUpdates = syncRouting
+      ? directoryProjects.flatMap(project => {
+          const projectPatch: { workspacePath?: string; wakeChannel?: string } = {};
+          if (patch.workspacePath !== undefined) {
+            const workspacePath = patch.workspacePath.trim();
+            if (workspacePath !== project.workspacePath) projectPatch.workspacePath = workspacePath;
+          }
+          if (patch.serverUrl !== undefined) {
+            const wakeChannel = patch.serverUrl.trim();
+            if (wakeChannel !== project.wakeChannel) projectPatch.wakeChannel = wakeChannel;
+          }
+          return Object.keys(projectPatch).length > 0 ? [{ project, patch: projectPatch }] : [];
+        })
+      : [];
+
+    // Changing a project's path or Server URL invalidates its current Session
+    // context. Refuse the whole directory operation before writing anything if
+    // any affected project still has an active agent lease.
+    const activeIssueIds = projectUpdates.flatMap(({ project }) =>
+      this.issues.list(project.id, { archived: 'all' }).filter(activeClaim).map(issue => issue.id)
+    );
+    if (activeIssueIds.length > 0) {
+      throw new ConflictError(
+        `cannot sync directory workspace/server while ${activeIssueIds.length} task(s) have active agent leases; release or wait for the leases to expire first`
+      );
+    }
+
+    const projectEvents: Array<{ id: string; fields: string[]; unboundIssueIds: string[] }> = [];
+    inTransaction(this.db, () => {
+      this.directories.update(id, patch);
+      for (const { project, patch: routePatch } of projectUpdates) {
+        // Keep this cascade atomic with the directory update. Clear both the
+        // project default Session and task-level Session bindings because IDs
+        // from the old server/path must not be sent to the new context.
+        const effectivePatch = { ...routePatch, defaultSessionId: null };
+        this.projects.update(project.id, effectivePatch);
+        const unboundIssueIds: string[] = [];
+        for (const issue of this.issues.list(project.id, { archived: 'all' })) {
+          if (!issue.sessionId) continue;
+          this.issues.update(issue.id, { sessionId: null });
+          this.logActivity(
+            issue.id,
+            'system',
+            'session-unbound',
+            'Directory workspace/server changed; bind a session again'
+          );
+          unboundIssueIds.push(issue.id);
+        }
+        projectEvents.push({
+          id: project.id,
+          fields: Object.keys(effectivePatch),
+          unboundIssueIds
+        });
+      }
+    });
+
     this.emit('directory.updated', { id, fields: Object.keys(patch) });
+    for (const event of projectEvents) {
+      for (const issueId of event.unboundIssueIds) {
+        this.emit('issue.updated', { id: issueId, fields: ['sessionId'] });
+      }
+      this.emit('project.updated', {
+        id: event.id,
+        fields: event.fields,
+        unboundIssueIds: event.unboundIssueIds
+      });
+    }
     return this.directories.get(id)!;
   }
 
