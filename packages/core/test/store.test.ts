@@ -1537,6 +1537,74 @@ describe('workspace directories', () => {
     assert.equal(project.workspacePath, 'D:\\workspace\\new-root');
   });
 
+  it('synchronizes opted-in existing projects and clears stale Session bindings', () => {
+    const store = new Store(':memory:', new DatabaseSync(':memory:'));
+    const directory = store.createDirectory({
+      id: 'sync-dir', name: 'Sync directory',
+      workspacePath: '/workspace/old', serverUrl: 'http://127.0.0.1:4096'
+    });
+    const otherDirectory = store.createDirectory({
+      id: 'other-dir', name: 'Other directory',
+      workspacePath: '/other', serverUrl: 'http://127.0.0.1:4100'
+    });
+    store.createProject({
+      id: 'sync-a', name: 'Project A', directoryId: directory.id,
+      workspacePath: '/project/a-old', wakeChannel: 'http://127.0.0.1:4096',
+      defaultSessionId: 'ses-project-a'
+    });
+    store.createProject({
+      id: 'sync-b', name: 'Project B', directoryId: directory.id,
+      workspacePath: '/project/b-old', wakeChannel: 'http://127.0.0.1:4096',
+      defaultSessionId: 'ses-project-b'
+    });
+    store.createProject({
+      id: 'other-project', name: 'Other Project', directoryId: otherDirectory.id,
+      workspacePath: '/other/project', wakeChannel: 'http://127.0.0.1:4100',
+      defaultSessionId: 'ses-other'
+    });
+    const issue = store.createIssue({ projectId: 'sync-a', title: 'Bound task', sessionId: 'ses-task-a' });
+
+    const updatedDirectory = store.updateDirectory(directory.id, {
+      workspacePath: '/workspace/new', serverUrl: 'http://127.0.0.1:4097'
+    }, { syncProjects: true });
+
+    assert.equal(updatedDirectory.workspacePath, '/workspace/new');
+    assert.equal(updatedDirectory.serverUrl, 'http://127.0.0.1:4097');
+    for (const id of ['sync-a', 'sync-b']) {
+      const project = store.getProject(id)!;
+      assert.equal(project.workspacePath, '/workspace/new');
+      assert.equal(project.wakeChannel, 'http://127.0.0.1:4097');
+      assert.equal(project.defaultSessionId, null);
+    }
+    assert.equal(store.getIssue(issue.id)?.sessionId, null);
+    assert.ok(store.listActivities(issue.id).some(activity => activity.action === 'session-unbound'));
+    assert.deepEqual(
+      [store.getProject('other-project')!.workspacePath, store.getProject('other-project')!.wakeChannel, store.getProject('other-project')!.defaultSessionId],
+      ['/other/project', 'http://127.0.0.1:4100', 'ses-other']
+    );
+  });
+
+  it('rejects syncing projects with active agent leases without partially updating the directory', () => {
+    const store = new Store(':memory:', new DatabaseSync(':memory:'));
+    const directory = store.createDirectory({
+      id: 'leased-dir', name: 'Leased directory',
+      workspacePath: '/workspace/old', serverUrl: 'http://127.0.0.1:4096'
+    });
+    store.createProject({
+      id: 'leased-project', name: 'Leased Project', directoryId: directory.id,
+      workspacePath: '/workspace/old', wakeChannel: 'http://127.0.0.1:4096'
+    });
+    const issue = store.createIssue({ projectId: 'leased-project', title: 'Leased task' });
+    store.claimIssue(issue.id, 'agent-a', 30, 'agent-a', 'ses-a', 'main');
+
+    assert.throws(
+      () => store.updateDirectory(directory.id, { workspacePath: '/workspace/new' }, { syncProjects: true }),
+      /active agent leases/
+    );
+    assert.equal(store.getDirectory(directory.id)!.workspacePath, '/workspace/old');
+    assert.equal(store.getProject('leased-project')!.workspacePath, '/workspace/old');
+  });
+
   it('legacy project creation automatically creates or reuses a matching directory', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
     const first = store.createProject({ id: 'legacy-a', name: 'Legacy A', workspacePath: '/workspace/a', wakeChannel: 'http://127.0.0.1:4096' });
