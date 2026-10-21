@@ -25,7 +25,7 @@ interface App {
 async function makeApp(env: Env = {}): Promise<App> {
   const dir = mkdtempSync(join(tmpdir(), 'tb-server-test-'));
   const store = new (await import('@taskboard/core')).Store(dir, new DatabaseSync(':memory:'));
-  const { app } = await buildApp({ store, env });
+  const { app } = await buildApp({ store, env, dataDir: dir });
   return {
     app,
     cleanup: () => { app.close(); rmSync(dir, { recursive: true, force: true }); }
@@ -152,6 +152,81 @@ describe('TASKBOARD_TOKEN auth', () => {
     const res = await app.inject({ method: 'GET', url: '/api/meta' });
     assert.equal(res.statusCode, 200);
     cleanup();
+  });
+});
+
+describe('browser admin session auth', () => {
+  it('requires a one-time admin setup on non-loopback binds, then uses HttpOnly sessions', async () => {
+    const { app, cleanup } = await makeApp({ TASKBOARD_HOST: '0.0.0.0' });
+    try {
+      const status = await app.inject({ method: 'GET', url: '/api/auth/status' });
+      assert.deepEqual(status.json(), {
+        authRequired: true, initialized: false, authenticated: false, username: null
+      });
+
+      const blocked = await app.inject({ method: 'GET', url: '/api/meta' });
+      assert.equal(blocked.statusCode, 401);
+      assert.equal(blocked.json<{ code: string }>().code, 'AUTH_REQUIRED');
+
+      const setup = await app.inject({
+        method: 'POST', url: '/api/auth/setup', headers: json,
+        payload: { username: 'admin', password: 'correct horse battery staple' }
+      });
+      assert.equal(setup.statusCode, 201);
+      const setCookieHeader = setup.headers['set-cookie'];
+      const setCookie = (Array.isArray(setCookieHeader) ? setCookieHeader[0] : setCookieHeader) ?? '';
+      assert.match(setCookie, /taskboard_session=/);
+      assert.match(setCookie, /HttpOnly/);
+      assert.match(setCookie, /SameSite=Strict/);
+      const cookie = setCookie.split(';')[0];
+      assert.ok(cookie);
+
+      const accepted = await app.inject({ method: 'GET', url: '/api/meta', headers: { cookie } });
+      assert.equal(accepted.statusCode, 200);
+
+      const duplicateSetup = await app.inject({
+        method: 'POST', url: '/api/auth/setup', headers: json,
+        payload: { username: 'another', password: 'another secure password' }
+      });
+      assert.equal(duplicateSetup.statusCode, 409);
+
+      const logout = await app.inject({ method: 'POST', url: '/api/auth/logout', headers: { cookie } });
+      assert.equal(logout.statusCode, 200);
+      const blockedAfterLogout = await app.inject({ method: 'GET', url: '/api/meta', headers: { cookie } });
+      assert.equal(blockedAfterLogout.statusCode, 401);
+
+      const wrongPassword = await app.inject({
+        method: 'POST', url: '/api/auth/login', headers: json,
+        payload: { username: 'admin', password: 'wrong password' }
+      });
+      assert.equal(wrongPassword.statusCode, 401);
+
+      const login = await app.inject({
+        method: 'POST', url: '/api/auth/login', headers: json,
+        payload: { username: 'admin', password: 'correct horse battery staple' }
+      });
+      assert.equal(login.statusCode, 200);
+      const loginHeader = login.headers['set-cookie'];
+      const loginSetCookie = (Array.isArray(loginHeader) ? loginHeader[0] : loginHeader) ?? '';
+      const loginCookie = loginSetCookie.split(';')[0];
+      assert.ok(loginCookie);
+      const acceptedAfterLogin = await app.inject({ method: 'GET', url: '/api/meta', headers: { cookie: loginCookie } });
+      assert.equal(acceptedAfterLogin.statusCode, 200);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('keeps loopback development frictionless when token auth is not configured', async () => {
+    const { app, cleanup } = await makeApp({});
+    try {
+      const status = await app.inject({ method: 'GET', url: '/api/auth/status' });
+      assert.equal(status.json<{ authRequired: boolean }>().authRequired, false);
+      const meta = await app.inject({ method: 'GET', url: '/api/meta' });
+      assert.equal(meta.statusCode, 200);
+    } finally {
+      cleanup();
+    }
   });
 });
 
