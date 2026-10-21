@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Project } from '../types.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
-const PROJECT_COLS = 'p.id, p.name, p.directory_id AS directoryId, p.default_session_id AS defaultSessionId, COALESCE(d.workspace_path, \'\') AS workspacePath, COALESCE(d.server_url, \'\') AS wakeChannel, p.labels, p.created_at AS createdAt';
+const PROJECT_COLS = 'p.id, p.name, p.directory_id AS directoryId, p.default_session_id AS defaultSessionId, COALESCE(d.workspace_path, \'\') AS workspacePath, '' AS wakeChannel, p.labels, p.created_at AS createdAt';
 const PROJECT_FROM = 'projects p LEFT JOIN directories d ON d.id = p.directory_id';
 const now = (): string => new Date().toISOString();
 const shortId = (): string => randomUUID().slice(0, 8);
@@ -35,17 +35,16 @@ export class ProjectRepo {
       // Compatibility for old CLI/MCP clients: route values initialize a Directory,
       // rather than becoming a project-level override.
       const workspacePath = input.workspacePath?.trim() ?? '';
-      const serverUrl = input.wakeChannel?.trim() ?? '';
       const label = workspacePath.split(/[\\/]/).filter(Boolean).at(-1) || '默认目录';
       const existing = this.db.prepare(
-        'SELECT id FROM directories WHERE workspace_path = ? AND server_url = ? ORDER BY created_at LIMIT 1'
-      ).get(workspacePath, serverUrl) as { id: string } | undefined;
+        'SELECT id FROM directories WHERE workspace_path = ? ORDER BY created_at LIMIT 1'
+      ).get(workspacePath) as { id: string } | undefined;
       if (existing) directoryId = existing.id;
       else {
         directoryId = shortId();
         this.db.prepare(
           'INSERT INTO directories (id, name, workspace_path, server_url, created_at) VALUES (?, ?, ?, ?, ?)'
-        ).run(directoryId, label, workspacePath, serverUrl, now());
+        ).run(directoryId, label, workspacePath, '', now());
       }
     }
 
