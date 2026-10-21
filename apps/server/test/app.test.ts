@@ -117,6 +117,59 @@ describe('project default Session workspace validation', () => {
       cleanup();
     }
   });
+
+  it('keeps an existing Session binding when its Directory path changes', async () => {
+    const { app, cleanup } = await makeApp();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify([
+      { id: 'ses_expected', title: 'Expected', directory: 'D:/workspace/project-a', time: { updated: 10 } },
+      { id: 'ses_other', title: 'Other', directory: 'D:/workspace/project-b', time: { updated: 20 } }
+    ]), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+
+    try {
+      const created = await app.inject({
+        method: 'POST', url: '/api/projects', headers: json,
+        payload: {
+          id: 'p-preserve', name: 'Preserve Session', workspacePath: 'D:/workspace/project-a',
+          defaultSessionId: 'ses_expected'
+        }
+      });
+      assert.equal(created.statusCode, 201);
+      const project = created.json<{ id: string; directoryId: string; defaultSessionId: string }>();
+      assert.equal(project.defaultSessionId, 'ses_expected');
+
+      const movedDirectory = await app.inject({
+        method: 'PATCH', url: `/api/directories/${project.directoryId}`, headers: json,
+        payload: { workspacePath: 'D:/workspace/project-b' }
+      });
+      assert.equal(movedDirectory.statusCode, 200);
+
+      const afterDirectoryChange = await app.inject({ method: 'GET', url: '/api/projects/p-preserve' });
+      assert.equal(afterDirectoryChange.statusCode, 200);
+      assert.equal(afterDirectoryChange.json<{ workspacePath: string; defaultSessionId: string }>().workspacePath, 'D:/workspace/project-b');
+      assert.equal(afterDirectoryChange.json<{ defaultSessionId: string }>().defaultSessionId, 'ses_expected');
+
+      // Saving the unchanged Session ID should not require it to appear in the
+      // new directory's discovery list.
+      const kept = await app.inject({
+        method: 'PATCH', url: '/api/projects/p-preserve', headers: json,
+        payload: { defaultSessionId: 'ses_expected' }
+      });
+      assert.equal(kept.statusCode, 200);
+      assert.equal(kept.json<{ defaultSessionId: string }>().defaultSessionId, 'ses_expected');
+
+      // Explicitly selecting a different Session still validates its directory.
+      const rebound = await app.inject({
+        method: 'PATCH', url: '/api/projects/p-preserve', headers: json,
+        payload: { defaultSessionId: 'ses_other' }
+      });
+      assert.equal(rebound.statusCode, 200);
+      assert.equal(rebound.json<{ defaultSessionId: string }>().defaultSessionId, 'ses_other');
+    } finally {
+      globalThis.fetch = originalFetch;
+      cleanup();
+    }
+  });
 });
 
 describe('TASKBOARD_TOKEN auth', () => {
