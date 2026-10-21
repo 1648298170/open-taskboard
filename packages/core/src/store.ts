@@ -128,23 +128,19 @@ export class Store {
   }
 
   // ---- application settings ----
-  getAppSettings(): { defaultWorkspacePath: string; defaultOpenCodeServerUrl: string } {
+  getAppSettings(): { defaultWorkspacePath: string } {
     const rows = this.db.prepare(
-      "SELECT key, value FROM app_settings WHERE key IN ('default_workspace_path', 'default_opencode_server_url')"
+      "SELECT key, value FROM app_settings WHERE key = 'default_workspace_path'"
     ).all() as { key: string; value: string }[];
     const values = new Map(rows.map(row => [row.key, row.value]));
     return {
-      defaultWorkspacePath: values.get('default_workspace_path') ?? '',
-      defaultOpenCodeServerUrl: values.get('default_opencode_server_url') ?? ''
+      defaultWorkspacePath: values.get('default_workspace_path') ?? ''
     };
   }
 
-  updateAppSettings(patch: { defaultWorkspacePath?: string; defaultOpenCodeServerUrl?: string }): {
-    defaultWorkspacePath: string; defaultOpenCodeServerUrl: string;
-  } {
+  updateAppSettings(patch: { defaultWorkspacePath?: string }): { defaultWorkspacePath: string } {
     const statements: Array<[string, string | undefined]> = [
-      ['default_workspace_path', patch.defaultWorkspacePath],
-      ['default_opencode_server_url', patch.defaultOpenCodeServerUrl]
+      ['default_workspace_path', patch.defaultWorkspacePath]
     ];
     for (const [key, value] of statements) {
       if (value === undefined) continue;
@@ -166,8 +162,7 @@ export class Store {
     if (!directory) throw new NotFoundError(`directory not found: ${id}`);
 
     const routingChanged =
-      (patch.workspacePath !== undefined && patch.workspacePath.trim() !== directory.workspacePath) ||
-      (patch.serverUrl !== undefined && patch.serverUrl.trim() !== directory.serverUrl);
+      (patch.workspacePath !== undefined && patch.workspacePath.trim() !== directory.workspacePath);
     const directoryProjects = this.projects.list().filter(project => project.directoryId === id);
     const activeIssueIds = routingChanged
       ? directoryProjects.flatMap(project =>
