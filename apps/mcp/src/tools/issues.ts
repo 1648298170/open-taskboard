@@ -1,12 +1,5 @@
-// Issue tools: list_issues / show_issue / create_issue / update_issue /
-// delete_issue / archive_issue / unarchive_issue / claim_issue /
-// heartbeat_issue / release_issue / add_comment / progress +
-// dependencies (add/remove), the smart pickup views (ready_issues /
-// next_issue) and full-text search (search_issues). create/update/comment/
-// v0.4: 会话记忆 —— 本 MCP 进程服务单个 agent；该 agent 任意一次声明
-// sessionId（create/update/claim/project）后即被记住，并作为
-// `x-taskboard-session` 头随所有请求发送；claim 未显式传时自动补绑。
-import { rememberSession, effectiveSession } from '../session.js';
+// Issue tools: task lifecycle, comments, dependencies and discovery.
+// Session and routing are inherited from Project/Directory.
 
 // claim schemas come from @taskboard/core (update_issue uses
 // mcpUpdateIssueSchema: version REQUIRED); the rest are small local zod
@@ -58,13 +51,11 @@ export const issueTools: ToolTable = [
     createIssueSchema,
     '创建任务。拆解需求时：先建顶层父任务，再用 parentId 为每个子需求建子任务（仅支持两层）。TASKBOARD_HUMAN_DONE=1 时创建即 done 与 PATCH 置 done 同责：非 web 来源需用户确认后传 confirm: true',
     args => {
-      if (args.sessionId) rememberSession(args.sessionId);
       return ensureServerOrThrow('POST', `/api/projects/${seg(args.projectId)}/issues`, {
       parentId: args.parentId ?? null, title: args.title, description: args.description ?? '',
       status: args.status ?? 'todo', priority: args.priority ?? 'medium',
       labels: args.labels ?? '', branch: args.branch ?? '', assignee: args.assignee ?? '',
       worktree: args.worktree ?? null,
-      ...(args.sessionId ? { sessionId: args.sessionId } : {}),
       startDate: args.startDate ?? null, dueDate: args.dueDate ?? null,
       ...(args.confirm !== undefined ? { confirm: args.confirm } : {}),
     });
@@ -72,14 +63,13 @@ export const issueTools: ToolTable = [
   )],
   ['update_issue', defineTool(
     mcpUpdateIssueSchema.extend({ id: z.string() }),
-    '更新任务。状态流转 todo → in_progress → in_review → done；done 需用户确认后才能设置。必须带 version（乐观锁，取自 show_issue）。每次实际状态变更都必须同时传 statusNote，写明变更原因、验证证据和未覆盖项；服务端会把状态与评论原子提交。冲突时重新读取再试',
+    '更新任务属性。Session、工作目录由目录/项目继承，分支、工作树和负责人由 Agent 维护。状态流转 todo → in_progress → in_review → done；每次实际状态变更都必须带 statusNote，且必须带 version（乐观锁）。冲突时重新读取再试',
     args => {
       const body: Record<string, unknown> = { version: args.version };
-      for (const k of ['title', 'description', 'status', 'statusNote', 'priority', 'labels', 'branch', 'worktree', 'sessionId', 'assignee', 'parentId', 'startDate', 'dueDate', 'confirm'] as const) {
+      for (const k of ['title', 'description', 'status', 'statusNote', 'priority', 'labels', 'branch', 'worktree', 'assignee', 'parentId', 'startDate', 'dueDate', 'confirm'] as const) {
         const v = args[k];
         if (v !== undefined) body[k] = v;
       }
-      if (args.sessionId) rememberSession(args.sessionId);
       return ensureServerOrThrow('PATCH', `/api/issues/${seg(args.id)}`, body);
     },
   )],
@@ -102,16 +92,11 @@ export const issueTools: ToolTable = [
   // 认领（惰性过期，无需定时器）。
   ['claim_issue', defineTool(
     claimSchema.extend({ id: z.string() }),
-    '认领任务（独占租约）：租约期内其他 agent 认领会 409。建议先 claim 再开工，长任务用心跳续租，完成后 release。ttlMinutes 默认 30，上限 1440。可带 sessionId：认领未绑定任务时绑定自己的 opencode 会话（认领即绑定；已绑他人会话不抢绑）。未传时自动使用本工具进程最近一次声明过的 sessionId。',
-    args => {
-      const effective = effectiveSession(args.sessionId);
-      if (effective) rememberSession(effective);
-      return ensureServerOrThrow('POST', `/api/issues/${seg(args.id)}/claim`, {
+    '认领任务（独占租约）：任务 Session 自动继承项目默认 Session，不允许单个任务绑定其他 Session。租约期内其他 Agent 认领会 409；长任务用心跳续租，完成后 release。ttlMinutes 默认 30，上限 1440。',
+    args => ensureServerOrThrow('POST', `/api/issues/${seg(args.id)}/claim`, {
       agent: args.agent,
       ...(args.ttlMinutes !== undefined ? { ttlMinutes: args.ttlMinutes } : {}),
-      ...(effective ? { sessionId: effective } : {}),
-    });
-    },
+    }),
   )],
   ['heartbeat_issue', defineTool(
     claimSchema.omit({ ttlMinutes: true }).extend({ id: z.string() }),

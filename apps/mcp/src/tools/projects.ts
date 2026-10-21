@@ -26,12 +26,10 @@ export const projectTools: ToolTable = [
   )],
   ['update_project', defineTool(
     projectPatchSchema.extend({ id: z.string() }),
-    '更新项目名称/工作目录/默认 Session/唤醒通道/标签（defaultSessionId 传 null 清除；wakeChannel 传空串清除绑定；labels 逗号分隔）',
+    '更新项目名称、默认 Session 或标签。工作目录与 OpenCode Server URL 只能在目录中修改；任务会继承项目默认 Session。defaultSessionId 传 null 清除；labels 逗号分隔。',
     args => ensureServerOrThrow('PATCH', `/api/projects/${args.id}`, {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.defaultSessionId !== undefined ? { defaultSessionId: args.defaultSessionId } : {}),
-      ...(args.workspacePath !== undefined ? { workspacePath: args.workspacePath } : {}),
-      ...(args.wakeChannel !== undefined ? { wakeChannel: args.wakeChannel } : {}),
       ...(args.labels !== undefined ? { labels: args.labels } : {}),
     }),
   )],
