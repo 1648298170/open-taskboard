@@ -96,7 +96,8 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
   app.patch('/api/directories/:directoryId', async (req: FastifyRequest<{ Params: DirectoryParams }>) => {
     const parsed = directoryPatchSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
-    return store.updateDirectory(req.params.directoryId, parsed.data);
+    const { syncProjects, ...patch } = parsed.data;
+    return store.updateDirectory(req.params.directoryId, patch, { syncProjects });
   });
 
   app.delete('/api/directories/:directoryId', async (req: FastifyRequest<{ Params: DirectoryParams; Querystring: { cascade?: string } }>) => {
