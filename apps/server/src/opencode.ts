@@ -31,16 +31,11 @@ export const FALLBACK_OPENCODE_URL = 'http://127.0.0.1:4096';
  * explicit url → TASKBOARD_OPENCODE_URL → FALLBACK_OPENCODE_URL. Blank candidates are skipped; an invalid candidate
  * throws (callers map that to 400).
  */
-export function resolveOpenCodeBase(explicitUrl: string | undefined, projectChannels: string[]): string {
+export function resolveOpenCodeBase(explicitUrl: string | undefined, _projectChannels: string[] = []): string {
   const explicit = (explicitUrl ?? '').trim();
   if (explicit) return normalizeOpenCodeBase(explicit);
-
   const fromEnv = (process.env.TASKBOARD_OPENCODE_URL ?? '').trim();
   if (fromEnv) return normalizeOpenCodeBase(fromEnv);
-
-  const channel = projectChannels.map(c => c.trim()).find(c => c.length > 0);
-  if (channel) return normalizeOpenCodeBase(channel);
-
   return normalizeOpenCodeBase(FALLBACK_OPENCODE_URL);
 }
 
