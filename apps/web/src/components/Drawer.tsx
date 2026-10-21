@@ -668,8 +668,11 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
 
       {/* T6-36: 最近提交预览 —— 绑定了分支或工作树才显示。 */}
       {commitRef && (
-        <>
-          <h3>最近提交{commits && commits.length > 0 ? ` (${commitRef})` : ''}</h3>
+        <details className="detail-section detail-disclosure detail-commits">
+          <summary>
+            <span>最近提交</span>
+            <span className="detail-summary-meta">{commits === null ? '读取中' : `${commits.length} 条`}</span>
+          </summary>
           <ul className="commits">
             {commits === null
               ? <li>加载中…</li>
@@ -683,7 +686,7 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
                   </li>
                 ))}
           </ul>
-        </>
+        </details>
       )}
 
       <h3>描述
@@ -907,40 +910,51 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
         <button className="btn tiny" type="submit">发送</button>
       </form>
 
-      <h3>活动</h3>
-      <ul className="activities">
-        {visibleActivities.length
-          ? visibleActivities.map(a => (
-            <li key={a.id}>
-              <span className="when">{fmtWhen(a.createdAt)}</span>
-              <span className="who">{a.actor || 'anon'}</span>
-              <span className="act">{a.action}</span>
-              {a.detail && <span className="det">{a.detail}</span>}
-            </li>))
-          : <li style={{ color: 'var(--ink-dim)' }}>暂无活动</li>}
-      </ul>
+      <details className="detail-section detail-disclosure detail-history">
+        <summary>
+          <span>活动</span>
+          <span className="detail-summary-meta">{visibleActivities.length} 条</span>
+        </summary>
+        <ul className="activities">
+          {visibleActivities.length
+            ? visibleActivities.map(a => (
+              <li key={a.id}>
+                <span className="when">{fmtWhen(a.createdAt)}</span>
+                <span className="who">{a.actor || 'anon'}</span>
+                <span className="act">{a.action}</span>
+                {a.detail && <span className="det">{a.detail}</span>}
+              </li>))
+            : <li style={{ color: 'var(--ink-dim)' }}>暂无活动</li>}
+        </ul>
+      </details>
 
-      {/* T7-39: 附件 —— 列表（下载直链，令牌走 ?token=，与 SSE 同法）+ 本地上传。 */}
-      <h3>附件
-        <input type="file" className="attach-input" title="上传附件" onChange={e => {
-          const f = e.target.files?.[0];
-          e.target.value = ''; // 允许重复选择同一文件再次上传
-          if (!f) return;
-          api_.uploadAttachment(detail.id, f)
-            .then(a => { onToast(`已上传 ${a.filename}`); onChanged(); void load(); })
-            .catch(err => onToast(`✗ ${(err as Error).message}`));
-        }} />
-      </h3>
-      <ul className="attachments">
-        {detail.attachments.length
-          ? detail.attachments.map(a => (
-            <li key={a.id} title={`${a.filename} · ${a.size} B`}>
-              <span className="att-name">📄 {a.filename}</span>
-              <span className="att-meta">{humanSize(a.size)} · {a.actor || 'anon'} · {fmtWhen(a.createdAt)}</span>
-              <a className="att-dl" href={api_.downloadUrl(a.id)} target="_blank" rel="noreferrer">下载</a>
-            </li>))
-          : <li style={{ color: 'var(--ink-dim)' }}>暂无附件</li>}
-      </ul>
+      <details className="detail-section detail-disclosure detail-attachments">
+        <summary>
+          <span>附件</span>
+          <span className="detail-summary-meta">{detail.attachments.length} 个</span>
+        </summary>
+        <label className="attachment-upload">
+          <span>上传文件</span>
+          <input type="file" className="attach-input" title="上传附件" onChange={e => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (!f) return;
+            api_.uploadAttachment(detail.id, f)
+              .then(a => { onToast(`已上传 ${a.filename}`); onChanged(); void load(); })
+              .catch(err => onToast(`✗ ${(err as Error).message}`));
+          }} />
+        </label>
+        <ul className="attachments">
+          {detail.attachments.length
+            ? detail.attachments.map(a => (
+              <li key={a.id} title={`${a.filename} · ${a.size} B`}>
+                <span className="att-name">📄 {a.filename}</span>
+                <span className="att-meta">{humanSize(a.size)} · {a.actor || 'anon'} · {fmtWhen(a.createdAt)}</span>
+                <a className="att-dl" href={api_.downloadUrl(a.id)} target="_blank" rel="noreferrer">下载</a>
+              </li>))
+            : <li style={{ color: 'var(--ink-dim)' }}>暂无附件</li>}
+        </ul>
+      </details>
     </aside>
     </>
   );
