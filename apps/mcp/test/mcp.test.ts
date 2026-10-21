@@ -150,15 +150,17 @@ describe('MCP session propagation', () => {
     return wire;
   };
 
-  it('remembers an explicit sessionId and sends it as a header on later calls', async () => {
+  it('does not remember or forward a task-level sessionId', async () => {
     process.env.TASKBOARD_URL = 'http://127.0.0.1:49999';
     const wire = stub();
     const { issueTools } = await import('../src/tools/issues.js');
     const table = new Map(issueTools);
     await table.get('create_issue')!.handler({ projectId: 'p', title: 'a', sessionId: 'ses_hdr' });
     await table.get('create_issue')!.handler({ projectId: 'p', title: 'b' });
-    assert.equal(wire[0]!.headers['x-taskboard-session'], 'ses_hdr');
-    assert.equal(wire[1]!.headers['x-taskboard-session'], 'ses_hdr');
+    for (const request of wire) {
+      assert.equal('sessionId' in (request.body ?? {}), false);
+      assert.notEqual(request.headers['x-taskboard-session'], 'ses_hdr');
+    }
   });
 
   it('create_issue omits sessionId entirely when absent (never null)', async () => {
@@ -170,14 +172,18 @@ describe('MCP session propagation', () => {
     assert.equal('sessionId' in (wire[0]!.body ?? {}), false);
   });
 
-  it('claim_issue falls back to the remembered session', async () => {
+  it('claim_issue never binds a task to a remembered or supplied Session', async () => {
     process.env.TASKBOARD_URL = 'http://127.0.0.1:49999';
     const wire = stub();
     const { issueTools } = await import('../src/tools/issues.js');
     const table = new Map(issueTools);
     await table.get('create_issue')!.handler({ projectId: 'p', title: 'a', sessionId: 'ses_claim' });
     await table.get('claim_issue')!.handler({ id: 'I1', agent: 'a' });
-    assert.equal(wire[1]!.body?.sessionId, 'ses_claim');
+    await table.get('claim_issue')!.handler({ id: 'I2', agent: 'a', sessionId: 'ses_explicit' });
+    assert.deepEqual(wire[1]!.body, { agent: 'a' });
+    assert.deepEqual(wire[2]!.body, { agent: 'a' });
+    assert.notEqual(wire[1]!.headers['x-taskboard-session'], 'ses_claim');
+    assert.notEqual(wire[2]!.headers['x-taskboard-session'], 'ses_explicit');
   });
 
   it('update_project forwards a null defaultSessionId (clear)', async () => {
@@ -198,25 +204,29 @@ describe('MCP session propagation', () => {
   });
 });
 
-describe('issueTools 会话记忆（认领自动补绑）', () => {
+describe('issueTools 任务 Session 继承规则', () => {
   const origFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = origFetch; });
 
-  it('a declared sessionId (create/update) is auto-carried into later claims', async () => {
-    const bodies: Array<Record<string, unknown>> = [];
+  it('create/update/claim never persist or propagate task-level Session values', async () => {
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
     globalThis.fetch = (async (url: unknown, init?: { method?: string; body?: string }) => {
-      if (String(url).includes('/claim')) bodies.push(JSON.parse(init?.body as string));
+      requests.push({
+        url: String(url),
+        body: init?.body ? JSON.parse(init.body) as Record<string, unknown> : {}
+      });
       return new Response(JSON.stringify({ id: 'x', version: 2 }), { status: 200 });
     }) as typeof fetch;
     const { issueTools } = await import('../src/tools/issues.js');
     const table = new Map(issueTools);
-    // 先声明（create 带 sessionId）
-    await table.get('create_issue')!.handler({ projectId: 'p', title: 't', sessionId: 'ses_mem' });
-    // 后续 claim 未传 sessionId → 自动补绑
-    await table.get('claim_issue')!.handler({ id: 'I1', agent: 'a' });
-    // 显式传值仍优先生效
-    await table.get('claim_issue')!.handler({ id: 'I2', agent: 'a', sessionId: 'ses_explicit' });
-    assert.deepEqual(bodies[0], { agent: 'a', sessionId: 'ses_mem' });
-    assert.deepEqual(bodies[1], { agent: 'a', sessionId: 'ses_explicit' });
+    await table.get('create_issue')!.handler({ projectId: 'p', title: 't', sessionId: 'ses_create' });
+    await table.get('update_issue')!.handler({ id: 'I1', version: 1, sessionId: 'ses_update' });
+    await table.get('claim_issue')!.handler({ id: 'I1', agent: 'a', sessionId: 'ses_claim' });
+
+    assert.equal(requests.length, 3);
+    for (const request of requests) {
+      assert.equal('sessionId' in request.body, false, `${request.url} must not receive a task-level Session`);
+    }
+    assert.deepEqual(requests[2]!.body, { agent: 'a' });
   });
 });
