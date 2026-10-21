@@ -286,10 +286,12 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     if (!issue.sessionId?.trim()) return reply.code(409).send({ error: '任务尚未绑定 OpenCode Session' });
     const project = store.getProject(issue.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
-    if (!project.wakeChannel.trim()) return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
+    let serverUrl: string;
+    try { serverUrl = getConfiguredOpenCodeBase(); }
+    catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
     const directory = issue.worktreePath.trim() || project.workspacePath.trim();
     try {
-      const runtime = await getOpenCodeSessionRuntimeState(project.wakeChannel, directory, issue.sessionId);
+      const runtime = await getOpenCodeSessionRuntimeState(serverUrl, directory, issue.sessionId);
       if (runtime.directory && normalizeOpenCodeDirectory(runtime.directory) !== normalizeOpenCodeDirectory(directory)) {
         return reply.code(409).send({ error: `OpenCode Session 的实际目录与任务执行目录不一致：${runtime.directory}` });
       }
@@ -318,7 +320,9 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     if (!issue.sessionId?.trim()) return reply.code(409).send({ error: '任务尚未绑定 OpenCode Session' });
     const project = store.getProject(issue.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
-    if (!project.wakeChannel.trim()) return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
+    let serverUrl: string;
+    try { serverUrl = getConfiguredOpenCodeBase(); }
+    catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
     const directory = issue.worktreePath.trim() || project.workspacePath.trim();
     const controller = new AbortController();
     let upstream: Response;
