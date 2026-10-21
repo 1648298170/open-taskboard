@@ -1,5 +1,6 @@
-# Deployed "stable" board — isolated from the dev instance on 127.0.0.1:47824
-# (repo ./.data). Upgrades are explicit: docker compose build && docker compose up -d.
+# Taskboard Web + Fastify API in one container, exposed on host port 47824.
+# Admin account is initialized in the browser on first visit; no TASKBOARD_TOKEN needed.
+# Persistent credentials and board data live in the taskboard-data volume.
 services:
   taskboard:
     build:
@@ -12,19 +13,20 @@ services:
     environment:
       # New-project dialog no longer asks for a server URL; default to the host.
       TASKBOARD_OPENCODE_URL: http://host.docker.internal:4096
-      # Non-loopback binding requires a token (server startup guard). Keep the
-      # value in the gitignored .env file.
-      TASKBOARD_TOKEN: ${TASKBOARD_TOKEN:?set TASKBOARD_TOKEN in .env}
+      # Remote/LAN deployment always requires first-run admin setup + login cookie.
+      TASKBOARD_HOST: 0.0.0.0
+      TASKBOARD_PORT: 47824
+      TASKBOARD_AUTH_REQUIRED: "1"
     extra_hosts:
       # Linux resolves host.docker.internal to the host gateway.
       - "host.docker.internal:host-gateway"
     ports:
-      - "47825:47824"
+      - "47824:47824"
     volumes:
       - taskboard-data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:47824/api/meta', { headers: { Authorization: 'Bearer ' + (process.env.TASKBOARD_TOKEN || '') } }).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:47824/api/auth/status').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
