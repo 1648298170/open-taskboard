@@ -45,8 +45,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
       const workspacePath = input.workspacePath?.trim() || settings.defaultWorkspacePath.trim();
       directory = store.createDirectory({
         name: workspacePath.split(/[\\/]/).filter(Boolean).at(-1) || '默认目录',
-        workspacePath,
-        serverUrl: ''
+        workspacePath
       });
     }
 
