@@ -214,6 +214,7 @@ function CardView({ issue, child, locked, childProgress, active, overlay,
       onClick={onClick}>
       {children}
       <div className="card-title-row">
+        <span className="card-status-mark" data-status={issue.status} aria-hidden="true" />
         <div className="card-title">{child ? <span className="card-child-prefix">◐</span> : null}{issue.title}</div>
       </div>
       {!child && childProgress && <ChildProgress done={childProgress.done} inProgress={childProgress.inProgress} total={childProgress.total} />}
