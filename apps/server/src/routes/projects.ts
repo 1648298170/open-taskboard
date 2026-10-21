@@ -18,7 +18,7 @@ function normalizeDirectoryPath(value: string): string {
 const validationMessage = (error: z.ZodError): string =>
   error.issues.map(i => (i.path.length > 0 ? `${i.path.map(String).join('.')}: ` : '') + i.message).join('; ');
 
-const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }) => {
+const projectsRoutes: FastifyPluginAsync<{ store: Store; openCodeUrl?: string }> = async (app, { store, openCodeUrl }) => {
   app.get('/api/projects', async () => store.listProjects());
 
   app.post('/api/projects', async (req, reply) => {
@@ -51,7 +51,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
 
     let workspacePath = directory.workspacePath.trim();
     let serverUrl: string;
-    try { serverUrl = getConfiguredOpenCodeBase(); }
+    try { serverUrl = getConfiguredOpenCodeBase(openCodeUrl); }
     catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
 
     if (defaultSessionId) {
