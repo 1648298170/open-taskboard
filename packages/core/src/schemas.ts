@@ -75,6 +75,7 @@ export const createIssueSchema = z
     reviewStatus: z.enum(['pending', 'approved', 'changes_requested']).optional(),
     reviewNotes: z.string().max(20000).optional(),
     // v0.4: opencode session binding 鈥?null/absent = unbound.
+    // Deprecated compatibility input. The Project default Session is authoritative.
     sessionId: z.string().min(1).nullable().optional(),
     assignee: z.string().optional(),
     startDate: nullableDate,

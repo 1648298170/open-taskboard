@@ -30,7 +30,6 @@ export class IssueRepo {
     projectId: string; parentId: string | null; title: string;
     description?: string; status?: Status; priority?: Priority;
     labels?: string; branch?: string; worktree?: string | null; worktreePath?: string | null; assignee?: string;
-    sessionId?: string | null;
     startDate?: string | null; dueDate?: string | null;
     acceptanceCriteria?: string; reviewStatus?: 'pending' | 'approved' | 'changes_requested'; reviewNotes?: string;
   }): string {

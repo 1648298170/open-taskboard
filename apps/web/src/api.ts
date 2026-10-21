@@ -218,7 +218,6 @@ export const api_ = {
   },
   createTaskWorktree: (id: string) => api<{ issue: Issue; branch: string; worktree: string; worktreePath: string; alreadyBound: boolean }>('POST', `/api/issues/${encodeURIComponent(id)}/create-worktree`, {}),
   releaseGitBinding: (id: string) => api<Issue>('DELETE', `/api/issues/${encodeURIComponent(id)}/git-binding`),
-  createTaskSession: (id: string, title?: string) => api<{ issue: Issue; session: OpenCodeSessionOption; serverUrl: string; workspacePath: string }>('POST', `/api/issues/${encodeURIComponent(id)}/opencode-session`, title ? { title } : {}),
   /** Query OpenCode itself after a Taskboard reload to recover live Session state. */
   openCodeSessionState: (id: string) => api<OpenCodeSessionRuntimeState>('GET', `/api/issues/${encodeURIComponent(id)}/opencode-state`),
   /** Abort the actual OpenCode Session, not just the Taskboard issue status. */
