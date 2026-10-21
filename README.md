@@ -58,7 +58,7 @@ node apps/cli/dist/cli.js issue list --project my-project
 常用命令（`taskboard`，构建后可 `pnpm --filter @taskboard/cli link` 全局可用）：
 
 ```bash
-taskboard project create --id my-project --name "My project" --wake-port 4096 --session-id <会话ID>
+taskboard project create --id my-project --name "My project" --workspace-path <工作目录> --session-id <会话ID>
 taskboard project set --id my-project --session-id <新会话ID>   # 传 '' 清除项目默认会话
 taskboard project list                       # 已绑定时显示 session=<id>
 taskboard issue create --project my-project --title "搭建登录模块" --priority high --branch feat/login --session-id <会话ID>
@@ -169,7 +169,7 @@ taskboard watch                                        # opencode run（默认�
 
 > 模型注意：`--model` 走 opencode 的 `-m` 约定；Claude/Codex 用自家 `--model` 参数时直接写进 `--exec`（如 `--exec "claude --model sonnet -p"`），不要混用 `--model`。
 
-**目录分组 + 项目会话绑定**：左侧目录是项目分组并保存工作目录与 OpenCode Server URL；在目录下新建项目时这两项自动继承且锁定，项目只需绑定默认 Session（可选择已有 Session，或通过「新建 Session」按钮在指定工作目录中创建）。新建任务直接继承并锁定项目的工作目录、Session 与 Server URL。`@agent` 评论对已绑定任务直接发往对应 Server 的 `prompt_async`，未绑定任务才注入 TUI。项目路由存在数据里，改绑即时生效，**一只 watch 覆盖所有项目**。CLI 等价：`taskboard project create --wake-port 4097`、改绑 `taskboard project set --id demo --wake-port 4099`；项目也可带标签（`--labels roadmap,work`，侧栏展示为金色小字）。不跑 TUI 注入（纯 headless 的 Claude/Codex/Cursor 工作流）时留空即可。
+**目录分组 + 项目会话绑定**：左侧目录只保存工作目录，项目绑定默认 Session；OpenCode Server URL 由 Taskboard 服务端的 `TASKBOARD_OPENCODE_URL` 统一配置，目录、项目和全局设置不再保存或修改 URL。Session 跳转链接使用独立的 `TASKBOARD_OPENCODE_PUBLIC_URL`，必须配置为浏览器可访问的地址。
 
 ### 先把 opencode 终端跑起来（watch 的目的地）
 
@@ -179,7 +179,7 @@ TUI 注入需要「在跑的 opencode serve + 附着它的终端」，两种开�
 
 ```bash
 opencode                                   # 终端 1：交互式 TUI
-# 面板建项目不用填端口（服务端默认解析到 127.0.0.1:4096）；换端口用 project set --wake-port <端口>
+# OpenCode Server 地址由服务端 TASKBOARD_OPENCODE_URL 统一配置；不再通过 project set 修改项目 URL
 ```
 
 **B 多实例（多终端接管不同项目，推荐）**：每终端一组 serve + attach，端口互不重复。serve 是一次性部署，交给进程管理器常驻（mac/linux 用后台方式即可零依赖上手；Windows 推荐 pm2，见下方对照表），日常每终端只有一条命令：
@@ -188,7 +188,7 @@ opencode                                   # 终端 1：交互式 TUI
 # ── 一次性部署（macOS / Linux，Windows 见下表）─────────────
 opencode serve --port 4096 &                # 无界面 server，交给进程管理器常驻
 opencode serve --port 4097 &
-# 面板「新建项目」不用填服务地址（默认 127.0.0.1:4096 或 TASKBOARD_OPENCODE_URL）；多实例换端口用 taskboard project set --wake-port …
+# OpenCode Server 地址由部署环境配置，不通过项目或目录命令修改
 
 # ── 用户日常（每只终端一个 attach，全平台相同）──────────────
 opencode attach http://127.0.0.1:4096        # 终端 1：接管绑定了 4096 的项目
@@ -209,9 +209,9 @@ opencode attach http://127.0.0.1:4097        # 终端 2：接管绑定了 4097 �
 #### 细节备忘
 
 - 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47824`）。工作目录存在 **Directory**（`workspacePath`），项目通过 `directoryId` 继承；默认会话保存在 **Project**（`defaultSessionId`），所有任务从所属项目读取同一个 Session。OpenCode Server 地址只由 Taskboard 服务端环境变量 `TASKBOARD_OPENCODE_URL` 配置，目录、项目和全局设置均不保存或修改该地址。任务表不再存储独立 `sessionId`，任务级会话输入不会覆盖项目绑定。新建项目需选择目录和项目默认 Session，服务端会按统一部署地址校验 Session 的实际工作目录。
-- 唤醒优先级：任务通过所属项目继承 `defaultSessionId` 时，watch 通过对应 OpenCode 服务的 `prompt_async` 发送到项目默认会话；项目未配置 Session 时才使用 Directory 的 `serverUrl` / `--tui-url` 注入 TUI，最后才 headless。任务的 claim/body `sessionId` 只为旧客户端保留兼容字段，服务端不会用它建立任务级绑定。
+- 唤醒优先级：任务通过所属项目继承 `defaultSessionId`；所有 OpenCode 操作统一使用服务端部署配置 `TASKBOARD_OPENCODE_URL`。目录和项目只保存工作目录、Session 等业务数据，不保存 OpenCode URL。
 - 同一 serve 端口被多终端 attach 时注入是**广播**（每窗都出现）——多终端请各用各的端口，绑定时不会串
-- 端口/项目/终端数量不受限：项目返回的 `wakeChannel` 是从 Directory 计算出的兼容字段；实际 OpenCode Server URL 由 Directory 的 `serverUrl` 维护，可绑定局域网另一台机器。headless 通道连端口都不需要。
+- 端口/项目/终端数量不受限：Taskboard 内部访问 OpenCode 使用 `TASKBOARD_OPENCODE_URL`；浏览器跳转使用 `TASKBOARD_OPENCODE_PUBLIC_URL`。两者可以不同，不能将容器内部地址直接当作浏览器可访问地址。
 - 唤醒评论有生命周期（`pending`→`processing`→`processed`）：watch 唤走一条评论时置「唤醒中」，headless 通道跑完（exit 0）自动置「已处理」；只有 `pending` 的评论可编辑、可被唤醒，编辑保存即重新入队（watch 会再次唤醒，无需重打指令）；已处理/唤醒中的评论锁定编辑，面板评论上直接显示徽章。人工把状态改回 `pending`（面板编辑保存 / CLI `comment edit` / MCP `update_comment`）即再次唤醒；无论新建还是重唤，只要任务停留在待验收/完成，都会自动重开为「进行中」——agent 不会在名义上已结案的看板下干活
 
 ## 接入 agent 工具
@@ -302,6 +302,6 @@ docker compose up -d --build
 - 评论、活动流、标签、负责人、分支/worktree 绑定、起止日期（校验真实日历）、归档（归档父任务连带其未归档子任务）
 - 全文搜索（FTS5 trigram，标题/描述/评论，短查询退化 LIKE）、导出/导入 JSON（taskboard export/import）、统计面板（周吞吐/平均周期/贡献榜）、时间线视图、Mermaid 图渲染
 - 附件（元数据入库、正文落盘 `attachments/`，单文件 ≤10MB，每任务限额 20 个/总量 50MB 超限 400）、桌面通知、暗/亮主题、泳道分组、批量操作、j/k 键盘导航
-- 评论唤醒 Agent：`taskboard watch` 常驻订阅 SSE（`--exec` 适配任意 Agent CLI）。任务通过项目继承 `defaultSessionId` 时优先调用 OpenCode v1 `POST /session/:id/prompt_async` 复用原会话；项目未配置 Session 时才走 Directory `serverUrl` / `--tui-url` TUI 注入，再到 headless spawn。绑定会话投递失败时不创建新会话，评论保留 pending 供重试；`--on` 可改唤醒前缀，`--project` 可选作用域过滤，`--ignore-author a,b` 按作者忽略唤醒评论。
+- 评论唤醒 Agent：`taskboard watch` 常驻订阅 SSE。绑定项目默认 Session 时，服务端通过部署配置的 OpenCode 地址投递 `prompt_async`；目录、项目和全局设置均不维护 OpenCode URL。
 - SSE 实时刷新（Web 多端 + 跨 agent 工具共享同一块板；25s 心跳保活，断线指数退避重连 + 全量兜底拉取）
 - LAN 共享（`TASKBOARD_HOST=0.0.0.0`）、首次初始化管理员 + Session Cookie 登录、只读模式、人工 done 门禁、webhook 事件转发
