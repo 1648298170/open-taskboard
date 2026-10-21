@@ -253,7 +253,36 @@ export function connectOpenCodeSessionEvents(
   return () => es.close();
 }
 
-export function connectSSE(onChange: () => void): () => void {
+/** 上层路由所需的 StoreEvent 摘要；不解一整个事件体，避免把后端形状耦合进 UI。 */
+export interface SseChangeEvent {
+  /** StoreEvent.type，如 issue.updated / project.created；解析失败时为空串。 */
+  type: string;
+  /** issue/comment/dependency 事件携带的任务 id；hello 与未知事件为 null。 */
+  issueId: string | null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/**
+ * 解析一帧 `change` 的 StoreEvent JSON。永远不抛错——坏帧降级为空 type
+ * （上层按未知事件处理），不能因为一条脏数据断掉整个刷新链路。
+ */
+export function parseSseChange(data: string): SseChangeEvent {
+  let parsed: unknown;
+  try { parsed = JSON.parse(data); } catch { return { type: '', issueId: null }; }
+  if (!isRecord(parsed)) return { type: '', issueId: null };
+  const type = typeof parsed.type === 'string' ? parsed.type : '';
+  const payload = isRecord(parsed.payload) ? parsed.payload : {};
+  // comment.* / dependency.* 自带 issueId；issue.* 只带任务自身的 id。
+  const issueId = typeof payload.issueId === 'string'
+    ? payload.issueId
+    : type.startsWith('issue.') && typeof payload.id === 'string' ? payload.id : null;
+  return { type, issueId };
+}
+
+export function connectSSE(onChange: (event: SseChangeEvent) => void): () => void {
   let closed = false;
   let es: EventSource | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -268,12 +297,14 @@ export function connectSSE(onChange: () => void): () => void {
       // hello（首次连接与每次重连）都全量刷新：断线期间的变更只会体现在
       // 新数据里且 change 事件已错过，靠这次兜底拉取。首次连接无害——数据
       // 本就要加载。
-      onChange();
+      onChange({ type: 'hello', issueId: null });
     });
-    // 每个 change 事件对应一次 store 变更，直接刷新——不能按 revision 去重：
-    // heartbeat 不 bump version，revision 不变，按 revision 过滤会把租约
-    // 徽章的刷新吞掉。
-    es.addEventListener('change', () => onChange());
+    // 每个 change 事件对应一次 store 变更；带上类型交给上层按需路由 + 合并。
+    // 不能按 revision 去重：heartbeat 不 bump version，revision 不变，按
+    // revision 过滤会把租约徽章的刷新吞掉。
+    es.addEventListener('change', event => {
+      onChange(parseSseChange((event as MessageEvent<string>).data));
+    });
     es.onerror = () => {
       es?.close();
       if (timer !== null) clearTimeout(timer);
