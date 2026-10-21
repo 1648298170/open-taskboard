@@ -710,7 +710,7 @@ export default function App() {
                     <div className="side-directory-projects">
                       {children.map(project => (
                         <button key={project.id} className={`side-item side-project-item${project.id === projectId ? ' active' : ''}`}
-                          title={`${project.name}\n${project.workspacePath}\n${project.wakeChannel}`}
+                          title={`${project.name}\n${project.workspacePath}`}
                           onContextMenu={e => { e.preventDefault(); setProjectMenu({ id: project.id, x: e.clientX, y: e.clientY }); }}
                           onClick={() => { setProjectId(project.id); closeDrawer(); }}>
                           <span className="side-name">{project.name}</span>
