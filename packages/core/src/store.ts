@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } 
 import { join } from 'node:path';
 import { isWakeComment, STATUSES, activeClaim } from './types.js';
 import type {
-  Activity, Attachment, Comment, DependencyEdge, Issue, IssuePatch, Priority, Progress, Project, Status, Stats, StoreEvent, WorkspaceDirectory
+  Activity, Attachment, Comment, DependencyEdge, Issue, IssuePatch, PendingWakeComment, Priority, Progress, Project, Status, Stats, StoreEvent, WorkspaceDirectory
 } from './types.js';
 import { ConflictError, NotFoundError, PermissionError, ValidationError } from './errors.js';
 import { configureDatabase, createDatabase } from './db.js';
@@ -727,6 +727,36 @@ export class Store {
 
   listComments(issueId: string): Comment[] {
     return this.comments.list(issueId);
+  }
+
+  // ---- wake delivery CAS (v21) -------------------------------------------
+  // The wake engine claims a pending comment BEFORE delivering it, so two
+  // sidecars (or a future embedded engine) can never deliver the same wake
+  // twice. claimWake is a single conditional UPDATE and returns a fresh
+  // per-attempt token; releaseWake only moves the row back when that exact
+  // token still holds it (ABA-safe). Neither emits an event: emitting a
+  // 'pending' transition here would re-trigger the engine's own subscription
+  // in a loop, and external delivery state is not a user-facing edit.
+
+  /** Claim a pending wake comment; null when it is no longer pending. */
+  claimWake(commentId: string, claimer: string): string | null {
+    if (!claimer.trim()) throw new ValidationError('claimer must be non-empty');
+    return this.comments.claim(commentId, claimer.trim());
+  }
+
+  /**
+   * Release a claimed wake comment: 'pending' reverts a failed delivery,
+   * 'processed' finalizes a headless success. Returns false when the claim
+   * token no longer owns the row (another attempt claimed it in between).
+   */
+  releaseWake(commentId: string, claimToken: string, nextStatus: 'pending' | 'processed'): boolean {
+    if (!claimToken) return false;
+    return this.comments.release(commentId, claimToken, nextStatus);
+  }
+
+  /** Startup sweep input for the wake engine: all pending comments + issue context. */
+  listPendingWakeComments(): PendingWakeComment[] {
+    return this.comments.listPending();
   }
 
   // ---- activities: latest first, capped by the repo (default 50) ----

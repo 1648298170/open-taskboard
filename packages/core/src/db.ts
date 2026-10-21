@@ -354,6 +354,21 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       db.exec('ALTER TABLE directories DROP COLUMN server_url');
     }
     if (hasTable(db, 'app_settings')) db.exec("DELETE FROM app_settings WHERE key = 'default_opencode_server_url'");
+  },
+  // v20 -> v21: wake-delivery CAS claiming. claimed_by holds the per-attempt
+  // claim token (owned by the wake engine, not a public Comment field);
+  // updated_at tracks every status transition. The non-constant DEFAULT is
+  // applied at INSERT time only — SQLite refuses it in ADD COLUMN when rows
+  // already exist, so the backfill seeds existing rows from created_at and the
+  // repo layer writes updated_at explicitly from here on.
+  (db: DatabaseSync) => {
+    if (!hasColumn(db, 'comments', 'claimed_by')) {
+      db.exec("ALTER TABLE comments ADD COLUMN claimed_by TEXT NOT NULL DEFAULT ''");
+    }
+    if (!hasColumn(db, 'comments', 'updated_at')) {
+      db.exec("ALTER TABLE comments ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''");
+      db.exec('UPDATE comments SET updated_at = created_at');
+    }
   }
 ];
 

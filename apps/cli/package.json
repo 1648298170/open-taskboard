@@ -19,7 +19,8 @@
   },
   "dependencies": {
     "@taskboard/core": "workspace:*",
-    "@taskboard/server": "workspace:*"
+    "@taskboard/server": "workspace:*",
+    "@taskboard/wake": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

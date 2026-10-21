@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeSseParser, findCorrelatedAssistant, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor,sessionBaseCandidates, isIgnoredAuthor, fetchWithTimeout, WATCH_REQUEST_TIMEOUT_MS, type IssueDetailLike } from '../src/commands/watch.js';
+import { makeSseParser, findCorrelatedAssistant, shouldWake, decideWake, buildWakePrompt, acquireWatchLock, missedWakes, wakeKey, wantsProject, channelFor,sessionBaseCandidates, isIgnoredAuthor, fetchWithTimeout, WATCH_REQUEST_TIMEOUT_MS, type IssueDetailLike } from '../src/index.js';
 
 
 describe('findCorrelatedAssistant（唤醒请求与 OpenCode 消息关联）', () => {
@@ -331,3 +331,4 @@ describe('sessionBaseCandidates（唤醒服务地址回退）', () => {
     );
   });
 });
+

@@ -140,6 +140,25 @@ export interface Comment {
   createdAt: string;
 }
 
+/**
+ * One pending wake comment joined with its issue. This is the wake engine's
+ * startup sweep payload: the engine filters the tiny pending set in JS with
+ * isWakeComment instead of walking projects → issues → details.
+ *
+ * Deliberately NOT a Comment: claimed_by/updated_at are internal CAS state and
+ * must never leak into the public comment payload.
+ */
+export interface PendingWakeComment {
+  id: string;
+  issueId: string;
+  projectId: string;
+  issueTitle: string;
+  author: string;
+  body: string;
+  status: CommentStatus;
+  createdAt: string;
+}
+
 export interface Activity {
   id: string;
   issueId: string;

@@ -1,0 +1,35 @@
+{
+  "name": "@taskboard/wake",
+  "version": "0.3.0",
+  "description": "Wake-delivery engine shared by the CLI sidecar and the embedded server (phase 2)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "check": "tsc --noEmit",
+    "test": "tsx --test \"test/*.test.ts\""
+  },
+  "dependencies": {
+    "@taskboard/core": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "license": "MIT"
+}
