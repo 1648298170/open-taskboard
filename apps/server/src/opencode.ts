@@ -45,6 +45,15 @@ export function resolveOpenCodeBase(explicitUrl: string | undefined, projectChan
   return normalizeOpenCodeBase(FALLBACK_OPENCODE_URL);
 }
 
+/** Build a browser-facing OpenCode Session URL without exposing the server's internal Docker address. */
+export function buildOpenCodePublicSessionUrl(workspacePath: string, sessionId: string): string | null {
+  const publicOrigin = (process.env.TASKBOARD_OPENCODE_PUBLIC_URL ?? '').trim();
+  if (!publicOrigin || !workspacePath.trim() || !sessionId.trim()) return null;
+  const base = normalizeOpenCodeBase(publicOrigin);
+  const encodedPath = Buffer.from(workspacePath.trim(), 'utf8').toString('base64').replace(/=+$/, '');
+  return new URL(`/${encodeURIComponent(encodedPath)}/session/${encodeURIComponent(sessionId.trim())}`, base).toString();
+}
+
 /** Resolve the single deployment-configured OpenCode endpoint. Directory and project records must not override it. */
 export function getConfiguredOpenCodeBase(): string {
   const configured = (process.env.TASKBOARD_OPENCODE_URL ?? '').trim();
