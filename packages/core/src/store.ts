@@ -645,7 +645,7 @@ export class Store {
   // an in-flight or finished instruction must keep its original meaning.
   // Back to pending = "wake it again": emits comment.updated so the watch
   // sidecar re-runs it without the human retyping the instruction.
-  updateComment(id: string, patch: { body?: string; status?: string }, actor = ''): Comment {
+  updateComment(id: string, patch: { body?: string; status?: string }, actor = '', authenticatedUsername: string | null = null): Comment {
     const cur = this.comments.get(id);
     if (!cur) throw new NotFoundError(`comment not found: ${id}`);
     if (patch.body !== undefined && cur.status !== 'pending') {
@@ -654,17 +654,19 @@ export class Store {
     if (patch.body !== undefined && !patch.body.trim()) {
       throw new ValidationError('comment body cannot be blank');
     }
-    // 编辑权限（人类评论保护）：只有经 web 面板创建署名（author='web' 或历史
-    // 匿名空签名）的评论，才可被 web 来源编辑；agent 的一切 body 编辑被拒，
-    // agent 创建的评论谁都不可编辑（保持 agent 发言原样，避免事后篡改）。
+    // 人工评论只能由创建它的登录用户编辑；未启用登录的本机模式继续兼容
+    // 旧版 web/匿名评论。Agent 评论不允许通过浏览器身份被改写。
     // 状态推进永远放行（watch/agent 需要推进 pending → processing → processed）。
     if (patch.body !== undefined) {
-      const mine = cur.author === 'web' || cur.author === '';
-      if (actor !== 'web' || !mine) {
+      const legacyWebComment = cur.author === 'web' || cur.author === '';
+      const mayEdit = authenticatedUsername !== null
+        ? cur.author === authenticatedUsername
+        : actor === 'web' && legacyWebComment;
+      if (!mayEdit) {
         throw new PermissionError(
-          !mine
-            ? `comment ${id} was created by agent '${cur.author}' and can never be edited`
-            : `only the web user who created comment ${id} may edit it`
+          legacyWebComment
+            ? `only the web user who created comment ${id} may edit it`
+            : `comment ${id} was created by '${cur.author}' and can only be edited by that user`
         );
       }
     }
