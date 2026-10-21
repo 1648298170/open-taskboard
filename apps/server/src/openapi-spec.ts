@@ -409,7 +409,7 @@ export const openApiSpec: OpenApiDocument = {
       parameters: [{ name: 'directoryId', in: 'path', required: true, schema: { type: 'string' } }],
       patch: {
         operationId: 'updateDirectory',
-        summary: 'Update a Directory; linked Projects automatically inherit route changes'
+        summary: 'Update a Directory; linked Projects automatically inherit route changes',
         tags: ['directories'],
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PatchDirectoryRequest' } } } },
         responses: {
