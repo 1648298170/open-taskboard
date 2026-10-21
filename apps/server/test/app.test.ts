@@ -27,7 +27,7 @@ interface App {
 async function makeApp(env: Env = {}): Promise<App> {
   const dir = mkdtempSync(join(tmpdir(), 'tb-server-test-'));
   const store = new (await import('@taskboard/core')).Store(dir, new DatabaseSync(':memory:'));
-  const { app } = await buildApp({ store, env, dataDir: dir });
+  const { app } = await buildApp({ store, env: { TASKBOARD_OPENCODE_URL: 'http://127.0.0.1:4096', ...env }, dataDir: dir });
   return {
     app,
     store,
@@ -382,7 +382,7 @@ describe('workspace directory API', () => {
     try {
       const directoryRes = await app.inject({
         method: 'POST', url: '/api/directories', headers: json,
-        payload: { name: 'Workspace A', workspacePath: '/workspace/a', serverUrl: 'http://127.0.0.1:4096' }
+        payload: { name: 'Workspace A', workspacePath: '/workspace/a' }
       });
       assert.equal(directoryRes.statusCode, 201);
       const directory = directoryRes.json<{ id: string; workspacePath: string }>();
@@ -392,11 +392,11 @@ describe('workspace directory API', () => {
         payload: { name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a' }
       });
       assert.equal(projectRes.statusCode, 201);
-      const project = projectRes.json<{ directoryId: string; defaultSessionId: string; workspacePath: string; wakeChannel: string }>();
+      const project = projectRes.json<{ directoryId: string; defaultSessionId: string; workspacePath: string }>();
       assert.equal(project.directoryId, directory.id);
       assert.equal(project.defaultSessionId, 'ses_a');
       assert.equal(project.workspacePath, '/workspace/a');
-      assert.equal(project.wakeChannel, 'http://127.0.0.1:4096');
+      assert.equal('wakeChannel' in project, false);
     } finally {
       globalThis.fetch = originalFetch;
       cleanup();
@@ -408,7 +408,7 @@ describe('workspace directory API', () => {
     try {
       const created = await app.inject({
         method: 'POST', url: '/api/directories', headers: json,
-        payload: { name: 'Sync workspace', workspacePath: '/workspace/old', serverUrl: 'http://127.0.0.1:4096' }
+        payload: { name: 'Sync workspace', workspacePath: '/workspace/old' }
       });
       const directoryId = created.json<{ id: string }>().id;
       const projectRes = await app.inject({
@@ -427,14 +427,14 @@ describe('workspace directory API', () => {
 
       const changed = await app.inject({
         method: 'PATCH', url: `/api/directories/${directoryId}`, headers: json,
-        payload: { workspacePath: '/workspace/new', serverUrl: 'http://127.0.0.1:4097' }
+        payload: { workspacePath: '/workspace/new' }
       });
       assert.equal(changed.statusCode, 200, changed.body);
       const projectAfter = (await app.inject({
         method: 'GET', url: `/api/projects/${projectId}`
-      })).json<{ workspacePath: string; wakeChannel: string; defaultSessionId: string | null }>();
+      })).json<{ workspacePath: string; defaultSessionId: string | null }>();
       assert.equal(projectAfter.workspacePath, '/workspace/new');
-      assert.equal(projectAfter.wakeChannel, 'http://127.0.0.1:4097');
+      assert.equal('wakeChannel' in projectAfter, false);
       assert.equal(projectAfter.defaultSessionId, null);
       const issueAfter = (await app.inject({
         method: 'GET', url: `/api/issues/${issueId}`
@@ -444,61 +444,29 @@ describe('workspace directory API', () => {
     } finally { cleanup(); }
   });
 
-  it('never uses global defaults to bind a Session for an unconfigured Directory', async () => {
-    const { app, store, cleanup } = await makeApp();
-    const originalFetch = globalThis.fetch;
-    let upstreamRequests = 0;
-    globalThis.fetch = (async () => {
-      upstreamRequests++;
-      return new Response(JSON.stringify([
-        { id: 'ses_fake', title: 'Fake fallback', directory: '/workspace/a', time: { updated: 10 } }
-      ]), { status: 200, headers: { 'content-type': 'application/json' } });
-    }) as typeof fetch;
+  it('rejects URL overrides in directory and settings APIs', async () => {
+    const { app, cleanup } = await makeApp();
     try {
-      await app.inject({
+      const directory = await app.inject({
+        method: 'POST', url: '/api/directories', headers: json,
+        payload: { name: 'No URL', workspacePath: '/workspace/a', serverUrl: 'http://127.0.0.1:4096' }
+      });
+      assert.equal(directory.statusCode, 400);
+      const settings = await app.inject({
         method: 'PUT', url: '/api/settings', headers: json,
         payload: { defaultOpenCodeServerUrl: 'http://127.0.0.1:4096' }
       });
-      const directory = store.createDirectory({
-        name: 'No Server', workspacePath: '/workspace/a', serverUrl: ''
-      });
-
-      const boundCreate = await app.inject({
-        method: 'POST', url: '/api/projects', headers: { ...json, 'x-taskboard-actor': 'cli' },
-        payload: { id: 'p-bound', name: 'Must not bind', directoryId: directory.id, defaultSessionId: 'ses_fake' }
-      });
-      assert.equal(boundCreate.statusCode, 400, boundCreate.body);
-      assert.equal(upstreamRequests, 0, 'the global OpenCode URL must not be used as a Directory fallback');
-
-      const unboundCreate = await app.inject({
-        method: 'POST', url: '/api/projects', headers: { ...json, 'x-taskboard-actor': 'cli' },
-        payload: { id: 'p-unbound', name: 'Unbound', directoryId: directory.id }
-      });
-      assert.equal(unboundCreate.statusCode, 201, unboundCreate.body);
-
-      const bindPatch = await app.inject({
-        method: 'PATCH', url: '/api/projects/p-unbound', headers: json,
-        payload: { defaultSessionId: 'ses_fake' }
-      });
-      assert.equal(bindPatch.statusCode, 400, bindPatch.body);
-      assert.equal(upstreamRequests, 0, 'Session updates must use only the owning Directory route too');
-    } finally {
-      globalThis.fetch = originalFetch;
-      cleanup();
-    }
+      assert.equal(settings.statusCode, 400);
+    } finally { cleanup(); }
   });
 
-  it('exposes OpenCode status from the Directory menu endpoint', async () => {
-    const { app, cleanup } = await makeApp();
+
+  it('exposes global OpenCode status independent of any directory', async () => {
+    const { app, cleanup } = await makeApp({ TASKBOARD_OPENCODE_URL: '' });
     try {
-      const created = await app.inject({
-        method: 'POST', url: '/api/directories', headers: json,
-        payload: { name: 'Unconfigured workspace' }
-      });
-      const id = created.json<{ id: string }>().id;
-      const res = await app.inject({ method: 'GET', url: `/api/directories/${id}/opencode-status` });
+      const res = await app.inject({ method: 'GET', url: '/api/opencode/status' });
       assert.equal(res.statusCode, 200, res.body);
-      assert.equal(res.json<{ serverStatus: string }>().serverStatus, 'unconfigured');
+      assert.equal(res.json<{ serverStatus: string }>().serverStatus, 'unavailable');
       assert.deepEqual(res.json<{ projects: unknown[] }>().projects, []);
     } finally { cleanup(); }
   });
@@ -507,7 +475,7 @@ describe('workspace directory API', () => {
     const { app, cleanup } = await makeApp();
     const created = await app.inject({
       method: 'POST', url: '/api/directories', headers: json,
-      payload: { name: 'Workspace', workspacePath: '/workspace', serverUrl: 'http://127.0.0.1:4096' }
+      payload: { name: 'Workspace', workspacePath: '/workspace' }
     });
     const directoryId = created.json<{ id: string }>().id;
     const project = await app.inject({
@@ -523,12 +491,12 @@ describe('workspace directory API', () => {
     assert.equal(rejectedProjectPatch.statusCode, 400, 'Project API does not accept route overrides');
     const updated = await app.inject({
       method: 'PATCH', url: `/api/directories/${directoryId}`, headers: json,
-      payload: { workspacePath: '/workspace/renamed', serverUrl: 'http://127.0.0.1:4097' }
+      payload: { workspacePath: '/workspace/renamed' }
     });
     assert.equal(updated.statusCode, 200, updated.body);
     const projectAfter = (await app.inject({ method: 'GET', url: `/api/projects/${projectId}` })).json<{ workspacePath: string; wakeChannel: string }>();
     assert.equal(projectAfter.workspacePath, '/workspace/renamed');
-    assert.equal(projectAfter.wakeChannel, 'http://127.0.0.1:4097');
+    assert.equal('wakeChannel' in projectAfter, false);
 
     const issue = await app.inject({
       method: 'POST', url: `/api/projects/${projectId}/issues`,
@@ -554,7 +522,7 @@ describe('directory OpenCode session routes', () => {
     const requestedPath = 'D:\\workspace\\project-a';
     const created = await app.inject({
       method: 'POST', url: '/api/directories', headers: json,
-      payload: { name: 'Workspace', workspacePath: requestedPath, serverUrl: 'http://127.0.0.1:4096' }
+      payload: { name: 'Workspace', workspacePath: requestedPath }
     });
     const directoryId = created.json<{ id: string }>().id;
     const originalFetch = globalThis.fetch;
@@ -587,7 +555,7 @@ describe('directory OpenCode session routes', () => {
     const requestedPath = 'D:\\workspace\\project-a';
     const created = await app.inject({
       method: 'POST', url: '/api/directories', headers: json,
-      payload: { name: 'Workspace', workspacePath: requestedPath, serverUrl: 'http://127.0.0.1:4096' }
+      payload: { name: 'Workspace', workspacePath: requestedPath }
     });
     const directoryId = created.json<{ id: string }>().id;
     const originalFetch = globalThis.fetch;
@@ -631,7 +599,7 @@ describe('directory OpenCode session routes', () => {
     const { app, cleanup } = await makeApp();
     const created = await app.inject({
       method: 'POST', url: '/api/directories', headers: json,
-      payload: { name: 'Workspace', workspacePath: 'D:\\workspace\\project-a', serverUrl: 'http://127.0.0.1:4096' }
+      payload: { name: 'Workspace', workspacePath: 'D:\\workspace\\project-a' }
     });
     const directoryId = created.json<{ id: string }>().id;
     const originalFetch = globalThis.fetch;
@@ -1182,7 +1150,7 @@ describe('Directory routing safety', () => {
 
       const changed = await app.inject({
         method: 'PATCH', url: `/api/directories/${projectBefore.directoryId}`, headers: json,
-        payload: { workspacePath: '/workspace/other', serverUrl: 'http://127.0.0.1:4097' }
+        payload: { workspacePath: '/workspace/other' }
       });
       assert.equal(changed.statusCode, 409, changed.body);
       assert.match(changed.json<{ error: string }>().error, /active agent leases/);
