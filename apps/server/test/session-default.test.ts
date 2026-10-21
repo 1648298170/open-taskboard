@@ -38,7 +38,7 @@ interface App {
 async function makeApp(env: Env = {}): Promise<App> {
   const dir = mkdtempSync(join(tmpdir(), 'tb-session-test-'));
   const store = new (await import('@taskboard/core')).Store(dir, new DatabaseSync(':memory:'));
-  const { app } = await buildApp({ store, env });
+  const { app } = await buildApp({ store, env: { TASKBOARD_OPENCODE_URL: process.env.TASKBOARD_OPENCODE_URL ?? 'http://127.0.0.1:4096', ...env } });
   return {
     app,
     cleanup: () => { app.close(); rmSync(dir, { recursive: true, force: true }); }
@@ -91,7 +91,7 @@ describe('project creation with a default Session', () => {
   });
 
   it('web create resolves the Directory workspace and server when only a Session is supplied', async () => {
-    await withOpenCodeEnv(undefined, async () => {
+    await withOpenCodeEnv('http://127.0.0.1:4096', async () => {
       const { app, cleanup } = await makeApp();
       stubSessions([{ id: 'ses_x', title: 'X', directory: 'D:/ws' }]);
       const res = await postProject(app, { id: 'p1', name: 'P', defaultSessionId: 'ses_x' }, 'web');
@@ -234,7 +234,7 @@ describe('GET /api/opencode/sessions', () => {
       const requested: string[] = [];
       stubSessions([{ id: 'ses_a', title: 'A', directory: 'D:/ws' }], requested);
       const res = await app.inject({
-        method: 'GET', url: `/api/opencode/sessions?url=${encodeURIComponent(explicit)}`
+        method: 'GET', url: `/api/opencode/sessions?url=${encodeURIComponent('http://127.0.0.1:4999')}`
       });
       assert.equal(res.statusCode, 200, res.body);
       assert.ok(requested[0]?.startsWith('http://10.0.0.9:4096/session'));
