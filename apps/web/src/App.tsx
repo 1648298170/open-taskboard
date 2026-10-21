@@ -5,7 +5,7 @@ import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
 import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
-import { Activity, Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings, LogOut, RefreshCw } from 'lucide-react';
+import { Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings, LogOut, RefreshCw } from 'lucide-react';
 import { Drawer } from './components/Drawer';
 import { DirectoryPickerDialog } from './components/DirectoryPickerDialog';
 import { ProjectSessionDialog } from './components/ProjectSessionDialog';
@@ -201,7 +201,7 @@ export default function App() {
         .finally(() => { if (!cancelled) setProjSessionsLoading(false); });
     }, 300);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [projCreateOpen, projectDirectoryId, projWorkspacePath];
+  }, [projCreateOpen, projectDirectoryId, projWorkspacePath]);
 
 
   // ---- 深链 #/issue/<id> ----
