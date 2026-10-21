@@ -304,7 +304,7 @@ export const watchCommand: Command = {
       : undefined;
     // opencode server base — when set, tasks bound to a session wake via
     // prompt injection instead of a headless spawn.
-    const opencodeBase = String(flags.opencode ?? process.env.OPENCODE_SERVER_URL ?? '').replace(/\/+$/, '') || undefined;
+    const opencodeBase = String(flags.opencode ?? process.env.OPENCODE_SERVER_URL ?? process.env.TASKBOARD_OPENCODE_URL ?? '').replace(/\/+$/, '') || undefined;
     // opencode TUI remote-control base — when set, wakes append the prompt
     // into the attached TUI's input box (POST /tui/append-prompt). The human
     // reviews and presses enter: same session, full context, TUI-visible.
@@ -338,8 +338,7 @@ export const watchCommand: Command = {
     const processed = new Set<string>();
     // SSE 载荷不带 projectId——按需 GET 详情解析，按 issue 缓存 promise 防并发重复请求。
     const projectCache = new Map<string, Promise<string | null>>();
-    // 通道缓存：projectId → 项目 wake_channel。project.created/updated 事件即清空，
-    // 下一条唤醒重新拉取（改绑定无需重启 watch）。
+    // 兼容旧服务端的项目路由字段；新版本不再返回项目级 OpenCode URL。
     const channelCache = new Map<string, Promise<string | null>>();
     const resolveChannel = (projectId: string | null): Promise<string | null> => {
       if (!projectId) return Promise.resolve(null);
@@ -527,13 +526,8 @@ export const watchCommand: Command = {
 
       await reportExecution(issueId, 'started', '收到唤醒请求，开始解析任务路由');
       if (sessionId) {
-        // Project wakeChannel and --opencode normally point at the same server.
-        // Prefer the explicit session server, then use the project's configured
-        // OpenCode endpoint. /prompt_async is the OpenCode v1 API that queues
-        // execution in the EXISTING session and returns without waiting for it.
-        // 显式配置（--opencode / OPENCODE_SERVER_URL）必须优先于项目里存的值：
-        // 看板可能跑在 Docker 里，项目 wakeChannel 得写 host.docker.internal 才能从
-        // 容器访问宿主机；而 watch 跑在宿主机上，只有 127.0.0.1 才通。
+        // OpenCode URL is deployment/CLI configuration, never a project field.
+        // /prompt_async queues execution in the existing Session without waiting.
         const sessionCandidates = sessionBaseCandidates(opencodeBase, projectChannel, tuiUrl);
         const sessionBase = await firstHealthySessionBase(sessionCandidates);
         // decideWake owns the routing decision (bound + reachable server →
