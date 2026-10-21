@@ -677,8 +677,9 @@ export default function App() {
                           setDirectoryMenuOpen(null);
                           setDirectoryWorkspaceEditId(directory.id);
                           setDirectoryWorkspaceEditPath(directory.workspacePath);
-                          
                         }}><Folder size={13} /> 修改工作目录</button>
+                        <button role="menuitem" className="danger" onClick={async () => {
+                          setDirectoryMenuOpen(null);
                           const projectCount = projects.filter(project => project.directoryId === directory.id).length;
                           const ok = await confirmDialog({
                             title: `移除目录「${directoryLabel(directory.name)}」？`,
