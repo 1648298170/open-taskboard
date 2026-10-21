@@ -24,3 +24,28 @@ export function nextHi(hi: number, len: number, dir: 1 | -1): number {
 export function applyMention(comment: string, candidateValue: string): string {
   return `${comment.trim().replace(/@[\w-]*$/, candidateValue)} `;
 }
+
+export interface MentionContext {
+  /** @fragment 在原文中的起始下标。 */
+  start: number;
+  /** @ 后的片段（不含 @）。 */
+  fragment: string;
+}
+
+/** 光标处检测 @fragment（任意位置）：@ 须位于文本开头、空白或标点之后，避免邮箱 a@b 误触。 */
+export function detectMentionAt(text: string, caret: number): MentionContext | null {
+  const before = text.slice(0, Math.max(0, Math.min(caret, text.length)));
+  const m = /@([\w-]*)$/.exec(before);
+  if (!m) return null;
+  const start = caret - m[0].length;
+  if (start > 0 && /[\w@]/.test(before[start - 1])) return null;
+  return { start, fragment: m[1] };
+}
+
+/** 在 start 处把 @fragment 替换为候选值（后补一个空格），返回新文本与新光标位置。 */
+export function applyMentionAt(text: string, start: number, candidateValue: string): { text: string; caret: number } {
+  const before = text.slice(0, start);
+  const after = text.slice(start).replace(/^@[\w-]*/, '');
+  const inserted = `${candidateValue} `;
+  return { text: `${before}${inserted}${after}`, caret: before.length + inserted.length };
+}

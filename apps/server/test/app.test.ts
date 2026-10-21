@@ -172,6 +172,64 @@ describe('project default Session workspace validation', () => {
   });
 });
 
+describe('issue detail Session URL', () => {
+  const publicOrigin = 'http://192.168.3.7:4096';
+
+  async function seedProject(app: FastifyInstance, id: string, workspacePath: string): Promise<void> {
+    const res = await app.inject({
+      method: 'POST', url: '/api/projects', headers: json,
+      payload: { id, name: id, workspacePath }
+    });
+    assert.equal(res.statusCode, 201);
+  }
+
+  async function seedProjectIssue(app: FastifyInstance, projectId: string): Promise<string> {
+    const res = await app.inject({
+      method: 'POST', url: `/api/projects/${projectId}/issues`, headers: json, payload: { title: 'wake' }
+    });
+    assert.equal(res.statusCode, 201);
+    return res.json<{ id: string }>().id;
+  }
+
+  it('builds a browser-facing Session URL from the project workspace and Session', async () => {
+    const { app, store, cleanup } = await makeApp({ TASKBOARD_OPENCODE_PUBLIC_URL: publicOrigin });
+    try {
+      await seedProject(app, 'p-session-url', 'D:/workspace/project-a');
+      store.updateProject('p-session-url', { defaultSessionId: 'ses_expected' });
+      const issueId = await seedProjectIssue(app, 'p-session-url');
+
+      const detail = await app.inject({ method: 'GET', url: `/api/issues/${issueId}` });
+      assert.equal(detail.statusCode, 200);
+      const encoded = Buffer.from('D:/workspace/project-a', 'utf8').toString('base64').replace(/=+$/, '');
+      assert.equal(
+        detail.json<{ sessionUrl: string | null }>().sessionUrl,
+        `${publicOrigin}/${encoded}/session/ses_expected`
+      );
+    } finally { cleanup(); }
+  });
+
+  it('returns null when no Session is bound', async () => {
+    const { app, cleanup } = await makeApp({ TASKBOARD_OPENCODE_PUBLIC_URL: publicOrigin });
+    try {
+      await seedProject(app, 'p-no-session', 'D:/workspace/project-b');
+      const issueId = await seedProjectIssue(app, 'p-no-session');
+      const detail = await app.inject({ method: 'GET', url: `/api/issues/${issueId}` });
+      assert.equal(detail.json<{ sessionUrl: string | null }>().sessionUrl, null);
+    } finally { cleanup(); }
+  });
+
+  it('returns null when the public OpenCode origin is unconfigured', async () => {
+    const { app, store, cleanup } = await makeApp({ TASKBOARD_OPENCODE_PUBLIC_URL: '' });
+    try {
+      await seedProject(app, 'p-no-public-url', 'D:/workspace/project-c');
+      store.updateProject('p-no-public-url', { defaultSessionId: 'ses_expected' });
+      const issueId = await seedProjectIssue(app, 'p-no-public-url');
+      const detail = await app.inject({ method: 'GET', url: `/api/issues/${issueId}` });
+      assert.equal(detail.json<{ sessionUrl: string | null }>().sessionUrl, null);
+    } finally { cleanup(); }
+  });
+});
+
 describe('TASKBOARD_TOKEN auth', () => {
   it('rejects tokenless requests with 401', async () => {
     const { app, cleanup } = await makeApp({ TASKBOARD_TOKEN: 'sekret' });

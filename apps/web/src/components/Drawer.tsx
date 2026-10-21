@@ -4,7 +4,7 @@ import { activeClaim, api_, Commit, Issue, IssueDetail, PRIORITIES, STATUS_CN, S
 import { Markdown } from '../markdown';
 import { confirmDialog, promptDialog } from './dialogs';
 import { fmtHMLocal, fmtWhenLocal } from '../logic/time';
-import { applyMention, mentionCandidatesFor, MentionCandidate, nextHi } from '../logic/mention';
+import { applyMentionAt, detectMentionAt, mentionCandidatesFor, MentionCandidate, nextHi } from '../logic/mention';
 import { Pencil, Plus, Sparkles, UserRound, X } from 'lucide-react';
 import { WAKE_PREFIX } from '@taskboard/core/types';
 
@@ -48,32 +48,52 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
   const [commentDraft, setCommentDraft] = useState('');
   // v0.4: 依赖边移除同款两步内联确认（全局删除必须有二次确认）。
   const [confirmingDep, setConfirmingDep] = useState<string | null>(null);
-  // v0.4: mention 候选浮层 —— floating-ui 定位（top-start，翻转+防溢出）。
+  // v0.4: mention 候选浮层 —— floating-ui 定位（跟随输入框，翻转+防溢出）。
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
+  const editInputRef = useRef<HTMLTextAreaElement>(null);
   const mentionRef = useRef<HTMLSpanElement>(null);
+  // 补全作用于哪个输入框（新评论 / 编辑框）与光标处的 @fragment（任意位置输入 @ 触发）。
+  const [mentionBox, setMentionBox] = useState<'new' | 'edit' | null>(null);
+  const [mentionCtx, setMentionCtx] = useState<{ start: number; fragment: string } | null>(null);
+  const [mentionHi, setMentionHi] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
+  const updateMentionFromCaret = (box: 'new' | 'edit', text: string, caret: number | null): void => {
+    const ctx = detectMentionAt(text, caret ?? text.length);
+    if (ctx) {
+      setMentionBox(box); setMentionCtx(ctx); setMentionDismissed(false); setMentionHi(0);
+    } else {
+      setMentionBox(null); setMentionCtx(null);
+    }
+  };
+  const mentionHits = mentionBox !== null && mentionCtx
+    ? mentionCandidatesFor(mentionCtx.fragment, MENTION_CANDIDATES)
+    : [];
+  const mentionOpen = mentionBox !== null && mentionCtx !== null && mentionHits.length > 0 && !mentionDismissed;
+  const mentionHiSafe = Math.min(mentionHi, Math.max(mentionHits.length - 1, 0));
+  const mentionAnchor = mentionBox === 'edit' ? editInputRef : commentInputRef;
   useLayoutEffect(() => {
-    if (!comment.trim().startsWith('@') || !commentInputRef.current || !mentionRef.current) return;
-    void computePosition(commentInputRef.current, mentionRef.current, {
-      placement: 'top-start', strategy: 'fixed', middleware: [flip(), shift()]
+    if (!mentionOpen || !mentionAnchor.current || !mentionRef.current) return;
+    void computePosition(mentionAnchor.current, mentionRef.current, {
+      placement: 'bottom-start', strategy: 'fixed', middleware: [flip(), shift()]
     }).then(({ x, y }) => {
       if (mentionRef.current) {
         mentionRef.current.style.left = `${x}px`;
         mentionRef.current.style.top = `${y}px`;
       }
     });
-  }, [comment]);
-  const [mentionHi, setMentionHi] = useState(0);
-  const [mentionDismissed, setMentionDismissed] = useState(false);
-  useEffect(() => { setMentionDismissed(false); setMentionHi(0); }, [comment]);
-  const mentionFrag = /^@([\w-]*)$/.exec(comment.trim());
-  const mentionHits = mentionFrag
-    ? mentionCandidatesFor(mentionFrag[1], MENTION_CANDIDATES).filter(c => c.value !== comment.trim())
-    : [];
-  const mentionOpen = !!mentionFrag && mentionHits.length > 0 && !mentionDismissed;
-  const mentionHiSafe = Math.min(mentionHi, Math.max(mentionHits.length - 1, 0));
+  });
   const pickMention = (c: MentionCandidate): void => {
-    setComment(applyMention(comment, c.value));
-    commentInputRef.current?.focus();
+    if (mentionBox === null || mentionCtx === null) return;
+    const applied = applyMentionAt(
+      mentionBox === 'edit' ? commentDraft : comment,
+      mentionCtx.start, c.value
+    );
+    if (mentionBox === 'edit') setCommentDraft(applied.text);
+    else setComment(applied.text);
+    requestAnimationFrame(() => {
+      const el = mentionBox === 'edit' ? editInputRef.current : commentInputRef.current;
+      if (el) { el.selectionStart = el.selectionEnd = applied.caret; el.focus(); }
+    });
   };
   const [loadError, setLoadError] = useState<string | null>(null);
   // T6-36: 最近提交预览。null = 加载中/不可用。
@@ -189,14 +209,14 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
           <div className="detail-property-row">
             <label className="detail-property-label" htmlFor="drawer-start-date">计划开始</label>
             <div className="detail-property-control">
-              <input id="drawer-start-date" type="date" title="计划开始日期" defaultValue={detail.startDate ?? ''}
+                        <input id="drawer-start-date" key={`${detail.id}-start`} type="date" title="计划开始日期" defaultValue={detail.startDate ?? ''}
                 onChange={e => { const v = e.target.value || null; if (v !== detail.startDate) void patch({ startDate: v }); }} />
             </div>
           </div>
           <div className="detail-property-row">
             <label className="detail-property-label" htmlFor="drawer-due-date">截止日期</label>
             <div className="detail-property-control">
-              <input id="drawer-due-date" type="date" title="截止日期" defaultValue={detail.dueDate ?? ''}
+                        <input id="drawer-due-date" key={`${detail.id}-due`} type="date" title="截止日期" defaultValue={detail.dueDate ?? ''}
                 onChange={e => { const v = e.target.value || null; if (v !== detail.dueDate) void patch({ dueDate: v }); }} />
             </div>
           </div>
@@ -229,6 +249,9 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                 } catch (err) { onToast(`✗ ${(err as Error).message}`); }
               }}>归档</button>
             )}
+          {detail.sessionUrl && (
+            <a className="btn tiny" href={detail.sessionUrl} target={`oc-session-${detail.sessionId}`} rel="noreferrer">打开会话</a>
+          )}
           {detail.status !== 'done' && (
             <button className="btn tiny detail-wake-action"
               title={detail.sessionId
@@ -237,6 +260,9 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
               onClick={async () => {
                 try {
                   const created = await api_.addComment(detail.id, `${WAKE_PREFIX} 认领此任务并编排（拆解子任务、排依赖）`);
+                  // Land in the bound Session while the agent starts; the named
+                  // target focuses an already-open tab for the same Session.
+                  if (detail.sessionUrl) window.open(detail.sessionUrl, `oc-session-${detail.sessionId}`);
                   onToast(detail.sessionId
                     ? `已入队——watch 将投递到绑定会话 ${detail.sessionId}`
                     : '已入队——watch 将按项目路由送达或新建 headless 会话');
@@ -346,6 +372,17 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                       }}>确认删除</button>
                   ) : (
                     <>
+                      {(c.status === 'pending' || c.status === 'processing') && c.body.trimStart().startsWith(WAKE_PREFIX) && (
+                        <button className="icon-btn dep-remove" title="重新唤醒：重新入队并投递到绑定会话"
+                          onClick={async e => {
+                            e.stopPropagation();
+                            try {
+                              await api_.updateComment(c.id, { status: 'pending' });
+                              onToast('已重新入队，引擎将重新投递');
+                              onChanged(); await load();
+                            } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+                          }}><Sparkles size={12} /></button>
+                      )}
                       {c.status === 'pending' && (c.author === commentAuthor || (commentAuthor === 'web' && c.author === '')) && (
                         <button className="icon-btn dep-remove" title="编辑评论（仅自己发的评论可编辑；编辑保存后重新唤醒 agent）"
                           onClick={e => {
@@ -371,8 +408,23 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                       setEditingComment(null); onChanged(); await load();
                     } catch (err) { onToast(`✗ ${(err as Error).message}`); }
                   }}>
-                    <textarea rows={3} value={commentDraft} autoFocus
-                      onChange={e => setCommentDraft(e.target.value)} />
+                    <textarea ref={editInputRef} rows={3} value={commentDraft} autoFocus
+                      onChange={e => {
+                        const el = e.currentTarget;
+                        setCommentDraft(el.value);
+                        updateMentionFromCaret('edit', el.value, el.selectionStart);
+                      }}
+                      onBlur={() => { if (mentionOpen && mentionBox === 'edit') setMentionDismissed(true); }}
+                      onKeyDown={e => {
+                        if (e.nativeEvent.isComposing) return;
+                        if (mentionOpen && mentionBox === 'edit') {
+                          e.stopPropagation();
+                          if (e.key === 'ArrowDown') { e.preventDefault(); setMentionHi(h => nextHi(h, mentionHits.length, 1)); return; }
+                          if (e.key === 'ArrowUp') { e.preventDefault(); setMentionHi(h => nextHi(h, mentionHits.length, -1)); return; }
+                          if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionHits[mentionHiSafe]); return; }
+                          if (e.key === 'Escape') { e.preventDefault(); setMentionDismissed(true); return; }
+                        }
+                      }} />
                     <div className="comment-edit-row">
                       <button type="submit" className="btn tiny">保存并重新唤醒</button>
                       <button type="button" className="btn tiny ghost" onClick={() => setEditingComment(null)}>取消</button>
@@ -394,8 +446,12 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
           } catch (err) { onToast(`✗ ${(err as Error).message}`); }
         }}>
           <textarea ref={commentInputRef} rows={2} value={comment}
-            onChange={e => setComment(e.target.value)}
-            onBlur={() => { if (mentionOpen) setMentionDismissed(true); }}
+            onChange={e => {
+              const el = e.currentTarget;
+              setComment(el.value);
+              updateMentionFromCaret('new', el.value, el.selectionStart);
+            }}
+            onBlur={() => { if (mentionOpen && mentionBox === 'new') setMentionDismissed(true); }}
             onInput={e => {
               const el = e.currentTarget;
               el.style.height = 'auto';

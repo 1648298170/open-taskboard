@@ -13,6 +13,7 @@ import { NewIssueDialog } from './components/NewIssueDialog';
 import { StatsPanel } from './components/StatsPanel';
 import { Timeline } from './components/Timeline';
 import { sessionProjectName } from './logic/session';
+import { createSseBatcher } from './logic/sse';
 
 /** 从 location.hash 解析深链：#/issue/<id> → <id>，其余 → null。 */
 function issueIdFromHash(): string | null {
@@ -117,6 +118,8 @@ export default function App() {
   const lastSigRef = useRef<string | null>(null);
   // T6-31: refresh 里读的统计面板开关（同 notifyRef 的防过期手法）。
   const statsOpenRef = useRef(statsOpen);
+  // SSE 路由要判断「是否正在看这条任务」，用 ref 镜像 openId 避免重连闭包过期。
+  const openIdRef = useRef<string | null>(openId);
 
   const isUnauthorized = (err: unknown): boolean => err instanceof ApiError && err.status === 401;
 
@@ -175,6 +178,7 @@ export default function App() {
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => { notifyRef.current = notify; }, [notify]);
   useEffect(() => { statsOpenRef.current = statsOpen; }, [statsOpen]);
+  useEffect(() => { openIdRef.current = openId; }, [openId]);
 
   useEffect(() => {
     if (!projCreateOpen || !projectDirectoryId) {
@@ -356,7 +360,15 @@ export default function App() {
   useEffect(() => { if (projectId) { localStorage.setItem('project', projectId); void refresh(projectId); } }, [projectId, refresh]);
   useEffect(() => {
     if (authScreen !== 'board') return;
-    return connectSSE(() => { setDetailRefreshKey(key => key + 1); void loadProjects(); void refresh(); });
+    // 一波事件（拖卡 / agent 活动 / 唤醒状态机）在 250ms 内折叠成最多一次
+    // loadProjects + 一次 refresh；只有命中当前抽屉任务或重连 hello 才刷详情。
+    const batcher = createSseBatcher({
+      onProjects: () => void loadProjects(),
+      onIssues: () => void refresh(),
+      onDetail: () => setDetailRefreshKey(key => key + 1)
+    });
+    const disconnect = connectSSE(event => batcher.push(event, openIdRef.current));
+    return () => { disconnect(); batcher.dispose(); };
   }, [authScreen, loadProjects, refresh]);
   // T6-31: 面板打开（或切换项目）时立即拉取一次；开着期间的更新走 refresh 内的重取。
   useEffect(() => {
@@ -457,6 +469,25 @@ export default function App() {
     await refresh();
     showToast(`成功 ${ok} · 失败 ${failed.length}`,
       failed.length ? `失败: ${failed.map(id => `#${id}`).join(' ')}` : undefined);
+  };
+
+  // 一键验收：当前项目全部 in_review 任务逐个置 done（web 人工来源，免 confirm）。
+  const acceptAllReview = async (): Promise<void> => {
+    const targets = issues.filter(i => i.status === 'in_review');
+    if (targets.length === 0) { showToast('没有待验收的任务'); return; }
+    const preview = targets.slice(0, 8).map(i => `#${i.id} ${i.title}`);
+    if (targets.length > 8) preview.push(`… 共 ${targets.length} 个`);
+    const ok = await confirmDialog({ title: `验收 ${targets.length} 个待验收任务？`, lines: preview, confirmText: '全部验收' });
+    if (!ok) return;
+    let done = 0;
+    const failed: string[] = [];
+    for (const cur of targets) {
+      try { await api_.updateIssue(cur.id, { status: 'done', version: cur.version }); done++; }
+      catch { failed.push(`#${cur.id}`); }
+    }
+    await refresh();
+    showToast(`验收完成 ${done} · 失败 ${failed.length}`,
+      failed.length ? `失败: ${failed.join(' ')}` : undefined);
   };
 
   // ---- T5-29: 键盘快捷键 ----
@@ -791,6 +822,9 @@ export default function App() {
         {/* T5-26: 批量模式开关。 */}
         <button type="button" className={`btn tiny${batchMode ? ' active' : ''}`}
           onClick={() => { setBatchMode(b => !b); setSelected(new Set()); }}>批量模式</button>
+        {/* 一键验收当前项目全部待验收任务 */}
+        <button type="button" className="btn tiny" disabled={!issues.some(i => i.status === 'in_review')}
+          onClick={() => void acceptAllReview()}>验收全部待验收</button>
         <div className="sort-toggle">
           <button type="button" className={sortBy === 'created' ? 'active' : ''}
             onClick={() => setSortBy('created')}>按创建时间</button>
@@ -963,7 +997,7 @@ export default function App() {
             <div className="opencode-settings-status">
               <div className="directory-status-heading"><div><span className="dialog-eyebrow">OPENCODE</span><h3>运行状态</h3></div><button type="button" className="btn" disabled={directoryStatusLoading} onClick={() => void refreshOpenCodeStatus()}><RefreshCw size={13} /> 重新检测</button></div>
               {directoryStatusLoading && <p className="session-hint">正在检测 OpenCode 服务…</p>}{directoryStatusError && <p className="form-error">{directoryStatusError}</p>}
-              {openCodeStatus && <><div className="directory-status-summary"><span>服务状态</span><strong data-state={openCodeStatus.serverStatus}>{openCodeStatus.serverStatus === 'connected' ? '已连接' : '不可用'}</strong><small>检查于 {new Date(openCodeStatus.checkedAt).toLocaleTimeString()}</small></div>{openCodeStatus.error && <p className="form-error">{openCodeStatus.error}</p>}<div className="directory-status-projects"><div className="directory-status-section-title">项目会话</div>{openCodeStatus.projects.length === 0 && <p className="session-hint">当前没有项目。</p>}{openCodeStatus.projects.map(item => <div className="directory-status-project" key={item.projectId}><div className="directory-status-project-main"><strong>{item.projectName}</strong><span data-state={item.busy ? 'busy' : item.status}>{({busy:'执行中',running:'执行中',retry:'重试中',idle:'空闲','no-session':'未配置 Session',unavailable:'不可用'} as Record<string,string>)[item.status] ?? item.status}</span></div><small>{item.directoryName} · {item.workspacePath || '未配置工作目录'}</small><code title={item.sessionId ?? undefined}>{item.sessionId || '未配置默认 Session'}</code>{item.sessionUrl && <a href={item.sessionUrl} target="_blank" rel="noreferrer">打开 Session</a>}{item.sessionId && !item.sessionUrl && <small>如需浏览器跳转，请配置 TASKBOARD_OPENCODE_PUBLIC_URL</small>}{item.error && <small className="form-error">{item.error}</small>}</div>)}</div></>}{!openCodeStatus && !directoryStatusLoading && <p className="session-hint">点击「重新检测」查看服务状态。</p>}
+              {openCodeStatus && <><div className="directory-status-summary"><span>服务状态</span><strong data-state={openCodeStatus.serverStatus}>{openCodeStatus.serverStatus === 'connected' ? '已连接' : '不可用'}</strong><small>检查于 {new Date(openCodeStatus.checkedAt).toLocaleTimeString()}</small></div>{openCodeStatus.error && <p className="form-error">{openCodeStatus.error}</p>}</>}{!openCodeStatus && !directoryStatusLoading && <p className="session-hint">点击「重新检测」查看服务状态。</p>}
             </div>
             <p className="dialog-note">OpenCode Server 地址由服务端部署环境变量统一配置，目录和项目不保存或修改该地址。</p>
             <menu><button type="button" className="btn" onClick={() => setSettingsOpen(false)}>取消</button><button type="submit" className="btn primary">保存设置</button></menu>

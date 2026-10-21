@@ -4,7 +4,7 @@
 // hand-rolled type assertions.
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { createTaskWorktree, GitWorktreeError, scanGitRefs } from '../git-refs.js';
-import { abortOpenCodeSession, getConfiguredOpenCodeBase, getOpenCodeSessionRuntimeState, openOpenCodeEventStream } from '../opencode.js';
+import { abortOpenCodeSession, buildOpenCodePublicSessionUrl, getConfiguredOpenCodeBase, getOpenCodeSessionRuntimeState, openOpenCodeEventStream } from '../opencode.js';
 import { STATUSES, Store, ValidationError } from '@taskboard/core';
 import type { Status, TaskboardServerConfig } from '@taskboard/core';
 import { claimSchema, createIssueSchema, restUpdateIssueSchema, z } from '@taskboard/core/schemas';
@@ -51,7 +51,7 @@ function normalizeOpenCodeDirectory(value: string): string {
   return /^[a-zA-Z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
-const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerConfig; openCodeUrl?: string }> = async (app, { store, config, openCodeUrl }) => {
+const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerConfig; openCodeUrl?: string; publicOpenCodeUrl?: string }> = async (app, { store, config, openCodeUrl, publicOpenCodeUrl }) => {
   app.get('/api/projects/:projectId/issues', async (req: FastifyRequest<{ Params: ProjectParams; Querystring: { status?: Status; parentId?: string; includeDone?: string; archived?: string } }>, reply) => {
     if (!store.getProject(req.params.projectId)) {
       return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
@@ -120,8 +120,13 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
   app.get('/api/issues/:id', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
     const issue = store.getIssue(req.params.id);
     if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
+    // Browser-facing OpenCode link for the inherited Session; null when the
+    // public origin is unconfigured or the task has no Session.
+    const workspacePath = store.getProject(issue.projectId)?.workspacePath ?? '';
+    const sessionUrl = buildOpenCodePublicSessionUrl(workspacePath, issue.sessionId ?? '', publicOpenCodeUrl ?? '');
     return {
       ...issue,
+      sessionUrl,
       children: issue.parentId ? [] : store.listIssues(issue.projectId, { parentId: issue.id }),
       comments: store.listComments(issue.id),
       activities: store.listActivities(issue.id),

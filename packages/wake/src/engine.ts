@@ -550,7 +550,13 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       const commentId = String(payload.id ?? '');
       if (!commentId) return;
       const key = wakeKey(issueId, commentId);
-      if (seen.has(key)) return;
+      if (seen.has(key)) {
+        // Explicit re-wake: a pending status patch (重新唤醒 button / comment
+        // edit save) must re-deliver even though the sweep already enqueued
+        // this comment. Duplicate comment.created events still return early.
+        if (event.type !== 'comment.updated') return;
+        seen.delete(key);
+      }
       seen.add(key);
       const issueTitle = String(payload.issueTitle ?? '');
       const instruction = String(payload.body ?? '').trimStart().slice(config.prefix.length).trim();
