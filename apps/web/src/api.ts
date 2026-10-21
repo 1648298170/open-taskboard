@@ -177,8 +177,8 @@ export const api_ = {
     api<Issue>('POST', `/api/issues/${id}/heartbeat`, { agent }),
   releaseIssue: (id: string, agent = 'web') =>
     api<Issue>('POST', `/api/issues/${id}/release`, { agent }),
-  addComment: (id: string, author: string, body: string) =>
-    api<Comment>('POST', `/api/issues/${id}/comments`, { author, body }),
+  addComment: (id: string, body: string) =>
+    api<Comment>('POST', `/api/issues/${id}/comments`, { body }),
   deleteComment: (commentId: string) =>
     api<{ ok: true }>('DELETE', `/api/comments/${commentId}`),
   updateComment: (commentId: string, patch: { body?: string; status?: string }) =>
