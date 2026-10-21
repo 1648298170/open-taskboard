@@ -172,7 +172,7 @@ export const openApiSpec: OpenApiDocument = {
     '/api/auth/setup': {
       post: {
         operationId: 'initializeAdmin',
-        summary: 'Create the first administrator exactly once and start a session',
+        summary: 'Create the first administrator exactly once and start a browser session',
         tags: ['auth'],
         security: [],
         requestBody: {
@@ -182,7 +182,100 @@ export const openApiSpec: OpenApiDocument = {
               schema: {
                 type: 'object',
                 properties: {
-                  username: { type: 'string', minLength: 3, maxLength: 64, pattern: '^[a-zA-Z0-9._-]+
+                  username: { type: 'string', minLength: 3, maxLength: 64, pattern: '^[a-zA-Z0-9._-]+$' },
+                  password: { type: 'string', minLength: 12, maxLength: 256 }
+                },
+                required: ['username', 'password'],
+                additionalProperties: false
+              }
+            }
+          }
+        },
+        responses: {
+          201: {
+            description: 'Administrator created; session cookie set',
+            ...jsonResponse({
+              type: 'object',
+              properties: { ok: { type: 'boolean', const: true }, username: { type: 'string' } },
+              required: ['ok', 'username'],
+              additionalProperties: false
+            })
+          },
+          400: { $ref: '#/components/responses/BadRequest' },
+          409: {
+            description: 'Administrator already initialized, or local no-login mode is enabled',
+            ...jsonResponse(ERROR_REF)
+          },
+          500: { $ref: '#/components/responses/InternalError' }
+        }
+      }
+    },
+    '/api/auth/login': {
+      post: {
+        operationId: 'loginAdmin',
+        summary: 'Authenticate the administrator and start a browser session',
+        tags: ['auth'],
+        security: [],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  username: { type: 'string', minLength: 3, maxLength: 64 },
+                  password: { type: 'string', minLength: 1, maxLength: 256 }
+                },
+                required: ['username', 'password'],
+                additionalProperties: false
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: 'Authenticated; session cookie set',
+            ...jsonResponse({
+              type: 'object',
+              properties: { ok: { type: 'boolean', const: true }, username: { type: 'string' } },
+              required: ['ok', 'username'],
+              additionalProperties: false
+            })
+          },
+          400: { $ref: '#/components/responses/BadRequest' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          409: {
+            description: 'Administrator has not been initialized',
+            ...jsonResponse(ERROR_REF)
+          },
+          429: {
+            description: 'Too many login attempts from this IP',
+            ...jsonResponse(ERROR_REF)
+          },
+          500: { $ref: '#/components/responses/InternalError' }
+        }
+      }
+    },
+    '/api/auth/logout': {
+      post: {
+        operationId: 'logoutAdmin',
+        summary: 'Invalidate the current browser session',
+        tags: ['auth'],
+        security: [],
+        responses: {
+          200: {
+            description: 'Session invalidated and cookie cleared',
+            ...jsonResponse({
+              type: 'object',
+              properties: { ok: { type: 'boolean', const: true } },
+              required: ['ok'],
+              additionalProperties: false
+            })
+          }
+        }
+      }
+    },
+    '/api/meta': {
       get: {
         operationId: 'getMeta',
         summary: 'Status/priority enums',
@@ -1642,7 +1735,7 @@ export const openApiSpec: OpenApiDocument = {
     },
     responses: {
       BadRequest: errorResponse('Validation error (bad enum/filter value, malformed body, unknown strict-schema key, impossible parent/dependency)'),
-      Unauthorized: errorResponse('TASKBOARD_TOKEN is set and no valid Bearer header / ?token= was presented'),
+      Unauthorized: errorResponse('A valid browser session cookie or configured TASKBOARD_TOKEN was not presented'),
       Forbidden: errorResponse('Read-only mode (TASKBOARD_READONLY=1) rejects mutating requests; reserved for done-requires-confirmation'),
       NotFound: errorResponse('Resource (project / issue / parent / dependency target) not found'),
       Conflict: errorResponse('Optimistic-lock version mismatch, duplicate project id, or duplicate dependency edge (reserved for claim conflicts)'),
@@ -3280,6 +3373,12 @@ export default openApiSpec;
       }
     },
     securitySchemes: {
+      cookieAuth: {
+        type: 'apiKey',
+        in: 'cookie',
+        name: 'taskboard_session',
+        description: 'HttpOnly browser session cookie set by /api/auth/setup or /api/auth/login'
+      },
       bearerAuth: {
         type: 'http',
         scheme: 'bearer',
