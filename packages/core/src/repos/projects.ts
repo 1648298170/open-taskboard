@@ -19,7 +19,7 @@ export class ProjectRepo {
 
   create(input: {
     id?: string; name: string; directoryId?: string;
-    /** Legacy callers can seed a Directory; these fields are never stored on Project. */
+    /** Legacy callers may supply a workspace path to initialize a Directory. */
     workspacePath?: string; labels?: string;
     defaultSessionId?: string | null;
   }): string {
@@ -32,8 +32,7 @@ export class ProjectRepo {
       const directory = this.db.prepare('SELECT id FROM directories WHERE id = ?').get(directoryId) as { id: string } | undefined;
       if (!directory) throw new NotFoundError(`directory not found: ${directoryId}`);
     } else {
-      // Compatibility for old CLI/MCP clients: route values initialize a Directory,
-      // rather than becoming a project-level override.
+      // Compatibility for older CLI/MCP clients: a workspace path initializes a Directory; URLs are never accepted or stored.
       const workspacePath = input.workspacePath?.trim() ?? '';
       const label = workspacePath.split(/[\\/]/).filter(Boolean).at(-1) || '默认目录';
       const existing = this.db.prepare(
