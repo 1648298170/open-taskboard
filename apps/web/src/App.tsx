@@ -1078,7 +1078,7 @@ export default function App() {
                 void loadProjects();
                 void refresh();
                 showToast(routeChanged
-                  ? '已更新目录工作目录；所有项目自动继承此路径，项目默认 Session 已清除，请重新配置。'
+                  ? '已更新目录工作目录；所有项目自动继承此路径，现有 Session 绑定和 OpenCode 历史记录均已保留。'
                   : '目录工作目录未变化。');
               } catch (err) { showToast('✗ ' + (err as Error).message); }
             }}>
@@ -1094,7 +1094,7 @@ export default function App() {
                   <button type="button" className="btn" onClick={() => openWorkspaceDirectoryPicker('directory-edit')}><FolderOpen size={13} /> 选择目录</button>
                 </div>
               </label>
-              <p className="dialog-note">这是目录的唯一工作目录配置，目录下所有项目都会继承。工作目录变化后，为避免会话指向旧路径，项目默认 Session 会清除；存在有效 Agent 认领时会拒绝修改。</p>
+              <p className="dialog-note">这是目录的唯一工作目录配置，目录下所有项目都会继承。修改路径只影响后续 Session 列表查询，不会清除项目已有绑定，也不会删除 OpenCode 历史会话。旧 Session 的实际目录若与新路径不同，执行时可能无法匹配；可在项目会话配置中主动重新绑定。存在有效 Agent 认领时会拒绝修改。</p>
               <menu>
                 <button type="button" className="btn" onClick={() => setDirectoryWorkspaceEditId(null)}>取消</button>
                 <button type="submit" className="btn primary">保存路径</button>
