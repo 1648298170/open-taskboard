@@ -48,6 +48,9 @@ export default function App() {
   const [settingsServerInput, setSettingsServerInput] = useState('');
   const [directoryWorkspaceEditId, setDirectoryWorkspaceEditId] = useState<string | null>(null);
   const [directoryWorkspaceEditPath, setDirectoryWorkspaceEditPath] = useState('');
+  const [directoryServerEditId, setDirectoryServerEditId] = useState<string | null>(null);
+  const [directoryServerEditUrl, setDirectoryServerEditUrl] = useState('');
+  const [directorySyncProjects, setDirectorySyncProjects] = useState(false);
   const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
   const [directoryPickerTarget, setDirectoryPickerTarget] = useState<DirectoryPickerTarget>('settings');
   const [directoryPickerServerUrl, setDirectoryPickerServerUrl] = useState('');
@@ -686,16 +689,13 @@ export default function App() {
                           setDirectoryMenuOpen(null);
                           setDirectoryWorkspaceEditId(directory.id);
                           setDirectoryWorkspaceEditPath(directory.workspacePath);
+                          setDirectorySyncProjects(false);
                         }}><Folder size={13} /> 修改工作目录</button>
-                        <button role="menuitem" onClick={async () => {
+                        <button role="menuitem" onClick={() => {
                           setDirectoryMenuOpen(null);
-                          const serverUrl = await promptDialog({ title: '配置目录 OpenCode Server URL', lines: ['新建项目时会默认继承此地址；已创建项目的地址不会自动改变。', '留空表示清除。'], placeholder: '例如：http://127.0.0.1:4096', value: directory.serverUrl });
-                          if (serverUrl === null) return;
-                          try {
-                            const updated = await api_.updateDirectory(directory.id, { serverUrl: serverUrl.trim() });
-                            setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
-                            showToast(serverUrl.trim() ? '已更新目录 OpenCode Server URL' : '已清除目录 OpenCode Server URL');
-                          } catch (err) { showToast('✗ ' + (err as Error).message); }
+                          setDirectoryServerEditId(directory.id);
+                          setDirectoryServerEditUrl(directory.serverUrl);
+                          setDirectorySyncProjects(false);
                         }}><Link size={13} /> 修改 OpenCode Server URL</button>
                         <button role="menuitem" className="danger" onClick={async () => {
                           setDirectoryMenuOpen(null);
@@ -1103,11 +1103,19 @@ export default function App() {
               e.preventDefault();
               const workspacePath = directoryWorkspaceEditPath.trim();
               if (!workspacePath) { showToast('✗ 工作目录地址不能为空'); return; }
+              const syncProjects = directorySyncProjects;
               try {
-                const updated = await api_.updateDirectory(directory.id, { workspacePath });
+                const updated = await api_.updateDirectory(directory.id, { workspacePath, syncProjects });
                 setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
                 setDirectoryWorkspaceEditId(null);
-                showToast('已更新目录工作目录');
+                setDirectorySyncProjects(false);
+                if (syncProjects) {
+                  loadProjects();
+                  void refresh();
+                  showToast('已更新目录工作目录，并同步现有项目；相关 Session 绑定已清除，请重新绑定。');
+                } else {
+                  showToast('已更新目录工作目录；已有项目未改变。');
+                }
               } catch (err) { showToast('✗ ' + (err as Error).message); }
             }}>
               <h2>修改目录工作目录</h2>
@@ -1122,10 +1130,67 @@ export default function App() {
                   <button type="button" className="btn" onClick={() => openWorkspaceDirectoryPicker('directory-edit')}><FolderOpen size={13} /> 选择目录</button>
                 </div>
               </label>
-              <p className="dialog-note">新建项目会默认继承此路径；已创建项目的工作目录不会自动改变。</p>
+              <label className="sync-check-row">
+                <input type="checkbox" checked={directorySyncProjects}
+                  onChange={e => setDirectorySyncProjects(e.target.checked)} />
+                <span>同步更新该目录下现有的 {projects.filter(project => project.directoryId === directory.id).length} 个项目的工作目录</span>
+              </label>
+              <p className="dialog-note">
+                不勾选时只修改目录默认值。勾选后会覆盖已有项目的工作目录，并清除因路径变化而失效的默认 Session 与任务 Session 绑定；相关项目存在有效的 agent 认领时，保存会被拒绝。
+              </p>
               <menu>
                 <button type="button" className="btn" onClick={() => setDirectoryWorkspaceEditId(null)}>取消</button>
                 <button type="submit" className="btn primary">保存路径</button>
+              </menu>
+            </form>
+          </dialog>
+        );
+      })()}
+
+      {directoryServerEditId && (() => {
+        const directory = directories.find(item => item.id === directoryServerEditId);
+        if (!directory) return null;
+        return (
+          <dialog open className="new-dialog">
+            <form onSubmit={async e => {
+              e.preventDefault();
+              const serverUrl = directoryServerEditUrl.trim();
+              const syncProjects = directorySyncProjects;
+              try {
+                const updated = await api_.updateDirectory(directory.id, { serverUrl, syncProjects });
+                setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
+                setDirectoryServerEditId(null);
+                setDirectorySyncProjects(false);
+                if (syncProjects) {
+                  loadProjects();
+                  void refresh();
+                  showToast(serverUrl ? '已更新目录 Server URL，并同步现有项目；相关 Session 绑定已清除，请重新绑定。' : '已清除目录 Server URL 并同步现有项目；相关 Session 绑定已清除，请重新绑定。');
+                } else {
+                  showToast(serverUrl ? '已更新目录 OpenCode Server URL；已有项目未改变。' : '已清除目录 OpenCode Server URL；已有项目未改变。');
+                }
+              } catch (err) { showToast('✗ ' + (err as Error).message); }
+            }}>
+              <h2>修改目录 OpenCode Server URL</h2>
+              <label>目录
+                <input value={directoryLabel(directory.name)} disabled />
+              </label>
+              <label>OpenCode Server URL
+                <input autoFocus value={directoryServerEditUrl}
+                  placeholder="例如：http://127.0.0.1:4096"
+                  onChange={e => setDirectoryServerEditUrl(e.target.value)} />
+              </label>
+              <p className="dialog-note">留空表示清除此目录的默认 Server URL。不勾选时，仅影响之后新建的项目。</p>
+              <label className="sync-check-row">
+                <input type="checkbox" checked={directorySyncProjects}
+                  onChange={e => setDirectorySyncProjects(e.target.checked)} />
+                <span>同步更新该目录下现有的 {projects.filter(project => project.directoryId === directory.id).length} 个项目的 Server URL</span>
+              </label>
+              <p className="dialog-note">
+                勾选后会覆盖已有项目的 Server URL，并清除因服务地址变化而失效的默认 Session 与任务 Session 绑定；相关项目存在有效的 agent 认领时，保存会被拒绝。
+              </p>
+              <menu>
+                <button type="button" className="btn" onClick={() => { setDirectoryServerEditId(null); setDirectorySyncProjects(false); }}>取消</button>
+                <button type="submit" className="btn primary">保存配置</button>
               </menu>
             </form>
           </dialog>
