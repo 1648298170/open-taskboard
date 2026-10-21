@@ -2227,21 +2227,21 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   line-height: 1.4;
 }
 
-/* One property per row: label left, control right (TaskDetail's property rhythm). */
+/* Basic-info grid: two properties per row, label above a bounded control. */
 .detail-property-list {
-  display: grid;
-  margin: 0 0 14px;
-  border-top: 1px solid var(--line);
-}
-.detail-property-row {
-  display: grid;
-  grid-template-columns: 84px minmax(0, 1fr);
-  align-items: center;
-  gap: 12px;
-  min-height: 36px;
-  padding: 3px 0;
-  border-bottom: 1px solid var(--line);
-}
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 18px;
+    margin: 0 0 14px;
+    border-top: 1px solid var(--line);
+    padding-top: 8px;
+  }
+  .detail-property-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
 .detail-property-label {
   color: var(--ink-dim);
   font: 10px/1.5 var(--mono);
@@ -2250,19 +2250,17 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 .detail-property-control {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 8px;
   min-width: 0;
 }
 .detail-property-control .tb-select {
-  width: auto;
-  min-width: 120px;
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
   justify-content: space-between;
 }
 .detail-property-control input[type="date"] {
-  width: auto;
-  max-width: 100%;
+  width: 100%;
   min-width: 0;
   margin: 0;
   font: 11px/1.4 var(--mono);
@@ -2449,8 +2447,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 
 @media (max-width: 520px) {
   .drawer { padding: 14px 16px; }
-  .detail-property-row,
+  .detail-property-list { grid-template-columns: 1fr; }
   .detail-fact-row { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; }
-  .detail-property-control .tb-select { min-width: 0; }
-  .detail-property-control input[type="date"] { max-width: 148px; }
 }
