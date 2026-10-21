@@ -229,6 +229,9 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                 } catch (err) { onToast(`✗ ${(err as Error).message}`); }
               }}>归档</button>
             )}
+          {detail.sessionUrl && (
+            <a className="btn tiny" href={detail.sessionUrl} target={`oc-session-${detail.sessionId}`} rel="noreferrer">打开会话</a>
+          )}
           {detail.status !== 'done' && (
             <button className="btn tiny detail-wake-action"
               title={detail.sessionId
@@ -237,6 +240,9 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
               onClick={async () => {
                 try {
                   const created = await api_.addComment(detail.id, `${WAKE_PREFIX} 认领此任务并编排（拆解子任务、排依赖）`);
+                  // Land in the bound Session while the agent starts; the named
+                  // target focuses an already-open tab for the same Session.
+                  if (detail.sessionUrl) window.open(detail.sessionUrl, `oc-session-${detail.sessionId}`);
                   onToast(detail.sessionId
                     ? `已入队——watch 将投递到绑定会话 ${detail.sessionId}`
                     : '已入队——watch 将按项目路由送达或新建 headless 会话');

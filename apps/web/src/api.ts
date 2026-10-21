@@ -2,11 +2,17 @@
 // one definition shared by server / cli / mcp / web. Imported via the
 // './types' subpath so the Node-only SQLite Store stays out of the bundle.
 import type {
-  Activity, AppSettings, Attachment, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Stats, Status, WorkspaceDirectory
+  Activity, AppSettings, Attachment, Comment, DependencyEdge, Issue, IssueDetail as CoreIssueDetail, Priority, Progress, Project, Stats, Status, WorkspaceDirectory
 } from '@taskboard/core/types';
 
+/** IssueDetail plus the server-computed browser link to the inherited OpenCode Session. */
+export interface IssueDetail extends CoreIssueDetail {
+  /** Null when TASKBOARD_OPENCODE_PUBLIC_URL is unconfigured or no Session is bound. */
+  sessionUrl?: string | null;
+}
+
 export type {
-  Activity, Attachment, Comment, DependencyEdge, Issue, IssueDetail, Priority, Progress, Project, Stats, Status, WorkspaceDirectory
+  Activity, Attachment, Comment, DependencyEdge, Issue, Priority, Progress, Project, Stats, Status, WorkspaceDirectory
 };
 export { STATUSES, PRIORITIES, activeClaim } from '@taskboard/core/types';
 /** 中文状态名映射（列头/下拉/统计 chip 显示用；数据层存英文枚举不变） */

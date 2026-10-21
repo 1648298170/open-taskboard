@@ -1407,6 +1407,7 @@ export const openApiSpec: OpenApiDocument = {
           {
             type: 'object',
             properties: {
+              sessionUrl: { type: ['string', 'null'], description: '浏览器可访问的 OpenCode 会话页地址；未配置 PUBLIC_URL 或未绑定 Session 时为 null' },
               children: { type: 'array', items: ISSUE_REF, description: 'Direct children ([] when this issue is itself a child)' },
               comments: { type: 'array', items: { $ref: '#/components/schemas/Comment' } },
               activities: { type: 'array', items: { $ref: '#/components/schemas/Activity' } },
@@ -1414,7 +1415,7 @@ export const openApiSpec: OpenApiDocument = {
               blockedBy: { type: 'array', items: { type: 'string' }, description: 'Issue ids this one is blocked by' },
               blocks: { type: 'array', items: { type: 'string' }, description: 'Issue ids blocked by this one' }
             },
-            required: ['children', 'comments', 'activities', 'attachments', 'blockedBy', 'blocks']
+            required: ['sessionUrl', 'children', 'comments', 'activities', 'attachments', 'blockedBy', 'blocks']
           }
         ]
       },
