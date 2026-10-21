@@ -42,8 +42,6 @@ export interface Project {
   defaultSessionId: string | null;
   /** Computed from the owning Directory; never persisted on Project. */
   workspacePath: string;
-  /** Computed from the owning Directory; never persisted on Project. */
-  wakeChannel: string;
   labels: string;
   createdAt: string;
 }
