@@ -1,61 +1,58 @@
-// v0.4: session binding — issues may carry the opencode session they were
-// split from, so @agent wakes continue the same conversation context.
+// Task Sessions are inherited from the owning project's default Session.
+// Individual task rows and APIs cannot bind, rebind, or clear Session values.
 
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { Store } from '../src/index.js';
+import { createIssueSchema } from '../src/schemas.js';
 
-function fresh(): Store {
-  return new Store('.unused', new DatabaseSync(':memory:'));
+function fresh(): Store { return new Store('.unused', new DatabaseSync(':memory:')); }
+
+function projectWithSession(store: Store, sessionId: string | null = 'ses_project'): void {
+  const directory = store.createDirectory({
+    id: 'd1', name: 'D', workspacePath: 'D:/ws', serverUrl: 'http://127.0.0.1:4096'
+  });
+  store.createProject({ id: 'p1', name: 'P', directoryId: directory.id, defaultSessionId: sessionId });
 }
 
-describe('session binding (migration v9)', () => {
-  it('creates an issue with a bound sessionId and reads it back', () => {
+describe('inherited task Session', () => {
+  it('projects the owning project default Session onto each task', () => {
     const store = fresh();
-    store.createProject({ id: 'p1', name: 'P' });
-    const issue = store.createIssue({ projectId: 'p1', title: 'A', sessionId: 'ses_abc' });
-    assert.equal(issue.sessionId, 'ses_abc');
-    assert.equal(store.getIssue(issue.id)!.sessionId, 'ses_abc');
-  });
-
-  it('defaults sessionId to null (CLI/MCP created tasks stay unbound)', () => {
-    const store = fresh();
-    store.createProject({ id: 'p1', name: 'P' });
+    projectWithSession(store);
     const issue = store.createIssue({ projectId: 'p1', title: 'A' });
-    assert.equal(issue.sessionId, null);
+    assert.equal(issue.sessionId, 'ses_project');
+    assert.equal(store.getIssue(issue.id)!.sessionId, 'ses_project');
   });
 
-  it('patches sessionId: bind, rebind, and clear to null', () => {
+  it('does not persist legacy task Session inputs', () => {
     const store = fresh();
-    store.createProject({ id: 'p1', name: 'P' });
+    projectWithSession(store);
+    const issue = store.createIssue({ projectId: 'p1', title: 'A', sessionId: 'ses_override' });
+    assert.equal(issue.sessionId, 'ses_project');
+  });
+
+  it('updates existing task projections when the project default changes or clears', () => {
+    const store = fresh();
+    projectWithSession(store);
     const issue = store.createIssue({ projectId: 'p1', title: 'A' });
-
-    const bound = store.updateIssue(issue.id, { sessionId: 'ses_1' });
-    assert.equal(bound.sessionId, 'ses_1');
-    assert.equal(bound.version, 2);
-
-    const rebound = store.updateIssue(issue.id, { sessionId: 'ses_2' });
-    assert.equal(rebound.sessionId, 'ses_2');
-
-    const cleared = store.updateIssue(issue.id, { sessionId: null });
-    assert.equal(cleared.sessionId, null);
+    store.updateProject('p1', { defaultSessionId: 'ses_next' });
+    assert.equal(store.getIssue(issue.id)!.sessionId, 'ses_next');
+    store.updateProject('p1', { defaultSessionId: null });
+    assert.equal(store.getIssue(issue.id)!.sessionId, null);
   });
 
-  it('list/search projections carry sessionId too', () => {
+  it('includes the inherited Session in list and search projections', () => {
     const store = fresh();
-    store.createProject({ id: 'p1', name: 'P' });
-    const issue = store.createIssue({ projectId: 'p1', title: 'searchable', sessionId: 'ses_9' });
-    const listed = store.listIssues('p1').find(i => i.id === issue.id)!;
-    assert.equal(listed.sessionId, 'ses_9', 'list projection must include sessionId');
-    const found = store.search('searchable').find(i => i.id === issue.id)!;
-    assert.equal(found.sessionId, 'ses_9', 'search projection must include sessionId');
+    projectWithSession(store, 'ses_list');
+    const issue = store.createIssue({ projectId: 'p1', title: 'searchable' });
+    assert.equal(store.listIssues('p1').find(item => item.id === issue.id)?.sessionId, 'ses_list');
+    assert.equal(store.search('searchable').find(item => item.id === issue.id)?.sessionId, 'ses_list');
   });
 
-  it('createIssueSchema accepts sessionId (string or null)', async () => {
-    const { createIssueSchema } = await import('../src/schemas.js');
-    assert.equal(createIssueSchema.safeParse({ projectId: 'p', title: 't', sessionId: 'ses_x' }).success, true);
-    assert.equal(createIssueSchema.safeParse({ projectId: 'p', title: 't', sessionId: null }).success, true);
-    assert.equal(createIssueSchema.safeParse({ projectId: 'p', title: 't', sessionId: '' }).success, false);
+  it('rejects task-level Session input in the public create schema', () => {
+    assert.equal(createIssueSchema.safeParse({ projectId: 'p1', title: 't' }).success, true);
+    assert.equal(createIssueSchema.safeParse({ projectId: 'p1', title: 't', sessionId: 'ses_override' }).success, false);
+    assert.equal(createIssueSchema.safeParse({ projectId: 'p1', title: 't', sessionId: null }).success, false);
   });
 });
