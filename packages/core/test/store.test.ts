@@ -1492,20 +1492,30 @@ describe('Directory-owned workspace metadata', () => {
     assert.equal('wakeChannel' in project, false);
   });
 
-  it('updates the Directory workspace and clears inherited Session bindings', () => {
+  it('updates the Directory workspace while preserving inherited Session bindings and history', () => {
     const { store, events } = fresh();
     const directory = store.createDirectory({ id: 'dir-1', name: 'D', workspacePath: '/workspace/a' });
     const project = store.createProject({ id: 'p1', name: 'P', directoryId: directory.id, defaultSessionId: 'ses_project' });
     const issue = store.createIssue({ projectId: project.id, title: 'A' });
+
     store.updateDirectory(directory.id, { workspacePath: '/workspace/b' });
+
+    assert.equal(store.getDirectory(directory.id)!.workspacePath, '/workspace/b');
     assert.equal(store.getProject('p1')!.workspacePath, '/workspace/b');
     assert.equal('wakeChannel' in store.getProject('p1')!, false);
-    assert.equal(store.getProject('p1')!.defaultSessionId, null);
-    assert.equal(store.getIssue(issue.id)!.sessionId, null);
-    assert.ok(store.listActivities(issue.id).some(activity => activity.action === 'session-unbound'));
+    assert.equal(store.getProject('p1')!.defaultSessionId, 'ses_project');
+    assert.equal(store.getIssue(issue.id)!.sessionId, 'ses_project');
+    assert.ok(!store.listActivities(issue.id).some(activity => activity.action === 'session-unbound'));
+
     const upd = events.find(e => e.type === 'project.updated');
     assert.ok(upd);
-    assert.deepEqual(upd!.payload.fields, ['workspacePath', 'defaultSessionId']);
+    assert.deepEqual(upd!.payload.fields, ['workspacePath']);
+    assert.ok(!events.some(event =>
+      event.type === 'issue.updated'
+      && event.payload.id === issue.id
+      && Array.isArray(event.payload.fields)
+      && event.payload.fields.includes('sessionId')
+    ));
   });
 
   it('does not allow workspace changes while a task has an active Agent lease', () => {
@@ -1542,16 +1552,18 @@ describe('workspace directories', () => {
     const directory = store.createDirectory({
       id: 'work-b', name: 'Workspace B', workspacePath: 'D:\\workspace\\old-root'
     });
-    const existing = store.createProject({ id: 'p-existing', name: 'Existing Project', directoryId: directory.id });
+    const existing = store.createProject({
+      id: 'p-existing', name: 'Existing Project', directoryId: directory.id, defaultSessionId: 'ses_existing'
+    });
     const updated = store.updateDirectory(directory.id, { workspacePath: 'D:\\workspace\\new-root' });
     assert.equal(updated.workspacePath, 'D:\\workspace\\new-root');
     assert.equal(store.getProject(existing.id)!.workspacePath, 'D:\\workspace\\new-root');
-    assert.equal(store.getProject(existing.id)!.defaultSessionId, null);
+    assert.equal(store.getProject(existing.id)!.defaultSessionId, 'ses_existing');
     const project = store.createProject({ id: 'p-b', name: 'Project B', directoryId: directory.id });
     assert.equal(project.workspacePath, 'D:\\workspace\\new-root');
   });
 
-  it('workspace changes clear Sessions for projects in that Directory only', () => {
+  it('workspace changes preserve Sessions for projects in that Directory only', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
     const directory = store.createDirectory({ id: 'sync-dir', name: 'Sync directory', workspacePath: '/workspace/old' });
     const otherDirectory = store.createDirectory({ id: 'other-dir', name: 'Other directory', workspacePath: '/other' });
@@ -1561,13 +1573,13 @@ describe('workspace directories', () => {
     const issue = store.createIssue({ projectId: 'sync-a', title: 'Bound task' });
     const updatedDirectory = store.updateDirectory(directory.id, { workspacePath: '/workspace/new' });
     assert.equal(updatedDirectory.workspacePath, '/workspace/new');
-    for (const id of ['sync-a', 'sync-b']) {
+    for (const [id, sessionId] of [['sync-a', 'ses-project-a'], ['sync-b', 'ses-project-b']]) {
       const project = store.getProject(id)!;
       assert.equal(project.workspacePath, '/workspace/new');
-      assert.equal(project.defaultSessionId, null);
+      assert.equal(project.defaultSessionId, sessionId);
     }
-    assert.equal(store.getIssue(issue.id)?.sessionId, null);
-    assert.ok(store.listActivities(issue.id).some(activity => activity.action === 'session-unbound'));
+    assert.equal(store.getIssue(issue.id)?.sessionId, 'ses-project-a');
+    assert.ok(!store.listActivities(issue.id).some(activity => activity.action === 'session-unbound'));
     assert.deepEqual(
       [store.getProject('other-project')!.workspacePath, store.getProject('other-project')!.defaultSessionId],
       ['/other', 'ses-other']
