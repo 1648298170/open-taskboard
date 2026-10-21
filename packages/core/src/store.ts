@@ -194,7 +194,7 @@ export class Store {
     this.emit('directory.updated', { id, fields: Object.keys(patch) });
     if (routingChanged) {
       for (const project of directoryProjects) {
-        this.emit('project.updated', { id: project.id, fields: ['workspacePath', 'wakeChannel', 'defaultSessionId'] });
+        this.emit('project.updated', { id: project.id, fields: ['workspacePath', 'defaultSessionId'] });
         for (const issue of this.issues.list(project.id, { archived: 'all' })) {
           this.emit('issue.updated', { id: issue.id, fields: ['sessionId'] });
         }
@@ -229,7 +229,7 @@ export class Store {
   }
 
   // ---- projects ----
-  createProject(input: { id?: string; name: string; directoryId?: string; defaultSessionId?: string | null; workspacePath?: string; wakeChannel?: string; labels?: string }): Project {
+  createProject(input: { id?: string; name: string; directoryId?: string; defaultSessionId?: string | null; workspacePath?: string; labels?: string }): Project {
     const id = this.projects.create(input);
     this.emit('project.created', { id, directoryId: this.projects.get(id)?.directoryId ?? null });
     return this.projects.get(id)!;
