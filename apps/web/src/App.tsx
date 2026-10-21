@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api_, connectSSE, ApiError, DependencyEdge, Progress, Project, Issue, Stats, STATUS_CN, STATUSES, WorkspaceDirectory } from './api';
+import { api_, connectSSE, ApiError, DependencyEdge, DirectoryOpenCodeStatus, Progress, Project, Issue, Stats, STATUS_CN, STATUSES, WorkspaceDirectory } from './api';
 import { Board, buildBlockedByMap, flattenCardOrder, GroupBy, todayStr } from './components/Board';
 import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
 import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
-import { Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings, LogOut } from 'lucide-react';
+import { Activity, Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings, LogOut, RefreshCw } from 'lucide-react';
 import { Drawer } from './components/Drawer';
 import { DirectoryPickerDialog } from './components/DirectoryPickerDialog';
+import { ProjectSessionDialog } from './components/ProjectSessionDialog';
 import { NewIssueDialog } from './components/NewIssueDialog';
 import { StatsPanel } from './components/StatsPanel';
 import { Timeline } from './components/Timeline';
-import { sessionProjectName, sessionWorkspacePath } from './logic/session';
+import { sessionProjectName } from './logic/session';
 
 /** 从 location.hash 解析深链：#/issue/<id> → <id>，其余 → null。 */
 function issueIdFromHash(): string | null {
@@ -27,7 +28,7 @@ function directoryLabel(name: string): string {
   return trimmed.split(/[\\/]/).filter(Boolean).at(-1) || trimmed;
 }
 
-type DirectoryPickerTarget = 'settings' | 'new-directory' | 'project' | 'directory-edit' | 'project-route-edit';
+type DirectoryPickerTarget = 'settings' | 'new-directory' | 'directory-edit';
 type SortBy = 'priority' | 'created';
 type Theme = 'dark' | 'light';
 
@@ -41,8 +42,11 @@ export default function App() {
   const [directoryServerUrl, setDirectoryServerUrl] = useState('');
   const [directoryMenuOpen, setDirectoryMenuOpen] = useState<string | null>(null);
   const [projectMenu, setProjectMenu] = useState<{ id: string; x: number; y: number } | null>(null);
-  const [projectRouteEdit, setProjectRouteEdit] = useState<{ id: string; field: 'workspacePath' | 'wakeChannel' } | null>(null);
-  const [projectRouteEditValue, setProjectRouteEditValue] = useState('');
+  const [projectSessionProject, setProjectSessionProject] = useState<Project | null>(null);
+  const [directoryStatusOpenId, setDirectoryStatusOpenId] = useState<string | null>(null);
+  const [directoryOpenCodeStatus, setDirectoryOpenCodeStatus] = useState<DirectoryOpenCodeStatus | null>(null);
+  const [directoryStatusLoading, setDirectoryStatusLoading] = useState(false);
+  const [directoryStatusError, setDirectoryStatusError] = useState<string | null>(null);
   const [defaultWorkspacePath, setDefaultWorkspacePath] = useState('');
   const [defaultOpenCodeServerUrl, setDefaultOpenCodeServerUrl] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -52,7 +56,6 @@ export default function App() {
   const [directoryWorkspaceEditPath, setDirectoryWorkspaceEditPath] = useState('');
   const [directoryServerEditId, setDirectoryServerEditId] = useState<string | null>(null);
   const [directoryServerEditUrl, setDirectoryServerEditUrl] = useState('');
-  const [directorySyncProjects, setDirectorySyncProjects] = useState(false);
   const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
   const [directoryPickerTarget, setDirectoryPickerTarget] = useState<DirectoryPickerTarget>('settings');
   const [directoryPickerServerUrl, setDirectoryPickerServerUrl] = useState('');
@@ -124,6 +127,19 @@ export default function App() {
 
   const isUnauthorized = (err: unknown): boolean => err instanceof ApiError && err.status === 401;
 
+  const refreshDirectoryOpenCodeStatus = useCallback(async (directoryId: string): Promise<void> => {
+    setDirectoryStatusLoading(true);
+    setDirectoryStatusError(null);
+    try {
+      setDirectoryOpenCodeStatus(await api_.directoryOpenCodeStatus(directoryId));
+    } catch (err) {
+      setDirectoryStatusError((err as Error).message);
+      setDirectoryOpenCodeStatus(null);
+    } finally {
+      setDirectoryStatusLoading(false);
+    }
+  }, []);
+
   const refreshAuth = useCallback(async (): Promise<boolean> => {
     try {
       const status = await api_.authStatus();
@@ -145,30 +161,20 @@ export default function App() {
 
   const openWorkspaceDirectoryPicker = (target: DirectoryPickerTarget): void => {
     const editedDirectory = directories.find(directory => directory.id === directoryWorkspaceEditId);
-    const editedProject = projects.find(project => project.id === projectRouteEdit?.id);
     const serverUrl = target === 'settings'
       ? settingsServerInput.trim() || defaultOpenCodeServerUrl.trim()
       : target === 'new-directory'
         ? directoryServerUrl.trim() || defaultOpenCodeServerUrl.trim()
-        : target === 'project'
-          ? projServerUrl.trim() || directories.find(directory => directory.id === projectDirectoryId)?.serverUrl.trim() || defaultOpenCodeServerUrl.trim()
-          : target === 'project-route-edit'
-            ? editedProject?.wakeChannel.trim() || directories.find(directory => directory.id === editedProject?.directoryId)?.serverUrl.trim() || defaultOpenCodeServerUrl.trim()
-            : editedDirectory?.serverUrl.trim() || defaultOpenCodeServerUrl.trim();
+        : editedDirectory?.serverUrl.trim() || defaultOpenCodeServerUrl.trim();
     if (!serverUrl) {
       showToast('请先填写 OpenCode Server URL，再选择服务器上的工作目录。');
       return;
     }
-
     const initialPath = target === 'settings'
       ? settingsPathInput
       : target === 'new-directory'
         ? directoryWorkspacePath || defaultWorkspacePath
-        : target === 'project'
-          ? projWorkspacePath
-          : target === 'project-route-edit'
-            ? projectRouteEditValue
-            : directoryWorkspaceEditPath;
+        : directoryWorkspaceEditPath;
     setDirectoryPickerTarget(target);
     setDirectoryPickerServerUrl(serverUrl);
     setDirectoryPickerInitialPath(initialPath);
@@ -178,12 +184,7 @@ export default function App() {
   const handleWorkspaceDirectorySelect = (path: string): void => {
     if (directoryPickerTarget === 'settings') setSettingsPathInput(path);
     else if (directoryPickerTarget === 'new-directory') setDirectoryWorkspacePath(path);
-    else if (directoryPickerTarget === 'project') {
-      setProjWorkspacePath(path);
-      setProjDefaultSessionId('');
-    } else if (directoryPickerTarget === 'project-route-edit') {
-      setProjectRouteEditValue(path);
-    } else setDirectoryWorkspaceEditPath(path);
+    else setDirectoryWorkspaceEditPath(path);
     setDirectoryPickerOpen(false);
   };
 
@@ -663,7 +664,7 @@ export default function App() {
               const expanded = expandedDirectories.has(directory.id);
               return (
                 <section className="side-directory" key={directory.id}>
-                  <div className="side-directory-row">
+                  <div className="side-directory-row" onContextMenu={e => { e.preventDefault(); setDirectoryMenuOpen(directory.id); }}>
                     <button className="side-directory-toggle" title={directory.name} onClick={() => setExpandedDirectories(prev => {
                       const next = new Set(prev);
                       if (next.has(directory.id)) next.delete(directory.id); else next.add(directory.id);
@@ -676,8 +677,8 @@ export default function App() {
                     <button className="icon-btn" title="在此目录下新建项目" onClick={() => {
                       const existing = children[0];
                       setProjName(''); setProjId(''); setProjLabels('');
-                      setProjWorkspacePath(directory.workspacePath || existing?.workspacePath || '');
-                      setProjServerUrl(directory.serverUrl || existing?.wakeChannel || defaultOpenCodeServerUrl);
+                      setProjWorkspacePath(directory.workspacePath || '');
+                      setProjServerUrl(directory.serverUrl || defaultOpenCodeServerUrl);
                       setProjInheritLocked(true);
                       setProjectDirectoryId(directory.id); setProjCreateOpen(true);
                       setExpandedDirectories(prev => new Set(prev).add(directory.id));
@@ -698,14 +699,20 @@ export default function App() {
                           setDirectoryMenuOpen(null);
                           setDirectoryWorkspaceEditId(directory.id);
                           setDirectoryWorkspaceEditPath(directory.workspacePath);
-                          setDirectorySyncProjects(false);
+                          
                         }}><Folder size={13} /> 修改工作目录</button>
                         <button role="menuitem" onClick={() => {
                           setDirectoryMenuOpen(null);
                           setDirectoryServerEditId(directory.id);
                           setDirectoryServerEditUrl(directory.serverUrl);
-                          setDirectorySyncProjects(false);
+                          
                         }}><Link size={13} /> 修改 OpenCode Server URL</button>
+                        <button role="menuitem" onClick={() => {
+                          setDirectoryMenuOpen(null);
+                          setDirectoryStatusOpenId(directory.id);
+                          setDirectoryOpenCodeStatus(null);
+                          void refreshDirectoryOpenCodeStatus(directory.id);
+                        }}><Activity size={13} /> OpenCode 运行状态</button>
                         <button role="menuitem" className="danger" onClick={async () => {
                           setDirectoryMenuOpen(null);
                           const projectCount = projects.filter(project => project.directoryId === directory.id).length;
@@ -916,8 +923,6 @@ export default function App() {
 
       {openId && (
         <Drawer issueId={openId} projectId={projectId} refreshKey={detailRefreshKey}
-          workspacePath={projects.find(project => project.id === projectId)?.workspacePath}
-          sessionServerUrl={projects.find(project => project.id === projectId)?.wakeChannel}
           onClose={closeDrawer}
           onChanged={() => void refresh()}
           onToast={showToast}
@@ -928,7 +933,6 @@ export default function App() {
 
       <NewIssueDialog open={dialogOpen} projectId={projectId!}
         workspacePath={projects.find(project => project.id === projectId)?.workspacePath}
-        serverUrl={projects.find(project => project.id === projectId)?.wakeChannel}
         defaultSessionId={projects.find(project => project.id === projectId)?.defaultSessionId}
         issues={issues}
         onClose={() => setDialogOpen(false)}
@@ -1012,10 +1016,10 @@ export default function App() {
             const labels = projLabels.trim();
             if (!name) { showToast('✗ 项目名称不能为空'); return; }
             if (!projectDirectoryId || !directories.some(directory => directory.id === projectDirectoryId)) { showToast('✗ 请先选择目录'); return; }
-            if (!projWorkspacePath.trim() || !projServerUrl.trim()) { showToast('✗ 请填写项目工作目录和 OpenCode Server URL'); return; }
+            if (!projWorkspacePath.trim() || !projServerUrl.trim()) { showToast('✗ 请先在所属目录配置工作目录和 OpenCode Server URL'); return; }
             if (!projDefaultSessionId) { showToast('✗ 请先选择或新建一个 OpenCode Session'); return; }
             try {
-              const project = await api_.createProject({ ...(id ? { id } : {}), name, directoryId: projectDirectoryId, defaultSessionId: projDefaultSessionId, workspacePath: projWorkspacePath.trim(), wakeChannel: projServerUrl.trim(), ...(labels ? { labels } : {}) });
+              const project = await api_.createProject({ ...(id ? { id } : {}), name, directoryId: projectDirectoryId, defaultSessionId: projDefaultSessionId, ...(labels ? { labels } : {}) });
               setProjCreateOpen(false);
               setProjects(prev => [...prev, project]);
               setProjectId(project.id);
@@ -1029,22 +1033,15 @@ export default function App() {
             <div className="row">
               <label>项目 ID（可选）<input value={projId} placeholder="留空自动生成" onChange={e => setProjId(e.target.value)} /></label>
               <label>目录
-                <Select value={projectDirectoryId} disabled={projInheritLocked} onChange={value => { const existing = projects.find(project => project.directoryId === value); const directory = directories.find(d => d.id === value); setProjectDirectoryId(value); setProjWorkspacePath(directory?.workspacePath || existing?.workspacePath || ''); setProjServerUrl(existing?.wakeChannel || directory?.serverUrl || defaultOpenCodeServerUrl); setProjDefaultSessionId(''); setProjSessions([]); }}
+                <Select value={projectDirectoryId} disabled={projInheritLocked} onChange={value => { const directory = directories.find(d => d.id === value); setProjectDirectoryId(value); setProjWorkspacePath(directory?.workspacePath || ''); setProjServerUrl(directory?.serverUrl || defaultOpenCodeServerUrl); setProjDefaultSessionId(''); setProjSessions([]); }}
                   options={directories.map(directory => ({ value: directory.id, label: directory.name }))} placeholder="选择目录" />
               </label>
             </div>
-            <label>项目工作目录绝对路径
-              <div className="workspace-path-control">
-                <input required disabled={projInheritLocked} value={projWorkspacePath} placeholder="例如：D:\\workspace\\projects\\my-app"
-                  onChange={e => { setProjWorkspacePath(e.target.value); setProjDefaultSessionId(''); }} />
-                {!projInheritLocked && <button type="button" className="btn" onClick={() => openWorkspaceDirectoryPicker('project')}><FolderOpen size={13} /> 选择目录</button>}
-              </div>
-            </label>
-            <label>OpenCode Server URL
-              <input required disabled={projInheritLocked} value={projServerUrl} placeholder="例如：http://127.0.0.1:4096"
-                onChange={e => { setProjServerUrl(e.target.value); setProjDefaultSessionId(''); }} />
-            </label>
-            {projInheritLocked && <p className="session-hint">工作目录与 OpenCode Server URL 继承自目录，不可修改。</p>}
+            <div className="directory-config-summary">
+              <div><span>工作目录</span><code>{projWorkspacePath || '未配置，请先修改目录设置'}</code></div>
+              <div><span>OpenCode Server</span><code>{projServerUrl || '未配置，请先修改目录设置'}</code></div>
+            </div>
+            <p className="session-hint">工作目录与 Server URL 统一由所属目录维护，目录下所有项目自动继承。</p>
             <label>默认 OpenCode Session（必选）
               <div className="session-select-row">
                 <div className="session-select-control">
@@ -1055,8 +1052,6 @@ export default function App() {
                     // both stay editable so advanced setups can still override.
                     const pickedName = sessionProjectName(picked);
                     if (pickedName) setProjName(pickedName);
-                    const pickedWorkspace = sessionWorkspacePath(picked);
-                    if (!projInheritLocked && pickedWorkspace) setProjWorkspacePath(pickedWorkspace);
                   }}
                     options={projSessions.map(session => ({ value: session.id, label: session.title + ' · ' + session.id.slice(0, 12) }))}
                     placeholder="选择会话"
@@ -1068,7 +1063,7 @@ export default function App() {
             </label>
             {projSessionsError && <p className="form-error">{projSessionsError}</p>}
             <label>标签（可选）<input value={projLabels} placeholder="标签,逗号分隔" onChange={e => setProjLabels(e.target.value)} /></label>
-            <p className="dialog-note">目录工作目录仅是默认值；项目实际工作目录、OpenCode Server 和默认 Session 必须配置。服务端会校验 Session 的实际目录。新建任务自动继承项目的工作目录和默认 Session。</p>
+            <p className="dialog-note">工作目录与 Server URL 由目录统一管理；默认 Session 归项目所有，项目下的每个任务自动继承此会话。分支、工作树路径和负责人由 Agent 维护。</p>
             <menu><button type="button" className="btn" onClick={() => { setProjCreateOpen(false); setSessionCreateOpen(false); }}>取消</button><button type="submit" className="btn primary" disabled={projSessionsLoading || !projSessions.some(session => session.id === projDefaultSessionId)}>创建项目</button></menu>
           </form>
         </dialog>
@@ -1112,19 +1107,17 @@ export default function App() {
               e.preventDefault();
               const workspacePath = directoryWorkspaceEditPath.trim();
               if (!workspacePath) { showToast('✗ 工作目录地址不能为空'); return; }
-              const syncProjects = directorySyncProjects;
+
               try {
-                const updated = await api_.updateDirectory(directory.id, { workspacePath, syncProjects });
+                const routeChanged = workspacePath !== directory.workspacePath;
+                const updated = await api_.updateDirectory(directory.id, { workspacePath });
                 setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
                 setDirectoryWorkspaceEditId(null);
-                setDirectorySyncProjects(false);
-                if (syncProjects) {
-                  loadProjects();
-                  void refresh();
-                  showToast('已更新目录工作目录，并同步现有项目；相关 Session 绑定已清除，请重新绑定。');
-                } else {
-                  showToast('已更新目录工作目录；已有项目未改变。');
-                }
+                void loadProjects();
+                void refresh();
+                showToast(routeChanged
+                  ? '已更新目录工作目录；所有项目自动继承此路径，项目默认 Session 已清除，请重新配置。'
+                  : '目录工作目录未变化。');
               } catch (err) { showToast('✗ ' + (err as Error).message); }
             }}>
               <h2>修改目录工作目录</h2>
@@ -1139,14 +1132,7 @@ export default function App() {
                   <button type="button" className="btn" onClick={() => openWorkspaceDirectoryPicker('directory-edit')}><FolderOpen size={13} /> 选择目录</button>
                 </div>
               </label>
-              <label className="sync-check-row">
-                <input type="checkbox" checked={directorySyncProjects}
-                  onChange={e => setDirectorySyncProjects(e.target.checked)} />
-                <span>同步更新该目录下现有的 {projects.filter(project => project.directoryId === directory.id).length} 个项目的工作目录</span>
-              </label>
-              <p className="dialog-note">
-                不勾选时只修改目录默认值。勾选后会覆盖已有项目的工作目录，并清除因路径变化而失效的默认 Session 与任务 Session 绑定；相关项目存在有效的 agent 认领时，保存会被拒绝。
-              </p>
+              <p className="dialog-note">这是目录的唯一工作目录配置，目录下所有项目都会继承。工作目录变化后，为避免会话指向旧路径，项目默认 Session 会清除；存在有效 Agent 认领时会拒绝修改。</p>
               <menu>
                 <button type="button" className="btn" onClick={() => setDirectoryWorkspaceEditId(null)}>取消</button>
                 <button type="submit" className="btn primary">保存路径</button>
@@ -1164,19 +1150,17 @@ export default function App() {
             <form onSubmit={async e => {
               e.preventDefault();
               const serverUrl = directoryServerEditUrl.trim();
-              const syncProjects = directorySyncProjects;
+
               try {
-                const updated = await api_.updateDirectory(directory.id, { serverUrl, syncProjects });
+                const routeChanged = serverUrl !== directory.serverUrl;
+                const updated = await api_.updateDirectory(directory.id, { serverUrl });
                 setDirectories(prev => prev.map(item => item.id === updated.id ? updated : item));
                 setDirectoryServerEditId(null);
-                setDirectorySyncProjects(false);
-                if (syncProjects) {
-                  loadProjects();
-                  void refresh();
-                  showToast(serverUrl ? '已更新目录 Server URL，并同步现有项目；相关 Session 绑定已清除，请重新绑定。' : '已清除目录 Server URL 并同步现有项目；相关 Session 绑定已清除，请重新绑定。');
-                } else {
-                  showToast(serverUrl ? '已更新目录 OpenCode Server URL；已有项目未改变。' : '已清除目录 OpenCode Server URL；已有项目未改变。');
-                }
+                void loadProjects();
+                void refresh();
+                showToast(routeChanged
+                  ? '已更新目录 OpenCode Server URL；所有项目自动继承，项目默认 Session 已清除，请重新配置。'
+                  : '目录 OpenCode Server URL 未变化。');
               } catch (err) { showToast('✗ ' + (err as Error).message); }
             }}>
               <h2>修改目录 OpenCode Server URL</h2>
@@ -1188,17 +1172,13 @@ export default function App() {
                   placeholder="例如：http://127.0.0.1:4096"
                   onChange={e => setDirectoryServerEditUrl(e.target.value)} />
               </label>
-              <p className="dialog-note">留空表示清除此目录的默认 Server URL。不勾选时，仅影响之后新建的项目。</p>
-              <label className="sync-check-row">
-                <input type="checkbox" checked={directorySyncProjects}
-                  onChange={e => setDirectorySyncProjects(e.target.checked)} />
-                <span>同步更新该目录下现有的 {projects.filter(project => project.directoryId === directory.id).length} 个项目的 Server URL</span>
-              </label>
+              <p className="dialog-note">这是目录的唯一 Server URL 配置，目录下所有项目都会继承。URL 变化后，项目默认 Session 会清除；存在有效 Agent 认领时会拒绝修改。</p>
+
               <p className="dialog-note">
                 勾选后会覆盖已有项目的 Server URL，并清除因服务地址变化而失效的默认 Session 与任务 Session 绑定；相关项目存在有效的 agent 认领时，保存会被拒绝。
               </p>
               <menu>
-                <button type="button" className="btn" onClick={() => { setDirectoryServerEditId(null); setDirectorySyncProjects(false); }}>取消</button>
+                <button type="button" className="btn" onClick={() => { setDirectoryServerEditId(null);  }}>取消</button>
                 <button type="submit" className="btn primary">保存配置</button>
               </menu>
             </form>
@@ -1214,65 +1194,72 @@ export default function App() {
         onSelect={handleWorkspaceDirectorySelect}
       />
 
-      {projectRouteEdit && (() => {
-        const editedProject = projects.find(item => item.id === projectRouteEdit.id);
-        if (!editedProject) return null;
-        const editingPath = projectRouteEdit.field === 'workspacePath';
-        const currentValue = editingPath ? editedProject.workspacePath : editedProject.wakeChannel;
-        const nextValue = projectRouteEditValue.trim();
+      {directoryStatusOpenId && (() => {
+        const directory = directories.find(item => item.id === directoryStatusOpenId);
+        if (!directory) return null;
+        const status = directoryOpenCodeStatus;
+        const statusLabel = (value: string): string => ({
+          busy: '执行中', running: '执行中', retry: '重试中', idle: '空闲',
+          'no-session': '未配置项目 Session', unavailable: '不可用', unconfigured: '未配置 URL'
+        }[value] ?? value);
         return (
-          <dialog open className="new-dialog">
-            <form onSubmit={async e => {
-              e.preventDefault();
-              if (editingPath && !nextValue) {
-                showToast('工作目录不能为空');
-                return;
-              }
-              if (nextValue === currentValue) {
-                setProjectRouteEdit(null);
-                return;
-              }
-              try {
-                const updated = await api_.updateProject(editedProject.id,
-                  editingPath ? { workspacePath: nextValue } : { wakeChannel: nextValue });
-                setProjects(prev => prev.map(item => item.id === updated.id ? updated : item));
-                setProjectRouteEdit(null);
-                loadProjects();
-                void refresh();
-                showToast(editingPath
-                  ? '已更新项目工作目录；旧 Session 绑定已清除，请重新绑定。'
-                  : '已更新项目 OpenCode Server URL；旧 Session 绑定已清除，请重新绑定。');
-              } catch (err) { showToast('✗ ' + (err as Error).message); }
-            }}>
-              <h2>{editingPath ? '修改项目工作目录' : '修改项目 OpenCode Server URL'}</h2>
-              <label>项目
-                <input value={editedProject.name} disabled />
-              </label>
-              <label>{editingPath ? '工作目录地址' : 'OpenCode Server URL'}
-                <div className="workspace-path-control">
-                  <input autoFocus required={editingPath}
-                    type={editingPath ? 'text' : 'url'}
-                    value={projectRouteEditValue}
-                    placeholder={editingPath ? '例如：D:\\workspace\\projects\\my-app' : '例如：http://127.0.0.1:4096'}
-                    onChange={e => setProjectRouteEditValue(e.target.value)} />
-                  {editingPath && <button type="button" className="btn" onClick={() => openWorkspaceDirectoryPicker('project-route-edit')}><FolderOpen size={13} /> 选择目录</button>}
+          <dialog open className="new-dialog directory-status-dialog">
+            <div className="directory-status-heading">
+              <div><span className="dialog-eyebrow">OPENCODE</span><h2>{directory.name}</h2></div>
+              <button className="icon-btn" aria-label="关闭" onClick={() => setDirectoryStatusOpenId(null)}><X size={15} /></button>
+            </div>
+            <div className="directory-status-route">
+              <div><span>Server</span><code>{directory.serverUrl || '未配置'}</code></div>
+              <div><span>工作目录</span><code>{directory.workspacePath || '未配置'}</code></div>
+            </div>
+            {directoryStatusLoading && <p className="session-hint">正在同步 OpenCode 运行状态…</p>}
+            {directoryStatusError && <p className="form-error">{directoryStatusError}</p>}
+            {status && (
+              <>
+                <div className="directory-status-summary">
+                  <span>服务状态</span>
+                  <strong data-state={status.serverStatus}>
+                    {status.serverStatus === 'connected' ? '已连接' : status.serverStatus === 'unconfigured' ? '未配置' : '不可用'}
+                  </strong>
+                  <small>检查于 {new Date(status.checkedAt).toLocaleTimeString()}</small>
                 </div>
-              </label>
-              <p className="dialog-note">
-                {editingPath
-                  ? '此修改只作用于当前项目，不改变所在目录及其他项目。'
-                  : '留空会清除项目独立配置，后续唤醒将按默认路由解析。'}
-                修改后会清除该项目的默认 Session 与任务 Session 绑定，需重新绑定。
-              </p>
-              <p className="dialog-note">如果项目中存在正在执行且仍被 agent 认领的任务，服务端会拒绝修改；请先释放认领。</p>
-              <menu>
-                <button type="button" className="btn" onClick={() => setProjectRouteEdit(null)}>取消</button>
-                <button type="submit" className="btn primary">保存修改</button>
-              </menu>
-            </form>
+                {status.error && <p className="form-error">{status.error}</p>}
+                <div className="directory-status-projects">
+                  <div className="directory-status-section-title">项目会话</div>
+                  {status.projects.length === 0 && <p className="session-hint">该目录下还没有项目。</p>}
+                  {status.projects.map(item => (
+                    <div className="directory-status-project" key={item.projectId}>
+                      <div className="directory-status-project-main">
+                        <strong>{item.projectName}</strong>
+                        <span data-state={item.busy ? 'busy' : item.status}>{statusLabel(item.status)}</span>
+                      </div>
+                      <code title={item.sessionId ?? undefined}>{item.sessionId || '未配置默认 Session'}</code>
+                      {item.error && <small className="form-error">{item.error}</small>}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            <menu>
+              <button type="button" className="btn" onClick={() => setDirectoryStatusOpenId(null)}>关闭</button>
+              <button type="button" className="btn primary" disabled={directoryStatusLoading}
+                onClick={() => void refreshDirectoryOpenCodeStatus(directory.id)}><RefreshCw size={13} /> 重新同步</button>
+            </menu>
           </dialog>
         );
       })()}
+      <ProjectSessionDialog
+        open={Boolean(projectSessionProject)}
+        project={projectSessionProject}
+        onClose={() => setProjectSessionProject(null)}
+        onSaved={updated => {
+          setProjects(prev => prev.map(item => item.id === updated.id ? updated : item));
+          setProjectSessionProject(null);
+          void refresh();
+          showToast('已更新项目默认 Session；项目下的任务将自动继承');
+        }}
+      />
+
 
       {projectMenu && <div className="context-menu-backdrop" onClick={() => setProjectMenu(null)} />}
       {projectMenu && (() => {
@@ -1292,14 +1279,8 @@ export default function App() {
             }}><Pencil size={13} /> 修改项目名称</button>
             <button role="menuitem" onClick={() => {
               setProjectMenu(null);
-              setProjectRouteEdit({ id: project.id, field: 'workspacePath' });
-              setProjectRouteEditValue(project.workspacePath);
-            }}><Folder size={13} /> 修改工作目录</button>
-            <button role="menuitem" onClick={() => {
-              setProjectMenu(null);
-              setProjectRouteEdit({ id: project.id, field: 'wakeChannel' });
-              setProjectRouteEditValue(project.wakeChannel);
-            }}><Link size={13} /> 修改 OpenCode Server URL</button>
+              setProjectSessionProject(project);
+            }}><Link size={13} /> 配置默认 OpenCode Session</button>
             <button role="menuitem" className="danger" onClick={async () => {
               setProjectMenu(null);
               const ok = await confirmDialog({
