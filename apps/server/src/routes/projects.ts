@@ -166,7 +166,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
       const compatible = workspace
         ? sessions.filter(session => session.directory && normalizeDirectoryPath(session.directory) === normalizeDirectoryPath(workspace))
         : sessions;
-      return { sessions: compatible, workspacePath: workspace, serverUrl: base };
+      return { sessions: compatible, workspacePath: workspace };
     } catch (err) {
       return reply.code(502).send({ error: `无法读取 OpenCode 会话：${(err as Error).message}` });
     }
