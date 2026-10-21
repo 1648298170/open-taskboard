@@ -1528,11 +1528,16 @@ describe('workspace directories', () => {
     assert.deepEqual(store.listDirectories().map(item => item.id), ['work-a']);
   });
 
-  it('updates the directory default workspace path for future projects', () => {
+  it('updates the directory default path for future projects without changing existing projects by default', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
     const directory = store.createDirectory({ id: 'work-b', name: 'Workspace B' });
+    const existing = store.createProject({
+      id: 'p-existing', name: 'Existing Project', directoryId: directory.id,
+      workspacePath: 'D:\\workspace\\old-root'
+    });
     const updated = store.updateDirectory(directory.id, { workspacePath: 'D:\\workspace\\new-root' });
     assert.equal(updated.workspacePath, 'D:\\workspace\\new-root');
+    assert.equal(store.getProject(existing.id)!.workspacePath, 'D:\\workspace\\old-root');
     const project = store.createProject({ id: 'p-b', name: 'Project B', directoryId: directory.id });
     assert.equal(project.workspacePath, 'D:\\workspace\\new-root');
   });
