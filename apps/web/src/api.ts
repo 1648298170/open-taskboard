@@ -66,7 +66,7 @@ export interface GlobalOpenCodeStatus {
   checkedAt: string;
   serverStatus: 'connected' | 'unavailable';
   error?: string;
-  projects: (DirectoryOpenCodeProjectStatus & { directoryName: string; workspacePath: string })[];
+  projects: (DirectoryOpenCodeProjectStatus & { directoryName: string; workspacePath: string; sessionUrl?: string | null })[];
 }
 
 
