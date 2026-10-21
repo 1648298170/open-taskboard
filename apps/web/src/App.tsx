@@ -81,6 +81,7 @@ export default function App() {
   // Remote deployments use first-run admin initialization and a server session cookie.
   const [authScreen, setAuthScreen] = useState<'checking' | 'board' | 'setup' | 'login'>('checking');
   const [authRequired, setAuthRequired] = useState(false);
+  const [currentUsername, setCurrentUsername] = useState<string | null>(null);
   const [authUsername, setAuthUsername] = useState('admin');
   const [authPassword, setAuthPassword] = useState('');
   const [authPasswordConfirm, setAuthPasswordConfirm] = useState('');
@@ -144,10 +145,12 @@ export default function App() {
     try {
       const status = await api_.authStatus();
       setAuthRequired(status.authRequired);
+      setCurrentUsername(status.username);
       const ready = !status.authRequired || status.authenticated;
       setAuthScreen(ready ? 'board' : status.initialized ? 'login' : 'setup');
       return ready;
     } catch {
+      setCurrentUsername(null);
       setAuthScreen('board');
       setConnError(true);
       return false;
@@ -309,11 +312,13 @@ export default function App() {
     api_.authStatus().then(status => {
       if (!active) return;
       setAuthRequired(status.authRequired);
+      setCurrentUsername(status.username);
       const ready = !status.authRequired || status.authenticated;
       setAuthScreen(ready ? 'board' : status.initialized ? 'login' : 'setup');
       if (ready) loadProjects();
     }).catch(() => {
       if (!active) return;
+      setCurrentUsername(null);
       setAuthScreen('board');
       setConnError(true);
     });
@@ -644,6 +649,7 @@ export default function App() {
             {authRequired && <button className="icon-btn auth-logout" title="退出登录" aria-label="退出登录" onClick={async () => {
               try {
                 await api_.logout();
+                setCurrentUsername(null);
                 setAuthPassword('');
                 setAuthError('');
                 setAuthScreen('login');
@@ -922,6 +928,7 @@ export default function App() {
 
       {openId && (
         <Drawer issueId={openId} projectId={projectId} refreshKey={detailRefreshKey}
+          commentAuthor={currentUsername ?? 'web'}
           onClose={closeDrawer}
           onChanged={() => void refresh()}
           onToast={showToast}
