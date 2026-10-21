@@ -89,10 +89,13 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   const loopback = normalizedHost === 'localhost' || normalizedHost === '::1'
     || /^127(?:\\.\\d{1,3}){3}$/.test(normalizedHost);
   const env = opts.env ?? process.env;
-  const authRequired = env.TASKBOARD_AUTH_REQUIRED === '1' || !loopback || Boolean(config.token);
   const dataDir = opts.dataDir ?? config.dataDir;
   const store = opts.store ?? new Store(dataDir);
   const browserAuth = new BrowserAuth(dataDir);
+  // Once an admin is initialized, keep authentication enabled even if the
+  // bind address is later changed back to loopback.
+  const authRequired = env.TASKBOARD_AUTH_REQUIRED === '1' || !loopback
+    || Boolean(config.token) || browserAuth.initialized;
 
   const authStatus = (cookieHeader: string | undefined) => {
     const username = browserAuth.sessionUser(cookieHeader);
