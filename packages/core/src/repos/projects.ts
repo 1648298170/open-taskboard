@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Project } from '../types.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
-const PROJECT_COLS = `p.id, p.name, p.directory_id AS directoryId, p.default_session_id AS defaultSessionId, COALESCE(d.workspace_path, '') AS workspacePath, '' AS wakeChannel, p.labels, p.created_at AS createdAt`;
+const PROJECT_COLS = `p.id, p.name, p.directory_id AS directoryId, p.default_session_id AS defaultSessionId, COALESCE(d.workspace_path, '') AS workspacePath, p.labels, p.created_at AS createdAt`;
 const PROJECT_FROM = 'projects p LEFT JOIN directories d ON d.id = p.directory_id';
 const now = (): string => new Date().toISOString();
 const shortId = (): string => randomUUID().slice(0, 8);
@@ -20,7 +20,7 @@ export class ProjectRepo {
   create(input: {
     id?: string; name: string; directoryId?: string;
     /** Legacy callers can seed a Directory; these fields are never stored on Project. */
-    workspacePath?: string; wakeChannel?: string; labels?: string;
+    workspacePath?: string; labels?: string;
     defaultSessionId?: string | null;
   }): string {
     const id = input.id || shortId();
