@@ -1869,3 +1869,27 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   .auth-overlay { padding: 14px; }
   .auth-card { padding: 22px; }
 }
+
+
+/* Opt-in cascade switch for directory routing changes. */
+.new-dialog .sync-check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 14px 0 8px;
+  color: var(--ink);
+}
+.new-dialog .sync-check-row input[type="checkbox"] {
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  padding: 0;
+  accent-color: var(--accent);
+  flex: none;
+}
+.new-dialog .sync-check-row span {
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+}
