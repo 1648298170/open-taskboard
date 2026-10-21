@@ -1508,10 +1508,12 @@ describe('Directory-owned OpenCode routing', () => {
 describe('workspace directories', () => {
   it('inherits the directory workspace path when creating a project without an override', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
-    const directory = store.createDirectory({ id: 'work-a', name: 'Workspace A', workspacePath: 'D:\\workspace\\project-a' });
+    const directory = store.createDirectory({
+      id: 'work-a', name: 'Workspace A', workspacePath: 'D:\\workspace\\project-a',
+      serverUrl: 'http://127.0.0.1:4096'
+    });
     const project = store.createProject({
-      id: 'p-a', name: 'Project A', directoryId: directory.id,
-      wakeChannel: 'http://127.0.0.1:4096', defaultSessionId: 'ses_a'
+      id: 'p-a', name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses_a'
     });
     assert.equal(project.directoryId, directory.id);
     assert.equal(directory.workspacePath, 'D:\\workspace\\project-a');

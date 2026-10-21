@@ -3036,6 +3036,58 @@
           }
         }
       }
+    },
+    "/api/directories/{directoryId}/opencode-status": {
+      "summary": "Read OpenCode server and Project Session runtime status for a Directory",
+      "parameters": [
+        {
+          "name": "directoryId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getDirectoryOpenCodeStatus",
+        "summary": "Read the configured Server status and live runtime state of each Project default Session",
+        "tags": [
+          "directories"
+        ],
+        "responses": {
+          "200": {
+            "description": "Directory OpenCode status and per-Project Session state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3127,7 +3179,7 @@
       },
       "Project": {
         "type": "object",
-        "description": "A board project",
+        "description": "A board project whose workspacePath and wakeChannel are computed from its owning Directory",
         "properties": {
           "id": {
             "type": "string",
@@ -3151,11 +3203,11 @@
           },
           "workspacePath": {
             "type": "string",
-            "description": "Project-specific filesystem workspace path"
+            "description": "Computed from the owning Directory; not stored on Project"
           },
           "wakeChannel": {
             "type": "string",
-            "description": "Project-specific OpenCode Server URL"
+            "description": "Computed from the owning Directory; not stored on Project"
           },
           "labels": {
             "type": "string"
@@ -3223,7 +3275,7 @@
               "string",
               "null"
             ],
-            "description": "opencode session this task was split from; null = unbound (@agent wakes continue the bound session)"
+            "description": "Inherited from Project.defaultSessionId; task-level Session bindings are not stored"
           },
           "archivedAt": {
             "type": [
@@ -3787,7 +3839,7 @@
       },
       "PatchDirectoryRequest": {
         "type": "object",
-        "description": "PATCH /api/directories/{directoryId} body (strict)",
+        "description": "PATCH /api/directories/{directoryId} body (strict); the route updates all Projects in the Directory",
         "properties": {
           "name": {
             "type": "string",
@@ -3799,28 +3851,17 @@
           "serverUrl": {
             "type": "string",
             "maxLength": 500
-          },
-          "syncProjects": {
-            "type": "boolean",
-            "description": "When true, also synchronize the submitted workspacePath and/or serverUrl to existing projects in this directory; affected Session bindings are cleared. Active agent leases cause the whole update to be rejected with 409."
           }
         },
         "additionalProperties": false
       },
       "PatchProjectRequest": {
         "type": "object",
-        "description": "PATCH /api/projects/{projectId} body (strict)",
+        "description": "PATCH /api/projects/{projectId} body (strict); routing is inherited from Directory",
         "properties": {
           "name": {
             "type": "string",
             "minLength": 1
-          },
-          "workspacePath": {
-            "type": "string"
-          },
-          "wakeChannel": {
-            "type": "string",
-            "maxLength": 200
           },
           "defaultSessionId": {
             "type": [
@@ -3830,6 +3871,10 @@
           },
           "labels": {
             "type": "string"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Compatibility alias for defaultSessionId; empty string clears it"
           }
         },
         "additionalProperties": false
@@ -3859,11 +3904,11 @@
           },
           "workspacePath": {
             "type": "string",
-            "description": "Project filesystem workspace path"
+            "description": "Legacy compatibility input; used only when directoryId is omitted to initialize a Directory"
           },
           "wakeChannel": {
             "type": "string",
-            "description": "Project OpenCode Server URL"
+            "description": "Legacy compatibility input; used only when directoryId is omitted to initialize a Directory"
           },
           "labels": {
             "type": "string"
@@ -3876,15 +3921,11 @@
       },
       "UpdateProjectRequest": {
         "type": "object",
-        "description": "PATCH /api/projects/{projectId} body — all fields optional (strict)",
+        "description": "PATCH /api/projects/{projectId} body — all fields optional (strict); routing is inherited from Directory",
         "properties": {
           "name": {
             "type": "string",
             "minLength": 1
-          },
-          "wakeChannel": {
-            "type": "string",
-            "description": "OpenCode/TUI wake URL; empty string = unbound"
           },
           "labels": {
             "type": "string",
@@ -3892,7 +3933,13 @@
           },
           "sessionId": {
             "type": "string",
-            "description": "Project default OpenCode session; empty string clears it"
+            "description": "Compatibility alias for defaultSessionId; empty string clears it"
+          },
+          "defaultSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false
