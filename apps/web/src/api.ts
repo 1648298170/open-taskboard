@@ -69,13 +69,6 @@ export interface GlobalOpenCodeStatus {
   projects: (DirectoryOpenCodeProjectStatus & { directoryName: string; workspacePath: string })[];
 }
 
-export interface GlobalOpenCodeStatus {
-  checkedAt: string;
-  serverUrl: string;
-  serverStatus: 'connected' | 'unavailable';
-  error?: string;
-  projects: (DirectoryOpenCodeProjectStatus & { directoryName: string; workspacePath: string })[];
-}
 
 
 export interface WorkspaceDirectoryListing {
@@ -213,10 +206,9 @@ export const api_ = {
   stats: (projectId: string) => api<Stats>('GET', `/api/projects/${projectId}/stats?weeks=8`),
   openCodeSessions: (projectId: string) => api<{ sessions: OpenCodeSessionOption[]; workspacePath: string }>('GET', `/api/projects/${encodeURIComponent(projectId)}/opencode-sessions`),
   // 新建项目对话框用：无项目 id 的无状态查询，按服务地址 + 可选工作区过滤会话。
-  // url 省略时由服务端解析默认地址（环境变量 → 项目 wakeChannel → 127.0.0.1:4096）。
-  openCodeSessionsFor: (url?: string, workspacePath?: string) => {
+  // Session discovery always uses the server-side deployment configuration.
+  openCodeSessionsFor: (workspacePath?: string) => {
     const query = new URLSearchParams();
-    if (url) query.set('url', url);
     if (workspacePath) query.set('workspacePath', workspacePath);
     const qs = query.toString();
     return api<{ sessions: OpenCodeSessionOption[]; workspacePath: string }>('GET', `/api/opencode/sessions${qs ? `?${qs}` : ''}`);
