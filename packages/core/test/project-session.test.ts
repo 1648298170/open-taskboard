@@ -1,6 +1,4 @@
-// Project-level default opencode session: new issues inherit the project's
-// session when the caller supplies none. Precedence:
-// explicit body sessionId -> agentSessionId -> project.defaultSessionId -> null.
+// Each issue derives sessionId from Project.defaultSessionId; no task-level binding is stored.
 
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
@@ -26,7 +24,7 @@ describe('project default session — schema', () => {
 
     // Legacy row written without the column: the nullable default applies.
     db.prepare(
-      "INSERT INTO projects (id, name, workspace_path, created_at) VALUES ('legacy', 'Legacy', '', '2024-01-01T00:00:00.000Z')"
+      "INSERT INTO projects (id, name, created_at) VALUES ('legacy', 'Legacy', '2024-01-01T00:00:00.000Z')"
     ).run();
 
     const store = new Store('.unused', db);
@@ -101,20 +99,20 @@ describe('project default session — issue inheritance', () => {
     assert.equal(blank.sessionId, 'ses_proj');
   });
 
-  it('prefers the explicit body sessionId over agentSessionId and the project session', () => {
+  it('ignores explicit body and agent Session overrides', () => {
     const store = fresh();
     store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_proj' });
 
     const issue = store.createIssue({ projectId: 'p1', title: 'A', sessionId: 'ses_body' }, '', 'ses_agent');
-    assert.equal(issue.sessionId, 'ses_body');
+    assert.equal(issue.sessionId, 'ses_proj');
   });
 
-  it('prefers agentSessionId over the project session', () => {
+  it('ignores agentSessionId and always inherits the project session', () => {
     const store = fresh();
     store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_proj' });
 
     const issue = store.createIssue({ projectId: 'p1', title: 'A' }, '', 'ses_agent');
-    assert.equal(issue.sessionId, 'ses_agent');
+    assert.equal(issue.sessionId, 'ses_proj');
   });
 
   it('legacy project (null default session) yields null', () => {
@@ -125,18 +123,18 @@ describe('project default session — issue inheritance', () => {
     assert.equal(issue.sessionId, null);
   });
 
-  it('setting a project session does not retroactively bind existing issues', () => {
+  it('changing the project default immediately changes every task Session projection', () => {
     const store = fresh();
     store.createProject({ id: 'p1', name: 'P' });
     const issue = store.createIssue({ projectId: 'p1', title: 'A' });
     assert.equal(issue.sessionId, null);
 
     store.updateProject('p1', { defaultSessionId: 'ses_later' });
-    assert.equal(store.getIssue(issue.id)!.sessionId, null);
+    assert.equal(store.getIssue(issue.id)!.sessionId, 'ses_later');
   });
 });
 
-describe('resolveIssueSessionId', () => {
+describe('legacy resolveIssueSessionId helper', () => {
   it('trims values and returns the first non-empty one', () => {
     assert.equal(resolveIssueSessionId('  ses_body  ', 'ses_agent', 'ses_proj'), 'ses_body');
     assert.equal(resolveIssueSessionId('   ', '  ses_agent ', 'ses_proj'), 'ses_agent');
