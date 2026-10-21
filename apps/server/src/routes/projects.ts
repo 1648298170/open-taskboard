@@ -38,11 +38,14 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
     let input = parsed.data;
 
-    // A project created under a directory inherits the directory's OpenCode
-    // Server URL unless it explicitly overrides it.
-    if (input.directoryId && !input.wakeChannel?.trim()) {
+    // Directory is authoritative; ignore project-level route overrides.
+    if (input.directoryId) {
       const directory = store.getDirectory(input.directoryId);
-      if (directory?.serverUrl) input = { ...input, wakeChannel: directory.serverUrl };
+      if (!directory) return reply.code(404).send({ error: `directory not found: ${input.directoryId}` });
+      input = { ...input, workspacePath: directory.workspacePath, wakeChannel: directory.serverUrl };
+      if (actor === 'web' && (!directory.workspacePath.trim() || !directory.serverUrl.trim())) {
+        return reply.code(400).send({ error: '请先在所属目录中配置工作目录和 OpenCode Server URL' });
+      }
     }
 
     // Web project creation must bind a default Session. CLI/MCP may still
@@ -102,8 +105,8 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
       const directoryPath = current.directoryId
         ? (store.getDirectory(current.directoryId)?.workspacePath ?? '').trim()
         : '';
-      let workspacePath = (patch.workspacePath ?? current.workspacePath ?? '').trim() || directoryPath;
-      let serverUrl = (patch.wakeChannel ?? current.wakeChannel ?? '').trim()
+      let workspacePath = current.workspacePath.trim() || directoryPath;
+      let serverUrl = current.wakeChannel.trim()
         || resolveOpenCodeBase(undefined, recentProjectChannels(store));
       try {
         const base = normalizeOpenCodeBase(serverUrl);
@@ -116,7 +119,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
         if (!workspacePath || !session.directory || normalizeDirectoryPath(session.directory) !== normalizeDirectoryPath(workspacePath)) {
           return reply.code(400).send({ error: '默认 Session 的实际工作目录与项目工作目录不一致；未更新项目' });
         }
-        effectivePatch = { ...patch, workspacePath, wakeChannel: base };
+        effectivePatch = { ...patch, defaultSessionId: patch.defaultSessionId };
       } catch (err) {
         return reply.code(502).send({ error: `无法验证 OpenCode Session：${(err as Error).message}` });
       }
@@ -147,8 +150,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     }
   });
 
-  // OpenCode v1 sessions available to bind to a task. Sessions are read from
-  // the same server URL used by the project's TUI wake channel.
+  // OpenCode v1 sessions available to configure the project's inherited default Session.
   app.get('/api/projects/:projectId/opencode-sessions', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
     const project = store.getProject(req.params.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });

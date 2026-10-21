@@ -4,8 +4,8 @@
 // hand-rolled type assertions.
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { createTaskWorktree, GitWorktreeError, scanGitRefs } from '../git-refs.js';
-import { abortOpenCodeSession, createOpenCodeSession, getOpenCodeSessionRuntimeState, normalizeOpenCodeBase, openOpenCodeEventStream } from '../opencode.js';
-import { STATUSES, Store, ValidationError, resolveIssueSessionId } from '@taskboard/core';
+import { abortOpenCodeSession, getOpenCodeSessionRuntimeState, openOpenCodeEventStream } from '../opencode.js';
+import { STATUSES, Store, ValidationError } from '@taskboard/core';
 import type { Status, TaskboardServerConfig } from '@taskboard/core';
 import { claimSchema, createIssueSchema, restUpdateIssueSchema, z } from '@taskboard/core/schemas';
 
@@ -83,16 +83,10 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     const project = store.getProject(req.params.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
-    // Session precedence: explicit body → x-taskboard-session header → the
-    // project default → unbound. The store applies the same resolver; doing it
-    // here lets the web gate reject tasks that would land unbound.
-    const agentSession = String(req.headers['x-taskboard-session'] ?? '').trim() || null;
-    const resolvedSession = resolveIssueSessionId(parsed.data.sessionId, agentSession, project.defaultSessionId);
-    // Web task creation must bind an OpenCode session before saving. A project
-    // default session satisfies this without an explicit body value.
-    // CLI/MCP can still create unbound tasks intentionally and bind them on claim.
-    if (actor === 'web' && resolvedSession === null) {
-      return reply.code(400).send({ error: '创建任务前必须先选择一个 OpenCode 会话（sessionId 不能为空）' });
+    // Task Session is always inherited from the project default; task payloads
+    // and x-taskboard-session cannot override it.
+    if (actor === 'web' && !project.defaultSessionId?.trim()) {
+      return reply.code(400).send({ error: '请先在所属项目中配置默认 OpenCode Session，再创建任务' });
     }
     // T7-36 门禁的 create 侧：直接以 status:'done' 创建与 PATCH 置 done 同责，
     // 非 web 来源不能通过客户端自报 confirm 绕过人工完成门禁。
@@ -108,7 +102,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     }
     // 兼容旧客户端的 confirm 字段不作为审批凭证，且不透传 Store
     const { confirm: _confirm, ...body } = parsed.data;
-    return reply.code(201).send(store.createIssue({ ...body, projectId: req.params.projectId }, actor, agentSession));
+    return reply.code(201).send(store.createIssue({ ...body, projectId: req.params.projectId }, actor));
   });
 
   app.get('/api/projects/:projectId/progress', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
@@ -152,7 +146,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     if (config.requireSession && parsed.data.status === 'in_progress'
       && currentIssue.status !== 'in_progress'
       && actor !== 'web'
-      && !parsed.data.sessionId && !currentIssue.sessionId) {
+      && !currentIssue.sessionId) {
       return reply.code(403).send({
         error: 'starting a task requires binding: claim/PATCH with sessionId and branch; confirm:true is not an approval credential (TASKBOARD_REQUIRE_SESSION)'
       });
@@ -214,10 +208,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
         const updated = store.updateIssue(issue.id, {
           branch: created.branch,
           worktree: created.name,
-          worktreePath: created.path,
-          // A Session previously bound to the main checkout must never survive
-          // a switch to a new worktree; the user must create a Session there.
-          sessionId: null
+          worktreePath: created.path
         }, issue.version, String(req.headers['x-taskboard-actor'] ?? 'web'));
         return reply.code(201).send({
           issue: updated,
@@ -239,49 +230,11 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     }
   });
 
-  // Create a Session in the task's actual execution directory. If a worktree
-  // is bound, never silently create the Session in the project's main checkout.
+  // Deprecated: tasks inherit the Project's Session and cannot create/rebind their own.
   app.post('/api/issues/:id/opencode-session', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
     const issue = store.getIssue(req.params.id);
     if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
-    const project = store.getProject(issue.projectId);
-    if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
-    if (issue.claimedBy && issue.leaseExpiresAt && Date.parse(issue.leaseExpiresAt) > Date.now()) {
-      return reply.code(409).send({ error: '任务当前有有效执行租约；请先释放租约再替换 Session 绑定' });
-    }
-    const bodySchema = z.object({ title: z.string().trim().min(1).max(200).optional() }).strict();
-    const parsed = bodySchema.safeParse(req.body ?? {});
-    if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
-    if (!project.wakeChannel.trim()) {
-      return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
-    }
-    const targetDirectory = issue.worktreePath.trim() || project.workspacePath.trim();
-    if (!targetDirectory) {
-      return reply.code(400).send({ error: '请先配置项目工作目录，或先为任务创建 Git Worktree' });
-    }
-    try {
-      const serverUrl = normalizeOpenCodeBase(project.wakeChannel);
-      const session = await createOpenCodeSession(
-        serverUrl,
-        targetDirectory,
-        parsed.data.title ?? `#${issue.id} ${issue.title}`
-      );
-      const normalizePath = (value: string): string => {
-        const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
-        return /^[a-zA-Z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
-      };
-      if (normalizePath(session.directory) !== normalizePath(targetDirectory)) {
-        return reply.code(502).send({ error: `OpenCode Session 目录不匹配；新 Session 为 ${session.id}，未绑定到任务` });
-      }
-      try {
-        const updated = store.updateIssue(issue.id, { sessionId: session.id }, issue.version, String(req.headers['x-taskboard-actor'] ?? 'web'));
-        return reply.code(201).send({ issue: updated, session, serverUrl, workspacePath: targetDirectory });
-      } catch (error) {
-        return reply.code(500).send({ error: `Session ${session.id} 已创建，但任务绑定失败。请手动绑定该 Session。原因：${(error as Error).message}` });
-      }
-    } catch (error) {
-      return reply.code(502).send({ error: `无法在目标工作目录创建 OpenCode Session：${(error as Error).message}` });
-    }
+    return reply.code(409).send({ error: '任务 Session 继承自所属项目的默认 Session；请在项目中管理 Session，任务不能单独创建或绑定会话。' });
   });
 
   // Unbind metadata only. The local branch/worktree is intentionally preserved.
