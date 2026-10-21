@@ -27,9 +27,7 @@ describe('workspace directory configuration', () => {
     assert.equal(version, MIGRATIONS.length);
     assert.ok(MIGRATIONS.length >= 20);
     const cols = db.prepare("SELECT name FROM pragma_table_info('directories')").all() as { name: string }[];
-    assert.ok(cols.some(c => c.name === 'server_url'));
-    const stored = db.prepare("SELECT COUNT(*) AS count FROM directories WHERE server_url <> ''").get() as { count: number };
-    assert.equal(stored.count, 0);
+    assert.equal(cols.some(c => c.name === 'server_url'), false);
     const settings = db.prepare("SELECT COUNT(*) AS count FROM app_settings WHERE key = 'default_opencode_server_url'").get() as { count: number };
     assert.equal(settings.count, 0);
   });
