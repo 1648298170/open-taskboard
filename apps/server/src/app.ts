@@ -85,9 +85,9 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   // uses first-run admin setup + HttpOnly session cookies instead of asking the
   // browser user to paste TASKBOARD_TOKEN. TASKBOARD_TOKEN remains an optional
   // machine-client compatibility credential for CLI/MCP integrations.
-  const normalizedHost = effectiveHost.toLowerCase().replace(/^\\[|\\]$/g, '');
+  const normalizedHost = effectiveHost.toLowerCase().replace(/^\[|\]$/g, '');
   const loopback = normalizedHost === 'localhost' || normalizedHost === '::1'
-    || /^127(?:\\.\\d{1,3}){3}$/.test(normalizedHost);
+    || /^127(?:\.\d{1,3}){3}$/.test(normalizedHost);
   const env = opts.env ?? process.env;
   const dataDir = opts.dataDir ?? config.dataDir;
   const store = opts.store ?? new Store(dataDir);
