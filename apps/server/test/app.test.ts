@@ -96,7 +96,7 @@ describe('project default Session workspace validation', () => {
         method: 'POST', url: '/api/projects', headers: json,
         payload: {
           id: 'p-mismatch', name: 'Mismatch', workspacePath: 'D:/workspace/project-a',
-          wakeChannel: 'http://127.0.0.1:4096', defaultSessionId: 'ses_other'
+          defaultSessionId: 'ses_other'
         }
       });
       assert.equal(mismatch.statusCode, 400);
@@ -107,7 +107,7 @@ describe('project default Session workspace validation', () => {
         method: 'POST', url: '/api/projects', headers: json,
         payload: {
           id: 'p-matching', name: 'Matching', workspacePath: 'D:/workspace/project-a',
-          wakeChannel: 'http://127.0.0.1:4096', defaultSessionId: 'ses_expected'
+          defaultSessionId: 'ses_expected'
         }
       });
       assert.equal(matching.statusCode, 201);
@@ -494,7 +494,7 @@ describe('workspace directory API', () => {
       payload: { workspacePath: '/workspace/renamed' }
     });
     assert.equal(updated.statusCode, 200, updated.body);
-    const projectAfter = (await app.inject({ method: 'GET', url: `/api/projects/${projectId}` })).json<{ workspacePath: string; wakeChannel: string }>();
+    const projectAfter = (await app.inject({ method: 'GET', url: `/api/projects/${projectId}` })).json<{ workspacePath: string }>();
     assert.equal(projectAfter.workspacePath, '/workspace/renamed');
     assert.equal('wakeChannel' in projectAfter, false);
 
