@@ -635,7 +635,7 @@
       ],
       "patch": {
         "operationId": "updateDirectory",
-        "summary": "Update directory name or default workspace path",
+        "summary": "Update directory settings and optionally synchronize existing projects",
         "tags": [
           "directories"
         ],
@@ -671,6 +671,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -3796,6 +3799,10 @@
           "serverUrl": {
             "type": "string",
             "maxLength": 500
+          },
+          "syncProjects": {
+            "type": "boolean",
+            "description": "When true, also synchronize the submitted workspacePath and/or serverUrl to existing projects in this directory; affected Session bindings are cleared. Active agent leases cause the whole update to be rejected with 409."
           }
         },
         "additionalProperties": false
