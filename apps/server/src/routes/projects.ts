@@ -147,17 +147,11 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     return store.updateProject(req.params.projectId, update);
   });
 
-  // Stateless session discovery for CLI/MCP and first-project flows. The URL is
-  // optional and resolves from TASKBOARD_OPENCODE_URL, recent projects, or the
-  // loopback fallback; an explicit URL always wins.
+  // Stateless session discovery always uses the deployment-configured server.
   app.get('/api/opencode/sessions', async (req: FastifyRequest<{ Querystring: { url?: string; workspacePath?: string } }>, reply) => {
-    const rawUrl = String(req.query.url ?? '').trim();
     let base: string;
-    try {
-      base = resolveOpenCodeBase(rawUrl || undefined, recentProjectChannels(store));
-    } catch (err) {
-      return reply.code(400).send({ error: `url: ${(err as Error).message}` });
-    }
+    try { base = getConfiguredOpenCodeBase(); }
+    catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
     try {
       const workspace = String(req.query.workspacePath ?? '').trim();
       const sessions = await listOpenCodeSessions(base, workspace);
@@ -170,19 +164,15 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     }
   });
 
-  // OpenCode v1 sessions available to bind to a task. Sessions are read from
-  // the same server URL used by the project's TUI wake channel.
+  // OpenCode sessions available to bind to a project; URL comes from deployment configuration.
   app.get('/api/projects/:projectId/opencode-sessions', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
     const project = store.getProject(req.params.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
-    if (!project.wakeChannel) {
-      return reply.code(400).send({ error: '请先在所属目录配置 OpenCode Server URL，再选择会话' });
-    }
     if (!project.workspacePath.trim()) {
       return reply.code(400).send({ error: '请先在所属目录配置工作目录，再查询 OpenCode Session' });
     }
     try {
-      const base = normalizeOpenCodeBase(project.wakeChannel);
+      const base = getConfiguredOpenCodeBase();
       const sessions = await listOpenCodeSessions(base, project.workspacePath);
       const workspace = project.workspacePath.trim();
       const compatible = workspace
