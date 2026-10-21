@@ -283,43 +283,60 @@ describe('OpenAPI contract', () => {
   });
 });
 
-describe('directory server inheritance', () => {
-  it('persists serverUrl and lets projects inherit it', async () => {
+describe('deployment OpenCode URL configuration', () => {
+  it('rejects directory and global-setting URL overrides', async () => {
     const { app, cleanup } = await makeApp();
-    const dirRes = await app.inject({
+    const directory = await app.inject({
       method: 'POST', url: '/api/directories', headers: json,
       payload: { name: 'D', workspacePath: 'D:/ws', serverUrl: 'http://10.0.0.5:4096' }
     });
-    assert.equal(dirRes.statusCode, 201, dirRes.body);
-    const directory = dirRes.json<{ id: string; serverUrl: string }>();
-    assert.equal(directory.serverUrl, 'http://10.0.0.5:4096');
-
-    const patched = await app.inject({
-      method: 'PATCH', url: `/api/directories/${directory.id}`, headers: json,
-      payload: { serverUrl: 'http://10.0.0.6:4096' }
-    });
-    assert.equal(patched.statusCode, 200, patched.body);
-    assert.equal(patched.json<{ serverUrl: string }>().serverUrl, 'http://10.0.0.6:4096');
-
-    stubSessions([{ id: 'ses_d', title: 'D', directory: 'D:/ws' }]);
-    const res = await postProject(app, {
-      name: 'P', directoryId: directory.id, defaultSessionId: 'ses_d'
-    }, 'web');
-    assert.equal(res.statusCode, 201, res.body);
-    const project = res.json<{ wakeChannel: string; workspacePath: string }>();
-    assert.equal(project.wakeChannel, 'http://10.0.0.6:4096');
-    assert.equal(project.workspacePath, 'D:/ws');
-    cleanup();
-  });
-});
-
-describe('global defaults', () => {
-  it('persists the default OpenCode Server URL', async () => {
-    const { app, cleanup } = await makeApp();
-    const put = await app.inject({
+    assert.equal(directory.statusCode, 400);
+    const settings = await app.inject({
       method: 'PUT', url: '/api/settings', headers: json,
       payload: { defaultWorkspacePath: 'D:/ws', defaultOpenCodeServerUrl: 'http://127.0.0.1:4096' }
     });
+    assert.equal(settings.statusCode, 400);
+    cleanup();
+  });
+
+  it('uses the deployment URL for project sessions and global status', async () => {
+    await withOpenCodeEnv('http://127.0.0.1:4096', async () => {
+      const { app, cleanup } = await makeApp();
+      const requests: string[] = [];
+      stubSessions([{ id: 'ses_d', title: 'D', directory: 'D:/ws' }], requests);
+      const dirRes = await app.inject({
+        method: 'POST', url: '/api/directories', headers: json,
+        payload: { name: 'D', workspacePath: 'D:/ws' }
+      });
+      assert.equal(dirRes.statusCode, 201, dirRes.body);
+      const directory = dirRes.json<{ id: string }>();
+      const project = await postProject(app, {
+        name: 'P', directoryId: directory.id, defaultSessionId: 'ses_d'
+      }, 'web');
+      assert.equal(project.statusCode, 201, project.body);
+      assert.equal('wakeChannel' in project.json<Record<string, unknown>>(), false);
+      const status = await app.inject({ method: 'GET', url: '/api/opencode/status' });
+      assert.equal(status.statusCode, 200, status.body);
+      assert.equal(status.json<{ serverStatus: string }>().serverStatus, 'connected');
+      assert.ok(requests.length > 0);
+      assert.ok(requests.every(url => url.startsWith('http://127.0.0.1:4096/')));
+      cleanup();
+    });
+  });
+
+  it('persists only the default workspace path', async () => {
+    const { app, cleanup } = await makeApp();
+    const put = await app.inject({
+      method: 'PUT', url: '/api/settings', headers: json,
+      payload: { defaultWorkspacePath: 'D:/ws' }
+    });
+    assert.equal(put.statusCode, 200, put.body);
+    assert.deepEqual((await app.inject({ method: 'GET', url: '/api/settings' })).json(), {
+      defaultWorkspacePath: 'D:/ws'
+    });
+    cleanup();
+  });
+});
     assert.equal(put.statusCode, 200, put.body);
     const got = (await app.inject({ method: 'GET', url: '/api/settings' })).json<{
       defaultWorkspacePath: string; defaultOpenCodeServerUrl: string;
