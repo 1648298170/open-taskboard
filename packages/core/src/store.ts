@@ -190,7 +190,7 @@ export class Store {
     // context. Refuse the whole directory operation before writing anything if
     // any affected project still has an active agent lease.
     const activeIssueIds = projectUpdates.flatMap(({ project }) =>
-      this.issues.list(project.id, { archived: 'all' }).filter(activeClaim).map(issue => issue.id)
+      this.issues.list(project.id, { archived: 'all' }).filter(issue => activeClaim(issue)).map(issue => issue.id)
     );
     if (activeIssueIds.length > 0) {
       throw new ConflictError(
