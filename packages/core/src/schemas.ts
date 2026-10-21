@@ -29,7 +29,6 @@ export const createDirectorySchema = z.object({
 export const directoryPatchSchema = z.object({
   name: z.string().min(1).optional(),
   workspacePath: z.string().optional(),
-  serverUrl: z.string().trim().max(500).optional(),
 }).strict();
 
 export const createProjectSchema = z
