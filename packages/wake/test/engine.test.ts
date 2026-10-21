@@ -362,3 +362,35 @@ describe('wake engine: embedded mode', () => {
     }
   });
 });
+
+describe('wake engine: channel watchdog', () => {
+  it('logs WARN once while OpenCode is unreachable and RECOVERED once when it returns', async () => {
+    let healthy = false;
+    const { engine, logs } = fixture({
+      sessionId: null,
+      fetchImpl: () => {
+        if (!healthy) throw new Error('ECONNREFUSED');
+        return okResponse();
+      },
+      config: { execParts: undefined },
+      engineOptions: { pollMs: 25 },
+    });
+    await engine.start();
+    try {
+      await waitFor(() => logs.some(entry => entry.message.includes('WARN opencode unreachable')));
+      // Repeated failing polls must not spam the log.
+      await sleep(90);
+      const warns = logs.filter(entry => entry.message.includes('WARN opencode unreachable'));
+      assert.equal(warns.length, 1, 'WARN should be logged only on the healthy→down transition');
+      assert.equal(warns[0].level, 'error');
+
+      healthy = true;
+      await waitFor(() => logs.some(entry => entry.message.includes('RECOVERED opencode reachable')));
+      await sleep(90);
+      const recovered = logs.filter(entry => entry.message.includes('RECOVERED opencode reachable'));
+      assert.equal(recovered.length, 1, 'RECOVERED should be logged only on the down→healthy transition');
+    } finally {
+      await engine.stop();
+    }
+  });
+});

@@ -129,6 +129,11 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   let unsubscribe: (() => void) | null = null;
   let releaseLock: (() => void) | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  // Channel-level watchdog state: one WARN while OpenCode is unreachable, one
+  // RECOVERED line when it returns. Pending comments are retried by the sweep
+  // either way; these lines are the operator's early signal.
+  let channelDown = false;
+  let probeInFlight = false;
   let queue: Promise<void> = Promise.resolve();
   let lifecycle = new AbortController();
   const seen = new Set<string>();
@@ -468,6 +473,32 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   };
 
   /**
+   * Probe `${opencodeBase}/global/health` and log only on transitions. Cheap
+   * enough for the poll interval (one 2s-bounded request), and it makes a dead
+   * channel visible within one poll instead of a silent pending backlog.
+   */
+  const probeChannelHealth = async (): Promise<void> => {
+    const base = config.opencodeBase?.trim();
+    if (!base || !running || probeInFlight) return;
+    probeInFlight = true;
+    try {
+      const response = await request(`${base}/global/health`, { headers: { accept: 'application/json' } }, 2_000);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (channelDown) {
+        log('watch: RECOVERED opencode reachable again');
+        channelDown = false;
+      }
+    } catch (err) {
+      if (!channelDown) {
+        error(`watch: WARN opencode unreachable (${(err as Error).message}) — wakes stay pending until it recovers`);
+        channelDown = true;
+      }
+    } finally {
+      probeInFlight = false;
+    }
+  };
+
+  /**
    * Pending sweep: one direct query over pending comments replaces the old
    * project→issue→detail N+1 backfill. The pending set is tiny; filtering by
    * prefix/author/project happens in JS against the same predicates the event
@@ -548,10 +579,15 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     unsubscribe = store.subscribe(onEvent);
     sweep();
     if (options.pollMs !== undefined && options.pollMs > 0) {
+      // Every tick: health transition check, then drain pending wakes.
+      pollTimer = setInterval(() => {
+        void probeChannelHealth();
+        sweep();
+      }, options.pollMs);
       // unref: the poll must never be the only thing keeping a test or a
       // shutting-down process alive; stop() clears it as well.
-      pollTimer = setInterval(sweep, options.pollMs);
       pollTimer.unref?.();
+      void probeChannelHealth();
     }
   };
 
