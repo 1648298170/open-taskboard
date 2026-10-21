@@ -27,7 +27,7 @@ function directoryLabel(name: string): string {
   return trimmed.split(/[\\/]/).filter(Boolean).at(-1) || trimmed;
 }
 
-type DirectoryPickerTarget = 'settings' | 'new-directory' | 'project' | 'directory-edit';
+type DirectoryPickerTarget = 'settings' | 'new-directory' | 'project' | 'directory-edit' | 'project-route-edit';
 type SortBy = 'priority' | 'created';
 type Theme = 'dark' | 'light';
 
@@ -41,6 +41,8 @@ export default function App() {
   const [directoryServerUrl, setDirectoryServerUrl] = useState('');
   const [directoryMenuOpen, setDirectoryMenuOpen] = useState<string | null>(null);
   const [projectMenu, setProjectMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [projectRouteEdit, setProjectRouteEdit] = useState<{ id: string; field: 'workspacePath' | 'wakeChannel' } | null>(null);
+  const [projectRouteEditValue, setProjectRouteEditValue] = useState('');
   const [defaultWorkspacePath, setDefaultWorkspacePath] = useState('');
   const [defaultOpenCodeServerUrl, setDefaultOpenCodeServerUrl] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -143,13 +145,16 @@ export default function App() {
 
   const openWorkspaceDirectoryPicker = (target: DirectoryPickerTarget): void => {
     const editedDirectory = directories.find(directory => directory.id === directoryWorkspaceEditId);
+    const editedProject = projects.find(project => project.id === projectRouteEdit?.id);
     const serverUrl = target === 'settings'
       ? settingsServerInput.trim() || defaultOpenCodeServerUrl.trim()
       : target === 'new-directory'
         ? directoryServerUrl.trim() || defaultOpenCodeServerUrl.trim()
         : target === 'project'
           ? projServerUrl.trim() || directories.find(directory => directory.id === projectDirectoryId)?.serverUrl.trim() || defaultOpenCodeServerUrl.trim()
-          : editedDirectory?.serverUrl.trim() || defaultOpenCodeServerUrl.trim();
+          : target === 'project-route-edit'
+            ? editedProject?.wakeChannel.trim() || directories.find(directory => directory.id === editedProject?.directoryId)?.serverUrl.trim() || defaultOpenCodeServerUrl.trim()
+            : editedDirectory?.serverUrl.trim() || defaultOpenCodeServerUrl.trim();
     if (!serverUrl) {
       showToast('请先填写 OpenCode Server URL，再选择服务器上的工作目录。');
       return;
@@ -161,7 +166,9 @@ export default function App() {
         ? directoryWorkspacePath || defaultWorkspacePath
         : target === 'project'
           ? projWorkspacePath
-          : directoryWorkspaceEditPath;
+          : target === 'project-route-edit'
+            ? projectRouteEditValue
+            : directoryWorkspaceEditPath;
     setDirectoryPickerTarget(target);
     setDirectoryPickerServerUrl(serverUrl);
     setDirectoryPickerInitialPath(initialPath);
@@ -174,6 +181,8 @@ export default function App() {
     else if (directoryPickerTarget === 'project') {
       setProjWorkspacePath(path);
       setProjDefaultSessionId('');
+    } else if (directoryPickerTarget === 'project-route-edit') {
+      setProjectRouteEditValue(path);
     } else setDirectoryWorkspaceEditPath(path);
     setDirectoryPickerOpen(false);
   };
@@ -1205,6 +1214,66 @@ export default function App() {
         onSelect={handleWorkspaceDirectorySelect}
       />
 
+      {projectRouteEdit && (() => {
+        const editedProject = projects.find(item => item.id === projectRouteEdit.id);
+        if (!editedProject) return null;
+        const editingPath = projectRouteEdit.field === 'workspacePath';
+        const currentValue = editingPath ? editedProject.workspacePath : editedProject.wakeChannel;
+        const nextValue = projectRouteEditValue.trim();
+        return (
+          <dialog open className="new-dialog">
+            <form onSubmit={async e => {
+              e.preventDefault();
+              if (editingPath && !nextValue) {
+                showToast('工作目录不能为空');
+                return;
+              }
+              if (nextValue === currentValue) {
+                setProjectRouteEdit(null);
+                return;
+              }
+              try {
+                const updated = await api_.updateProject(editedProject.id,
+                  editingPath ? { workspacePath: nextValue } : { wakeChannel: nextValue });
+                setProjects(prev => prev.map(item => item.id === updated.id ? updated : item));
+                setProjectRouteEdit(null);
+                loadProjects();
+                void refresh();
+                showToast(editingPath
+                  ? '已更新项目工作目录；旧 Session 绑定已清除，请重新绑定。'
+                  : '已更新项目 OpenCode Server URL；旧 Session 绑定已清除，请重新绑定。');
+              } catch (err) { showToast('✗ ' + (err as Error).message); }
+            }}>
+              <h2>{editingPath ? '修改项目工作目录' : '修改项目 OpenCode Server URL'}</h2>
+              <label>项目
+                <input value={editedProject.name} disabled />
+              </label>
+              <label>{editingPath ? '工作目录地址' : 'OpenCode Server URL'}
+                <div className="workspace-path-control">
+                  <input autoFocus required={editingPath}
+                    type={editingPath ? 'text' : 'url'}
+                    value={projectRouteEditValue}
+                    placeholder={editingPath ? '例如：D:\\workspace\\projects\\my-app' : '例如：http://127.0.0.1:4096'}
+                    onChange={e => setProjectRouteEditValue(e.target.value)} />
+                  {editingPath && <button type="button" className="btn" onClick={() => openWorkspaceDirectoryPicker('project-route-edit')}><FolderOpen size={13} /> 选择目录</button>}
+                </div>
+              </label>
+              <p className="dialog-note">
+                {editingPath
+                  ? '此修改只作用于当前项目，不改变所在目录及其他项目。'
+                  : '留空会清除项目独立配置，后续唤醒将按默认路由解析。'}
+                修改后会清除该项目的默认 Session 与任务 Session 绑定，需重新绑定。
+              </p>
+              <p className="dialog-note">如果项目中存在正在执行且仍被 agent 认领的任务，服务端会拒绝修改；请先释放认领。</p>
+              <menu>
+                <button type="button" className="btn" onClick={() => setProjectRouteEdit(null)}>取消</button>
+                <button type="submit" className="btn primary">保存修改</button>
+              </menu>
+            </form>
+          </dialog>
+        );
+      })()}
+
       {projectMenu && <div className="context-menu-backdrop" onClick={() => setProjectMenu(null)} />}
       {projectMenu && (() => {
         const project = projects.find(item => item.id === projectMenu.id);
@@ -1221,6 +1290,16 @@ export default function App() {
                 showToast('已修改项目名称');
               } catch (err) { showToast('✗ ' + (err as Error).message); }
             }}><Pencil size={13} /> 修改项目名称</button>
+            <button role="menuitem" onClick={() => {
+              setProjectMenu(null);
+              setProjectRouteEdit({ id: project.id, field: 'workspacePath' });
+              setProjectRouteEditValue(project.workspacePath);
+            }}><Folder size={13} /> 修改工作目录</button>
+            <button role="menuitem" onClick={() => {
+              setProjectMenu(null);
+              setProjectRouteEdit({ id: project.id, field: 'wakeChannel' });
+              setProjectRouteEditValue(project.wakeChannel);
+            }}><Link size={13} /> 修改 OpenCode Server URL</button>
             <button role="menuitem" className="danger" onClick={async () => {
               setProjectMenu(null);
               const ok = await confirmDialog({
