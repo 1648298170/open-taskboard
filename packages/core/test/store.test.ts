@@ -873,46 +873,44 @@ describe('Store claims (T7-34)', () => {
     assert.equal(flowed.length, 0, 'no auto-flow activity for non-todo');
   });
 
-  it('claim with sessionId binds unbound issues only — never steals an existing binding', () => {
+  it('claim cannot override the Session inherited from its Project', () => {
     const { store } = freshDb();
-    store.createProject({ id: 'p1', name: 'P' });
-    const free = store.createIssue({ projectId: 'p1', title: 'unbound' }).id;
-    const taken = store.createIssue({ projectId: 'p1', title: 'already bound' }).id;
-    store.updateIssue(taken, { sessionId: 'ses_other' }, 1);
+    store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_project' });
+    const free = store.createIssue({ projectId: 'p1', title: 'unbound', sessionId: 'ses_issue' }).id;
+    const taken = store.createIssue({ projectId: 'p1', title: 'already inherited' }).id;
 
-    // 绑空位：绑定落库 + 活动留痕 + 与自动流转叠加（todo → in_progress）
-    const bound = store.claimIssue(free, 'alpha', 30, 'alpha', 'ses_mine');
-    assert.equal(bound.sessionId, 'ses_mine');
-    assert.equal(bound.status, 'in_progress');
-    assert.ok(store.listActivities(free).some(a => a.action === 'session-bound' && a.detail === 'ses_mine'));
+    const claimed = store.claimIssue(free, 'alpha', 30, 'alpha', 'ses_agent');
+    assert.equal(claimed.sessionId, 'ses_project');
+    assert.equal(claimed.status, 'in_progress');
+    assert.ok(!store.listActivities(free).some(a => a.action === 'session-bound'));
 
-    // 抢绑被拒：已有绑定原样保留
-    const stolen = store.claimIssue(taken, 'beta', 30, 'beta', 'ses_beta');
-    assert.equal(stolen.sessionId, 'ses_other', 'existing binding never overwritten');
+    const claimedAgain = store.claimIssue(taken, 'beta', 30, 'beta', 'ses_beta');
+    assert.equal(claimedAgain.sessionId, 'ses_project', 'claim sessionId cannot override the Project');
 
-    // 不传 sessionId：绑定不变
     const renewed = store.claimIssue(free, 'alpha', 60);
-    assert.equal(renewed.sessionId, 'ses_mine', 'renew without sessionId keeps binding');
+    assert.equal(renewed.sessionId, 'ses_project');
   });
 
-  it('claim with branch binds unbound branch and sessionId in one transaction — same bind-empty-slot rule', () => {
+  it('claim records Agent branch but keeps Session inherited from Project', () => {
     const { store } = freshDb();
-    store.createProject({ id: 'p1', name: 'P' });
+    store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_project' });
     const free = store.createIssue({ projectId: 'p1', title: 'unbound' }).id;
     const takenBranch = store.createIssue({ projectId: 'p1', title: 'branch prebound' }).id;
     store.updateIssue(takenBranch, { branch: 'feat/prebound' }, 1);
 
-    const bound = store.claimIssue(free, 'alpha', 30, 'alpha', 'ses_mine', 'feat/agent-run');
-    assert.equal(bound.branch, 'feat/agent-run');
-    assert.equal(bound.sessionId, 'ses_mine');
-    assert.equal(bound.status, 'in_progress');
+    const claimed = store.claimIssue(free, 'alpha', 30, 'alpha', 'ses_agent', 'feat/agent-run');
+    assert.equal(claimed.branch, 'feat/agent-run');
+    assert.equal(claimed.sessionId, 'ses_project');
+    assert.equal(claimed.status, 'in_progress');
     assert.ok(store.listActivities(free).some(a => a.action === 'branch-bound' && a.detail === 'feat/agent-run'));
 
-    const stolen = store.claimIssue(takenBranch, 'beta', 30, 'beta', 'ses_beta', 'feat/other');
-    assert.equal(stolen.branch, 'feat/prebound', 'existing branch never overwritten');
+    const other = store.claimIssue(takenBranch, 'beta', 30, 'beta', 'ses_beta', 'feat/other');
+    assert.equal(other.branch, 'feat/prebound', 'existing branch never overwritten');
+    assert.equal(other.sessionId, 'ses_project');
 
     const renewed = store.claimIssue(free, 'alpha', 60, 'alpha', 'ses_mine', 'feat/agent-run');
-    assert.equal(renewed.branch, 'feat/agent-run', 'renew without branch keeps binding');
+    assert.equal(renewed.branch, 'feat/agent-run');
+    assert.equal(renewed.sessionId, 'ses_project');
   });
 
   it('a child starting (claim or manual move) pulls a todo parent to in_progress — one-way, human statuses untouched', () => {
@@ -1468,47 +1466,42 @@ describe('review regression: confirm escape-hatch schema (T7-36)', () => {
 
 // --- (l) project wake channel (data-driven watch routing) -------------------------
 
-describe('project wake_channel', () => {
-  it('create persists wakeChannel; unbound default is empty string', () => {
+describe('Directory-owned OpenCode routing', () => {
+  it('legacy project creation seeds a Directory route', () => {
     const { store } = fresh();
-    const pb = store.createProject({ id: 'pb', name: 'P-Bound', wakeChannel: 'http://127.0.0.1:4097' });
-    const pl = store.createProject({ id: 'pl', name: 'P-Loose' });
-    assert.equal(store.getProject(pb.id)!.wakeChannel, 'http://127.0.0.1:4097');
-    assert.equal(store.getProject(pl.id)!.wakeChannel, '');
+    const project = store.createProject({ id: 'p1', name: 'P', workspacePath: '/workspace/a', wakeChannel: 'http://127.0.0.1:4096' });
+    assert.equal(project.workspacePath, '/workspace/a');
+    assert.equal(project.wakeChannel, 'http://127.0.0.1:4096');
+    assert.ok(project.directoryId);
+    assert.equal(store.getDirectory(project.directoryId!)!.workspacePath, '/workspace/a');
+    assert.equal(store.getDirectory(project.directoryId!)!.serverUrl, 'http://127.0.0.1:4096');
   });
 
-  it('updateProject rewrites the channel; blank name rejected', () => {
-    const { store } = fresh();
-    store.createProject({ id: 'p1', name: 'P', wakeChannel: 'http://127.0.0.1:4096' });
-    const p = store.updateProject('p1', { wakeChannel: 'http://127.0.0.1:4099' });
-    assert.equal(p.wakeChannel, 'http://127.0.0.1:4099');
-    assert.equal(p.name, 'P');
-    assert.throws(() => store.updateProject('p1', { name: '  ' }), /blank/);
-    assert.throws(() => store.updateProject('nope', { wakeChannel: 'x' }), /not found/);
-  });
-
-  it('clears task session bindings when project path or server changes', () => {
-    const { store } = fresh();
-    const project = store.createProject({
-      id: 'p-session', name: 'P', workspacePath: '/workspace/a',
-      wakeChannel: 'http://127.0.0.1:4096', defaultSessionId: 'ses_default'
-    });
-    const issue = store.createIssue({ projectId: project.id, title: 'Bound task', sessionId: 'ses_task' });
-    const updated = store.updateProject(project.id, {
-      workspacePath: '/workspace/b', wakeChannel: 'http://127.0.0.1:4097'
-    });
-    assert.equal(updated.defaultSessionId, null);
-    assert.equal(store.getIssue(issue.id)?.sessionId, null);
-    assert.ok(store.listActivities(issue.id).some(activity => activity.action === 'session-unbound'));
-  });
-
-  it('emits project.updated whose payload has no issueId (activity stream is issue-scoped)', () => {
+  it('updates routing on Directory and clears the Project Session', () => {
     const { store, events } = fresh();
-    store.createProject({ id: 'p1', name: 'P' });
-    store.updateProject('p1', { wakeChannel: 'http://h:1' });
+    const directory = store.createDirectory({ id: 'dir-1', name: 'D', workspacePath: '/workspace/a', serverUrl: 'http://h:1' });
+    const project = store.createProject({ id: 'p1', name: 'P', directoryId: directory.id, defaultSessionId: 'ses_project' });
+    const issue = store.createIssue({ projectId: project.id, title: 'A' });
+    store.updateDirectory(directory.id, { workspacePath: '/workspace/b', serverUrl: 'http://h:2' });
+    assert.equal(store.getProject('p1')!.workspacePath, '/workspace/b');
+    assert.equal(store.getProject('p1')!.wakeChannel, 'http://h:2');
+    assert.equal(store.getProject('p1')!.defaultSessionId, null);
+    assert.equal(store.getIssue(issue.id)!.sessionId, null);
+    assert.ok(store.listActivities(issue.id).some(activity => activity.action === 'session-unbound'));
     const upd = events.find(e => e.type === 'project.updated');
     assert.ok(upd);
-    assert.deepEqual(upd!.payload.fields, ['wakeChannel', 'defaultSessionId']);
+    assert.deepEqual(upd!.payload.fields, ['workspacePath', 'wakeChannel', 'defaultSessionId']);
+  });
+
+  it('does not allow routing changes while any task in the Directory has an active Agent lease', () => {
+    const { store } = fresh();
+    const directory = store.createDirectory({ id: 'dir-1', name: 'D', workspacePath: '/workspace/a', serverUrl: 'http://h:1' });
+    const project = store.createProject({ id: 'p1', name: 'P', directoryId: directory.id });
+    const issue = store.createIssue({ projectId: project.id, title: 'leased' });
+    store.claimIssue(issue.id, 'agent-a', 30);
+    assert.throws(() => store.updateDirectory(directory.id, { workspacePath: '/workspace/b' }), /active agent leases/);
+    assert.equal(store.getDirectory(directory.id)!.workspacePath, '/workspace/a');
+    assert.equal(store.getProject(project.id)!.workspacePath, '/workspace/a');
   });
 });
 
@@ -1528,21 +1521,22 @@ describe('workspace directories', () => {
     assert.deepEqual(store.listDirectories().map(item => item.id), ['work-a']);
   });
 
-  it('updates the directory default path for future projects without changing existing projects by default', () => {
+  it('Directory path changes are immediately inherited by existing and new projects', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
-    const directory = store.createDirectory({ id: 'work-b', name: 'Workspace B' });
-    const existing = store.createProject({
-      id: 'p-existing', name: 'Existing Project', directoryId: directory.id,
-      workspacePath: 'D:\\workspace\\old-root'
+    const directory = store.createDirectory({
+      id: 'work-b', name: 'Workspace B', workspacePath: 'D:\\workspace\\old-root',
+      serverUrl: 'http://127.0.0.1:4096'
     });
+    const existing = store.createProject({ id: 'p-existing', name: 'Existing Project', directoryId: directory.id });
     const updated = store.updateDirectory(directory.id, { workspacePath: 'D:\\workspace\\new-root' });
     assert.equal(updated.workspacePath, 'D:\\workspace\\new-root');
-    assert.equal(store.getProject(existing.id)!.workspacePath, 'D:\\workspace\\old-root');
+    assert.equal(store.getProject(existing.id)!.workspacePath, 'D:\\workspace\\new-root');
+    assert.equal(store.getProject(existing.id)!.defaultSessionId, null);
     const project = store.createProject({ id: 'p-b', name: 'Project B', directoryId: directory.id });
     assert.equal(project.workspacePath, 'D:\\workspace\\new-root');
   });
 
-  it('synchronizes opted-in existing projects and clears stale Session bindings', () => {
+  it('routing changes clear every Project Session in the Directory, but no other Directory', () => {
     const store = new Store(':memory:', new DatabaseSync(':memory:'));
     const directory = store.createDirectory({
       id: 'sync-dir', name: 'Sync directory',
@@ -1552,27 +1546,14 @@ describe('workspace directories', () => {
       id: 'other-dir', name: 'Other directory',
       workspacePath: '/other', serverUrl: 'http://127.0.0.1:4100'
     });
-    store.createProject({
-      id: 'sync-a', name: 'Project A', directoryId: directory.id,
-      workspacePath: '/project/a-old', wakeChannel: 'http://127.0.0.1:4096',
-      defaultSessionId: 'ses-project-a'
-    });
-    store.createProject({
-      id: 'sync-b', name: 'Project B', directoryId: directory.id,
-      workspacePath: '/project/b-old', wakeChannel: 'http://127.0.0.1:4096',
-      defaultSessionId: 'ses-project-b'
-    });
-    store.createProject({
-      id: 'other-project', name: 'Other Project', directoryId: otherDirectory.id,
-      workspacePath: '/other/project', wakeChannel: 'http://127.0.0.1:4100',
-      defaultSessionId: 'ses-other'
-    });
-    const issue = store.createIssue({ projectId: 'sync-a', title: 'Bound task', sessionId: 'ses-task-a' });
+    store.createProject({ id: 'sync-a', name: 'Project A', directoryId: directory.id, defaultSessionId: 'ses-project-a' });
+    store.createProject({ id: 'sync-b', name: 'Project B', directoryId: directory.id, defaultSessionId: 'ses-project-b' });
+    store.createProject({ id: 'other-project', name: 'Other Project', directoryId: otherDirectory.id, defaultSessionId: 'ses-other' });
+    const issue = store.createIssue({ projectId: 'sync-a', title: 'Bound task' });
 
     const updatedDirectory = store.updateDirectory(directory.id, {
       workspacePath: '/workspace/new', serverUrl: 'http://127.0.0.1:4097'
-    }, { syncProjects: true });
-
+    });
     assert.equal(updatedDirectory.workspacePath, '/workspace/new');
     assert.equal(updatedDirectory.serverUrl, 'http://127.0.0.1:4097');
     for (const id of ['sync-a', 'sync-b']) {
@@ -1585,29 +1566,8 @@ describe('workspace directories', () => {
     assert.ok(store.listActivities(issue.id).some(activity => activity.action === 'session-unbound'));
     assert.deepEqual(
       [store.getProject('other-project')!.workspacePath, store.getProject('other-project')!.wakeChannel, store.getProject('other-project')!.defaultSessionId],
-      ['/other/project', 'http://127.0.0.1:4100', 'ses-other']
+      ['/other', 'http://127.0.0.1:4100', 'ses-other']
     );
-  });
-
-  it('rejects syncing projects with active agent leases without partially updating the directory', () => {
-    const store = new Store(':memory:', new DatabaseSync(':memory:'));
-    const directory = store.createDirectory({
-      id: 'leased-dir', name: 'Leased directory',
-      workspacePath: '/workspace/old', serverUrl: 'http://127.0.0.1:4096'
-    });
-    store.createProject({
-      id: 'leased-project', name: 'Leased Project', directoryId: directory.id,
-      workspacePath: '/workspace/old', wakeChannel: 'http://127.0.0.1:4096'
-    });
-    const issue = store.createIssue({ projectId: 'leased-project', title: 'Leased task' });
-    store.claimIssue(issue.id, 'agent-a', 30, 'agent-a', 'ses-a', 'main');
-
-    assert.throws(
-      () => store.updateDirectory(directory.id, { workspacePath: '/workspace/new' }, { syncProjects: true }),
-      /active agent leases/
-    );
-    assert.equal(store.getDirectory(directory.id)!.workspacePath, '/workspace/old');
-    assert.equal(store.getProject('leased-project')!.workspacePath, '/workspace/old');
   });
 
   it('legacy project creation automatically creates or reuses a matching directory', () => {

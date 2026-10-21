@@ -182,10 +182,16 @@ export class Store {
     inTransaction(this.db, () => {
       this.directories.update(id, patch);
       if (routingChanged) {
-        // All tasks inherit Session from their Project. Clearing each project's
-        // default automatically unbinds every task without per-task writes.
+        // All tasks inherit Session from their Project. Clearing the project's
+        // default automatically unbinds every task; keep a task-scoped audit
+        // entry for each inherited binding that becomes invalid.
         for (const project of directoryProjects) {
           this.projects.update(project.id, { defaultSessionId: null });
+          if (project.defaultSessionId) {
+            for (const issue of this.issues.list(project.id, { archived: 'all' })) {
+              this.logActivity(issue.id, 'system', 'session-unbound', 'Directory workspace/server changed; project Session cleared');
+            }
+          }
         }
       }
     });

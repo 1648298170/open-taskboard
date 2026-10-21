@@ -19,6 +19,8 @@ describe('migration compatibility', () => {
     // the database back to the divergent v13 layout.
     db.exec("ALTER TABLE projects ADD COLUMN workspace_path TEXT NOT NULL DEFAULT ''");
     db.exec("ALTER TABLE projects ADD COLUMN wake_channel TEXT NOT NULL DEFAULT ''");
+    db.exec('ALTER TABLE projects ADD COLUMN session_id TEXT');
+    db.exec('ALTER TABLE issues ADD COLUMN session_id TEXT');
     db.prepare(
       "INSERT INTO projects (id, name, workspace_path, wake_channel, labels, created_at) VALUES ('p1', 'P', 'D:/ws', 'http://127.0.0.1:4096', '', '2024-01-01T00:00:00.000Z')"
     ).run();
