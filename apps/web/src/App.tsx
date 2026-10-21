@@ -215,7 +215,7 @@ export default function App() {
     setProjSessionsLoading(true);
     setProjSessionsError(null);
     const timer = window.setTimeout(() => {
-      api_.openCodeSessionsForDirectory(projectDirectoryId, projWorkspacePath.trim(), projServerUrl.trim())
+      api_.openCodeSessionsForDirectory(projectDirectoryId)
         .then(result => {
           if (cancelled) return;
           setProjSessions(result.sessions);
@@ -1083,7 +1083,7 @@ export default function App() {
             const title = sessionTitle.trim();
             if (!title) { showToast('✗ Session 标题不能为空'); return; }
             try {
-              const result = await api_.createOpenCodeSession(projectDirectoryId, title, projWorkspacePath.trim(), projServerUrl.trim());
+              const result = await api_.createOpenCodeSession(projectDirectoryId, title);
               setProjSessions(prev => [result.session, ...prev.filter(session => session.id !== result.session.id)]);
               setProjDefaultSessionId(result.session.id);
               setProjSessionsError(null);
