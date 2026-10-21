@@ -13,7 +13,7 @@ const createSessionSchema = z.object({
 const validationMessage = (error: z.ZodError): string =>
   error.issues.map(i => (i.path.length > 0 ? `${i.path.map(String).join('.')}: ` : '') + i.message).join('; ');
 
-const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store }) => {
+const directoriesRoutes: FastifyPluginAsync<{ store: Store; openCodeUrl?: string; publicOpenCodeUrl?: string }> = async (app, { store, openCodeUrl, publicOpenCodeUrl }) => {
   app.get('/api/directories/browse', async (
     req: FastifyRequest<{ Querystring: DirectoryBrowseQuery }>,
     reply
@@ -21,7 +21,7 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
     const path = String(req.query.path ?? '').trim();
     if (path.length > 4096) return reply.code(400).send({ error: '目录路径过长' });
     let serverUrl: string;
-    try { serverUrl = getConfiguredOpenCodeBase(); }
+    try { serverUrl = getConfiguredOpenCodeBase(openCodeUrl); }
     catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
     const isWindowsDrivePath = /^[A-Za-z]:[\\/]/.test(path);
     const isWindowsUncPath = path.startsWith('\\\\');
@@ -61,7 +61,7 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
         projectId: project.id, projectName: project.name,
         directoryName: directory?.name ?? '未关联目录',
         workspacePath, sessionId: sessionId || null,
-        sessionUrl: sessionId ? buildOpenCodePublicSessionUrl(workspacePath, sessionId) : null
+        sessionUrl: sessionId ? buildOpenCodePublicSessionUrl(workspacePath, sessionId, publicOpenCodeUrl) : null
       };
       if (!sessionId) return { ...base, status: 'no-session', busy: null };
       if (!workspacePath) return { ...base, status: 'unavailable', busy: null, error: '项目未配置工作目录' };
