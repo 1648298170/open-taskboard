@@ -827,9 +827,8 @@ export default function App() {
               setProjectDirectoryId(directoryId);
               setProjName(''); setProjId(''); setProjLabels('');
               setProjWorkspacePath(directories[0]?.workspacePath ?? '');
-              setProjServerUrl(directories[0]?.serverUrl || defaultOpenCodeServerUrl);
+              setProjServerUrl(directories[0]?.serverUrl ?? '');
               setProjDefaultSessionId(''); setProjSessions([]);
-              setProjInheritLocked(false);
               setProjCreateOpen(true);
               setExpandedDirectories(prev => new Set(prev).add(directoryId));
             }}>在目录下创建项目</button>
