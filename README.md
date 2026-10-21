@@ -208,7 +208,7 @@ opencode attach http://127.0.0.1:4097        # 终端 2：接管绑定了 4097 �
 
 #### 细节备忘
 
-- 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47824`）。工作目录与 OpenCode Server URL 存在**Directory**（`workspacePath` + `serverUrl`），项目通过 `directoryId` 继承；默认会话保存在**Project**（`defaultSessionId`），所有任务从所属项目读取同一个 Session。任务表不再存储独立 `sessionId`，任务级会话输入不会覆盖项目绑定。新建项目需选择目录和项目默认 Session，服务端会按目录路由校验 Session 的实际工作目录。
+- 看板面板 / 数据永远只有一个（默认 `http://127.0.0.1:47824`）。工作目录存在 **Directory**（`workspacePath`），项目通过 `directoryId` 继承；默认会话保存在 **Project**（`defaultSessionId`），所有任务从所属项目读取同一个 Session。OpenCode Server 地址只由 Taskboard 服务端环境变量 `TASKBOARD_OPENCODE_URL` 配置，目录、项目和全局设置均不保存或修改该地址。任务表不再存储独立 `sessionId`，任务级会话输入不会覆盖项目绑定。新建项目需选择目录和项目默认 Session，服务端会按统一部署地址校验 Session 的实际工作目录。
 - 唤醒优先级：任务通过所属项目继承 `defaultSessionId` 时，watch 通过对应 OpenCode 服务的 `prompt_async` 发送到项目默认会话；项目未配置 Session 时才使用 Directory 的 `serverUrl` / `--tui-url` 注入 TUI，最后才 headless。任务的 claim/body `sessionId` 只为旧客户端保留兼容字段，服务端不会用它建立任务级绑定。
 - 同一 serve 端口被多终端 attach 时注入是**广播**（每窗都出现）——多终端请各用各的端口，绑定时不会串
 - 端口/项目/终端数量不受限：项目返回的 `wakeChannel` 是从 Directory 计算出的兼容字段；实际 OpenCode Server URL 由 Directory 的 `serverUrl` 维护，可绑定局域网另一台机器。headless 通道连端口都不需要。
@@ -281,7 +281,8 @@ docker compose up -d --build
 | `TASKBOARD_PORT` | `47824` | HTTP 端口 |
 | `TASKBOARD_DATA_DIR` | `.data` | SQLite 数据目录 |
 | `TASKBOARD_URL` | `http://127.0.0.1:47824` | CLI / MCP 指向的服务地址 |
-| `TASKBOARD_OPENCODE_URL` | 未设置 | Web 新建项目与无状态 `GET /api/opencode/sessions` 的默认 OpenCode 服务地址。服务端解析顺序：显式 `url` query（仅 API）→ 本环境变量 → 最近创建项目所属 Directory 的 `serverUrl` → `http://127.0.0.1:4096`；解析结果写入新建 Directory，而不是写入 Project。Docker Compose 示例已设为 `http://host.docker.internal:4096`，并加 `host.docker.internal:host-gateway`（Linux） |
+| `TASKBOARD_OPENCODE_URL` | Docker Compose 默认 `http://host.docker.internal:4096` | Taskboard 服务端访问 OpenCode 的内部地址。该值仅由部署环境配置，不存入目录、项目或应用设置。 |
+| `TASKBOARD_OPENCODE_PUBLIC_URL` | 未设置 | 浏览器可访问的 OpenCode 地址，用于生成 Session 跳转链接。Docker 部署时不要填写 `host.docker.internal`；请设置为浏览器能访问的宿主机 IP、域名及端口。 |
 | `TASKBOARD_SESSION_ID` | 未设置 | CLI 每次请求自动带 `x-taskboard-session`；`--session-id` 优先于该环境变量 |
 | `TASKBOARD_WEB_DIST` | 自动探测 | 看板静态目录（默认 `apps/web/dist`，vite 构建产物） |
 | `TASKBOARD_AUTH_REQUIRED` | 未设置 | `1` 时强制浏览器登录；非回环监听地址也会自动强制登录。首次访问创建管理员，后续通过 HttpOnly Session Cookie 认证，无需手动输入 Token |\n| `TASKBOARD_TOKEN` | 未设置 | 可选的兼容凭证，供 CLI/MCP 等机器客户端使用；浏览器不再要求输入或保存此值 |
