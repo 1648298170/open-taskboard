@@ -938,11 +938,17 @@ describe('status transition audit-note gate', () => {
 });
 
 describe('server bind safety', () => {
-  it('refuses non-loopback binding without an API token', async () => {
-    await assert.rejects(
-      () => buildApp({ env: { TASKBOARD_HOST: '0.0.0.0' } }),
-      /TASKBOARD_TOKEN/
-    );
+  it('requires administrator initialization for non-loopback binds without a machine token', async () => {
+    const { app, cleanup } = await makeApp({ TASKBOARD_HOST: '0.0.0.0' });
+    try {
+      const status = await app.inject({ method: 'GET', url: '/api/auth/status' });
+      assert.equal(status.json<{ authRequired: boolean; initialized: boolean }>().authRequired, true);
+      assert.equal(status.json<{ authRequired: boolean; initialized: boolean }>().initialized, false);
+      const response = await app.inject({ method: 'GET', url: '/api/meta' });
+      assert.equal(response.statusCode, 401);
+    } finally {
+      cleanup();
+    }
   });
 
   it('allows loopback binding without a token for local-only use', async () => {
