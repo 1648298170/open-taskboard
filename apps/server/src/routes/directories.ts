@@ -1,7 +1,7 @@
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { Store, ValidationError } from '@taskboard/core';
 import { createDirectorySchema, directoryPatchSchema, z } from '@taskboard/core/schemas';
-import { createOpenCodeSession, getConfiguredOpenCodeBase, getOpenCodeSessionRuntimeState, listOpenCodeDirectories, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
+import { buildOpenCodePublicSessionUrl, createOpenCodeSession, getConfiguredOpenCodeBase, getOpenCodeSessionRuntimeState, listOpenCodeDirectories, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
 
 interface DirectoryParams { directoryId: string }
 interface DirectoryBrowseQuery { path?: string }
@@ -60,7 +60,8 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
       const base = {
         projectId: project.id, projectName: project.name,
         directoryName: directory?.name ?? '未关联目录',
-        workspacePath, sessionId: sessionId || null
+        workspacePath, sessionId: sessionId || null,
+        sessionUrl: sessionId ? buildOpenCodePublicSessionUrl(workspacePath, sessionId) : null
       };
       if (!sessionId) return { ...base, status: 'no-session', busy: null };
       if (!workspacePath) return { ...base, status: 'unavailable', busy: null, error: '项目未配置工作目录' };
