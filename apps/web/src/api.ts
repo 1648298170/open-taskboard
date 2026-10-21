@@ -58,7 +58,7 @@ export interface WorkspaceDirectoryListing {
   drives: WorkspaceDirectoryEntry[];
 }
 
-/** T2-9: API 错误，携带 HTTP status — App 据此识别 401 并弹出令牌输入。 */
+/** API errors carry HTTP status so the app can route 401 responses to login. */
 export class ApiError extends Error {
   readonly status: number;
   constructor(message: string, status: number) {
@@ -68,26 +68,48 @@ export class ApiError extends Error {
   }
 }
 
-/** localStorage 中保存的访问令牌（T2-9）；空串 = 未设置。 */
-const bearerToken = (): string => localStorage.getItem('taskboard-token') ?? '';
+export interface AuthStatus {
+  authRequired: boolean;
+  initialized: boolean;
+  authenticated: boolean;
+  username: string | null;
+}
 
-async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const token = bearerToken();
+async function requestJson<T>(path: string, method: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
+    credentials: 'same-origin',
+    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? ('HTTP ' + res.status), res.status);
+  return data as T;
+}
+
+async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    credentials: 'same-origin',
     headers: {
       'x-taskboard-actor': 'web',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {})
     },
     body: body !== undefined ? JSON.stringify(body) : undefined
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `HTTP ${res.status}`, res.status);
+  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? ('HTTP ' + res.status), res.status);
   return data as T;
 }
 
 export const api_ = {
+  authStatus: () => requestJson<AuthStatus>('/api/auth/status', 'GET'),
+  initializeAdmin: (username: string, password: string) =>
+    requestJson<{ ok: true; username: string }>('/api/auth/setup', 'POST', { username, password }),
+  login: (username: string, password: string) =>
+    requestJson<{ ok: true; username: string }>('/api/auth/login', 'POST', { username, password }),
+  logout: () => requestJson<{ ok: true }>('/api/auth/logout', 'POST'),
+
   getSettings: () => api<AppSettings>('GET', '/api/settings'),
   updateSettings: (p: Partial<AppSettings>) => api<AppSettings>('PUT', '/api/settings', p),
   browseWorkspaceDirectories: (serverUrl: string, path?: string) => {
@@ -137,28 +159,21 @@ export const api_ = {
     api<{ ok: true }>('DELETE', `/api/comments/${commentId}`),
   updateComment: (commentId: string, patch: { body?: string; status?: string }) =>
     api<Comment>('PATCH', `/api/comments/${commentId}`, patch),
-  // T7-39: 附件上传是 multipart，不能走 JSON 的 api() —— 独立实现（同样带
-  // Bearer + actor 头）；下载用 <a href> 直链，令牌经 ?token= 传递（与 SSE 同法）。
+  // Multipart uploads and normal downloads use the same-origin HttpOnly session cookie.
   uploadAttachment: async (id: string, file: File): Promise<Attachment> => {
-    const token = bearerToken();
     const form = new FormData();
     form.append('file', file, file.name);
-    const res = await fetch(`/api/issues/${id}/attachments`, {
+    const res = await fetch('/api/issues/' + id + '/attachments', {
       method: 'POST',
-      headers: {
-        'x-taskboard-actor': 'web',
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
-      },
+      credentials: 'same-origin',
+      headers: { 'x-taskboard-actor': 'web' },
       body: form
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `HTTP ${res.status}`, res.status);
+    if (!res.ok) throw new ApiError((data as { error?: string }).error ?? ('HTTP ' + res.status), res.status);
     return data as Attachment;
   },
-  downloadUrl: (attachmentId: string): string => {
-    const token = bearerToken();
-    return `/api/attachments/${attachmentId}/download${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-  },
+  downloadUrl: (attachmentId: string): string => '/api/attachments/' + attachmentId + '/download',
   listDependencies: (projectId: string) =>
     api<DependencyEdge[]>('GET', `/api/projects/${projectId}/dependencies`),
   addDependency: (id: string, dependsOnId: string) =>
@@ -202,10 +217,7 @@ export function connectOpenCodeSessionEvents(
   onReady: () => void,
   onError: (message: string) => void
 ): () => void {
-  const token = bearerToken();
-  const es = new EventSource(
-    `/api/issues/${encodeURIComponent(issueId)}/opencode-events${token ? `?token=${encodeURIComponent(token)}` : ''}`
-  );
+  const es = new EventSource('/api/issues/' + encodeURIComponent(issueId) + '/opencode-events');
   es.addEventListener('ready', () => onReady());
   es.addEventListener('opencode', event => {
     try { onEvent(JSON.parse((event as MessageEvent<string>).data) as unknown); }
@@ -229,10 +241,8 @@ export function connectSSE(onChange: () => void): () => void {
 
   const connect = (): void => {
     if (closed) return;
-    // EventSource 无法带自定义 header —— 令牌通过 ?token= 传递（每次重连
-    // 重新读取，保存新令牌后的自动重连即可恢复）。
-    const token = bearerToken();
-    es = new EventSource(`/api/events${token ? `?token=${encodeURIComponent(token)}` : ''}`);
+    // Same-origin EventSource automatically includes the HttpOnly session cookie.
+    es = new EventSource('/api/events');
     es.addEventListener('hello', () => {
       delay = 2000;
       // hello（首次连接与每次重连）都全量刷新：断线期间的变更只会体现在
