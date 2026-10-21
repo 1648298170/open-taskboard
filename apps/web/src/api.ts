@@ -120,7 +120,7 @@ export const api_ = {
   listDirectories: () => api<WorkspaceDirectory[]>('GET', '/api/directories'),
   createDirectory: (p: { id?: string; name: string; workspacePath?: string; serverUrl?: string }) =>
     api<WorkspaceDirectory>('POST', '/api/directories', p),
-  updateDirectory: (id: string, p: { name?: string; workspacePath?: string; serverUrl?: string; syncProjects?: boolean }) =>
+  updateDirectory: (id: string, p: { name?: string; workspacePath?: string; serverUrl?: string }) =>
     api<WorkspaceDirectory>('PATCH', `/api/directories/${encodeURIComponent(id)}`, p),
   deleteDirectory: (id: string, options?: { cascade?: boolean }) =>
     api<{ ok: true }>('DELETE', `/api/directories/${encodeURIComponent(id)}${options?.cascade ? '?cascade=1' : ''}`),
@@ -134,7 +134,7 @@ export const api_ = {
     ),
   listProjects: () => api<Project[]>('GET', '/api/projects'),
   createProject: (p: { id?: string; name: string; directoryId?: string; defaultSessionId?: string | null; workspacePath?: string; wakeChannel?: string; labels?: string }) => api<Project>('POST', '/api/projects', p),
-  updateProject: (id: string, p: { name?: string; workspacePath?: string; wakeChannel?: string; defaultSessionId?: string | null }) => api<Project>('PATCH', `/api/projects/${id}`, p),
+  updateProject: (id: string, p: { name?: string; defaultSessionId?: string | null; labels?: string }) => api<Project>('PATCH', `/api/projects/${id}`, p),
   deleteProject: (id: string) => api<void>('DELETE', `/api/projects/${id}`),
   listIssues: (projectId: string) => api<Issue[]>('GET', `/api/projects/${projectId}/issues`),
   showIssue: (id: string) => api<IssueDetail>('GET', `/api/issues/${id}`),

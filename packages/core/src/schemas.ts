@@ -31,8 +31,6 @@ export const directoryPatchSchema = z.object({
   name: z.string().min(1).optional(),
   workspacePath: z.string().optional(),
   serverUrl: z.string().trim().max(500).optional(),
-  // Explicit opt-in: also update existing projects assigned to this directory.
-  syncProjects: z.boolean().optional(),
 }).strict();
 
 export const createProjectSchema = z
@@ -42,8 +40,8 @@ export const createProjectSchema = z
     directoryId: z.string().min(1).optional(),
     defaultSessionId: z.string().trim().min(1).nullable().optional(),
     workspacePath: z.string().optional(),
-    // A directory provides the default workspacePath; projects may override it.
-    // v0.4 wake routing: full TUI URL (http://127.0.0.1:4097); '' = unbound.
+    // Legacy create-only inputs for callers without directoryId. When directoryId is
+    // provided, these values are ignored and the Directory remains authoritative.
     wakeChannel: z.string().max(200).optional(),
     labels: z.string().optional(),
     // v13: project default opencode session for new tasks.
@@ -55,8 +53,6 @@ export const projectPatchSchema = z
   .object({
     name: z.string().min(1).optional(),
     defaultSessionId: z.string().trim().min(1).nullable().optional(),
-    workspacePath: z.string().optional(),
-    wakeChannel: z.string().max(200).optional(),
     labels: z.string().optional(),
     // '' clears the project default; whitespace-only is rejected.
     sessionId: z.union([z.string().trim().min(1).max(200), z.literal('')]).optional(),
@@ -80,7 +76,6 @@ export const createIssueSchema = z
     reviewStatus: z.enum(['pending', 'approved', 'changes_requested']).optional(),
     reviewNotes: z.string().max(20000).optional(),
     // v0.4: opencode session binding 鈥?null/absent = unbound.
-    sessionId: z.string().min(1).nullable().optional(),
     assignee: z.string().optional(),
     startDate: nullableDate,
     dueDate: nullableDate,
@@ -103,7 +98,6 @@ export const issuePatchSchema = z
     acceptanceCriteria: z.string().max(20000).optional(),
     reviewStatus: z.enum(['pending', 'approved', 'changes_requested']).optional(),
     reviewNotes: z.string().max(20000).optional(),
-    sessionId: z.string().min(1).nullable().optional(),
     assignee: z.string().optional(),
     parentId: z.string().nullable().optional(),
     startDate: nullableDate,
