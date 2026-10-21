@@ -331,3 +331,10 @@ describe('deployment OpenCode URL configuration', () => {
       method: 'PUT', url: '/api/settings', headers: json,
       payload: { defaultWorkspacePath: 'D:/ws' }
     });
+    assert.equal(put.statusCode, 200, put.body);
+    assert.deepEqual((await app.inject({ method: 'GET', url: '/api/settings' })).json(), {
+      defaultWorkspacePath: 'D:/ws'
+    });
+    cleanup();
+  });
+});
