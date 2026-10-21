@@ -43,7 +43,7 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store; openCodeUrl?: string
     const checkedAt = new Date().toISOString();
     let serverUrl: string;
     try {
-      serverUrl = getConfiguredOpenCodeBase();
+      serverUrl = getConfiguredOpenCodeBase(openCodeUrl);
       await listOpenCodeSessions(serverUrl);
     } catch (err) {
       return reply.code(200).send({
@@ -92,7 +92,7 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store; openCodeUrl?: string
     if (!directory) return reply.code(404).send({ error: `directory not found: ${req.params.directoryId}` });
     const workspacePath = directory.workspacePath.trim();
     let serverUrl: string;
-    try { serverUrl = getConfiguredOpenCodeBase(); }
+    try { serverUrl = getConfiguredOpenCodeBase(openCodeUrl); }
     catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
     if (!workspacePath) return reply.code(400).send({ error: '请先在目录中配置工作目录' });
     try {
@@ -119,7 +119,7 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store; openCodeUrl?: string
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     const workspacePath = directory.workspacePath.trim();
     let serverUrl: string;
-    try { serverUrl = getConfiguredOpenCodeBase(); }
+    try { serverUrl = getConfiguredOpenCodeBase(openCodeUrl); }
     catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
     if (!workspacePath) return reply.code(400).send({ error: '请先在目录中配置工作目录' });
     try {
