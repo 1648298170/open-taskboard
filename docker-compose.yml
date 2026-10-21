@@ -19,6 +19,8 @@ services:
       TASKBOARD_HOST: 0.0.0.0
       TASKBOARD_PORT: 47824
       TASKBOARD_AUTH_REQUIRED: "1"
+      # Optional bearer token for API clients; empty by default (browser login only).
+      TASKBOARD_TOKEN: ${TASKBOARD_TOKEN:-}
     extra_hosts:
       # Linux resolves host.docker.internal to the host gateway.
       - "host.docker.internal:host-gateway"
