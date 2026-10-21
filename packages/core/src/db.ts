@@ -349,7 +349,10 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
   },
   // v19 -> v20: OpenCode URL is deployment configuration, never persisted per directory or in app settings.
   (db: DatabaseSync) => {
-    if (hasColumn(db, 'directories', 'server_url')) db.exec("UPDATE directories SET server_url = ''");
+    if (hasColumn(db, 'directories', 'server_url')) {
+      db.exec("UPDATE directories SET server_url = ''");
+      db.exec('ALTER TABLE directories DROP COLUMN server_url');
+    }
     if (hasTable(db, 'app_settings')) db.exec("DELETE FROM app_settings WHERE key = 'default_opencode_server_url'");
   }
 ];
