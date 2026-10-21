@@ -298,7 +298,7 @@ docker compose up -d --build
 | `TASKBOARD_PORT` | `47824` | HTTP 端口 |
 | `TASKBOARD_DATA_DIR` | `.data` | SQLite 数据目录 |
 | `TASKBOARD_URL` | `http://127.0.0.1:47824` | CLI / MCP 指向的服务地址 |
-| `TASKBOARD_OPENCODE_URL` | Docker Compose 默认 `http://host.docker.internal:4096` | Taskboard 服务端访问 OpenCode 的内部地址。该值仅由部署环境配置，不存入目录、项目或应用设置。 |
+| `TASKBOARD_OPENCODE_URL` | Docker Compose 默认 `http://host.docker.internal:4096` | Taskboard 服务端访问 OpenCode 的内部地址。该值仅由部署环境配置，不存入目录、项目或应用设置。**单一来源**：在根目录 `.env` 设置后，compose 与 `taskboard setup` 都会读取它。 |
 | `TASKBOARD_OPENCODE_PUBLIC_URL` | 未设置 | 浏览器可访问的 OpenCode 地址，用于生成 Session 跳转链接。Docker 部署时不要填写 `host.docker.internal`；请设置为浏览器能访问的宿主机 IP、域名及端口。 |
 | `TASKBOARD_WAKE_EMBEDDED` | 默认开启 | 服务端内嵌唤醒引擎开关：任何非 `0` 值启用，`0` 关闭。仅在 `TASKBOARD_OPENCODE_URL` 已配置时启动；未配置时日志提示 `wake embedded: off (no OpenCode URL configured)` 并跳过 |
 | `TASKBOARD_WAKE_POLL_MS` | `60000` | 内嵌引擎兜底轮询间隔（毫秒，最小 `5000`，非法值回落 `60000`）。事件订阅负责实时性，轮询负责补拉漏网评论 |

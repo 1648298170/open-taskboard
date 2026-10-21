@@ -410,11 +410,11 @@ Start-Process $exe -ArgumentList "serve","--port","4097","--hostname","0.0.0.0" 
 
 | 位置 | 键 | 本机取值 |
 |---|---|---|
-| watch 环境变量 | `OPENCODE_SERVER_URL` | `http://127.0.0.1:4096`（宿主） |
-| 项目设置 | `wakeChannel` | `http://host.docker.internal:4096`（容器视角） |
+| 服务端 / 内嵌唤醒（容器） | `TASKBOARD_OPENCODE_URL` | `http://host.docker.internal:4096`（容器视角） |
+| 外部 watch（宿主） | `--opencode` 或 `OPENCODE_SERVER_URL` | `http://127.0.0.1:4096`（宿主） |
 | serve 启动参数 | `--hostname` | `0.0.0.0`（否则容器连不上） |
 
-改端口 / 改监听地址后，**三处都要改**。
+改端口 / 改监听地址后：只需改仓库根目录 `.env` 的 `TASKBOARD_OPENCODE_URL`（`docker-compose.yml` 以 `${TASKBOARD_OPENCODE_URL:-…}` 直接读取）；宿主侧自启再重跑一次 `taskboard setup --opencode-url <新地址>` 刷新。
 
 ### 7.2 为什么容器要用 `host.docker.internal`
 
