@@ -206,19 +206,12 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   // Persistent global defaults are shared across browser clients and survive restarts.
   app.get('/api/settings', async () => store.getAppSettings());
   app.put('/api/settings', async (req, reply) => {
-    const body = req.body as { defaultWorkspacePath?: unknown; defaultOpenCodeServerUrl?: unknown } | null;
-    const allowed = new Set(['defaultWorkspacePath', 'defaultOpenCodeServerUrl']);
-    const hasWorkspace = body?.defaultWorkspacePath !== undefined;
-    const hasServer = body?.defaultOpenCodeServerUrl !== undefined;
-    if (!body || Object.keys(body).some(key => !allowed.has(key)) || (!hasWorkspace && !hasServer)
-      || (hasWorkspace && typeof body.defaultWorkspacePath !== 'string')
-      || (hasServer && typeof body.defaultOpenCodeServerUrl !== 'string')) {
-      return reply.code(400).send({ error: 'defaultWorkspacePath/defaultOpenCodeServerUrl must be strings' });
+    const body = req.body as { defaultWorkspacePath?: unknown } | null;
+    if (!body || Object.keys(body).some(key => key !== 'defaultWorkspacePath')
+      || typeof body.defaultWorkspacePath !== 'string') {
+      return reply.code(400).send({ error: 'defaultWorkspacePath must be a string' });
     }
-    return store.updateAppSettings({
-      ...(hasWorkspace ? { defaultWorkspacePath: String(body.defaultWorkspacePath) } : {}),
-      ...(hasServer ? { defaultOpenCodeServerUrl: String(body.defaultOpenCodeServerUrl) } : {})
-    });
+    return store.updateAppSettings({ defaultWorkspacePath: String(body.defaultWorkspacePath) });
   });
 
   // ---- meta ----
