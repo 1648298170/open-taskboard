@@ -70,7 +70,7 @@ describe('API 级 E2E：验收链路（真实 HTTP + SSE）', () => {
     // 建项目并配置项目默认 Session，再由 Web 创建继承该会话的任务。
     const projectRes = await fetch(`${baseUrl}/api/projects`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ id: 'e2e', name: 'E2E', wakeChannel: 'http://127.0.0.1:4096' })
+      body: JSON.stringify({ id: 'e2e', name: 'E2E' })
     });
     assert.equal(projectRes.status, 201, await projectRes.clone().text());
     store.updateProject('e2e', { defaultSessionId: 'ses_e2e' });
