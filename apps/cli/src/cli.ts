@@ -10,7 +10,7 @@ async function main(): Promise<void> {
   let [cmd, sub, ...args] = process.argv.slice(2);
   if (sub && sub.startsWith('--')) { args.unshift(sub); sub = undefined; }
 
-  if (!cmd || cmd === 'help') { console.log(HELP); return; }
+  if (!cmd || cmd === 'help' || cmd === '-h' || cmd === '--help') { console.log(HELP); return; }
 
   const key = `${cmd} ${sub ?? ''}`.trim();
   let command = registry[key];
