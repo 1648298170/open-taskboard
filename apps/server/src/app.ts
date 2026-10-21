@@ -228,7 +228,7 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   await app.register(directoriesRoutes, { store });
   await app.register(projectsRoutes, { store });
   await app.register(issuesRoutes, { store, config });
-  await app.register(commentsRoutes, { store });
+  await app.register(commentsRoutes, { store, sessionUser: cookieHeader => browserAuth.sessionUser(cookieHeader) });
   await app.register(dependencyRoutes, { store });
   await app.register(searchRoutes, { store });
   await app.register(attachmentRoutes, { store });
