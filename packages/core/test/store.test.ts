@@ -418,6 +418,21 @@ describe('Store.updateComment', () => {
     );
   });
 
+  it('lets only the authenticated author edit a username-attributed comment', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const issueId = store.createIssue({ projectId: 'p1', title: 't' }).id;
+    const comment = store.addComment(issueId, { author: 'jerry', body: 'my note' });
+
+    throwsWith(
+      () => store.updateComment(comment.id, { body: 'forged edit' }, 'jerry', 'someone-else'),
+      PermissionError,
+      /created by/
+    );
+    store.updateComment(comment.id, { body: 'updated by jerry' }, 'jerry', 'jerry');
+    assert.equal(store.listComments(issueId)[0].body, 'updated by jerry');
+  });
+
   it('walks pending → processing → processed, resetting processed back to pending', () => {
     const t = withComment();
     t.store.updateComment(t.commentId, { status: 'processing' }, 'watch');
