@@ -24,8 +24,8 @@ export class DirectoryRepo {
     const id = input.id || shortId();
     if (this.get(id)) throw new ConflictError(`directory already exists: ${id}`);
     if (!input.name.trim()) throw new ValidationError('name: must not be blank');
-    this.db.prepare('INSERT INTO directories (id, name, workspace_path, server_url, created_at) VALUES (?, ?, ?, ?, ?) ')
-      .run(id, input.name.trim(), input.workspacePath?.trim() ?? '', '', now());
+    this.db.prepare('INSERT INTO directories (id, name, workspace_path, created_at) VALUES (?, ?, ?, ?) ')
+      .run(id, input.name.trim(), input.workspacePath?.trim() ?? '', now());
     return id;
   }
 
