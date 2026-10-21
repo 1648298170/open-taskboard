@@ -68,6 +68,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
         const base = normalizeOpenCodeBase(serverUrl);
         const sessions = await listOpenCodeSessions(base, workspacePath);
         const session = sessions.find(item => item.id === input.defaultSessionId);
+        if (!workspacePath) workspacePath = (session?.directory ?? '').trim();
         if (!session) {
           return reply.code(400).send({ error: '默认 Session 不存在，或无法从 OpenCode 服务读取；未创建项目' });
         }
@@ -113,7 +114,6 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
         if (!session) {
           return reply.code(400).send({ error: '默认 Session 不存在，或无法从 OpenCode 服务读取；未更新项目' });
         }
-        if (!workspacePath) workspacePath = (session.directory ?? '').trim();
         if (!workspacePath || !session.directory || normalizeDirectoryPath(session.directory) !== normalizeDirectoryPath(workspacePath)) {
           return reply.code(400).send({ error: '默认 Session 的实际工作目录与项目工作目录不一致；未更新项目' });
         }
