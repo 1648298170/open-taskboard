@@ -3,7 +3,7 @@ import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { Store, ValidationError } from '@taskboard/core';
 import { createProjectSchema, projectPatchSchema, z } from '@taskboard/core/schemas';
 import { listCommits, scanGitRefs } from '../git-refs.js';
-import { getConfiguredOpenCodeBase, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
+import { getConfiguredOpenCodeBase, listOpenCodeSessions } from '../opencode.js';
 
 interface ProjectParams { projectId: string }
 interface CommitsQuery { ref?: string }
@@ -146,7 +146,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
       const compatible = workspace
         ? sessions.filter(session => session.directory && normalizeDirectoryPath(session.directory) === normalizeDirectoryPath(workspace))
         : sessions;
-      return { sessions: compatible, workspacePath: workspace, serverUrl: base };
+      return { sessions: compatible, workspacePath: workspace };
     } catch (err) {
       return reply.code(502).send({ error: `无法读取 OpenCode 会话：${(err as Error).message}` });
     }
