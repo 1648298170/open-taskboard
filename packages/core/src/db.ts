@@ -314,7 +314,33 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       ALTER TABLE issues ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending';
       ALTER TABLE issues ADD COLUMN review_notes TEXT NOT NULL DEFAULT '';
     `);
-  },
+  },,
+  // v17 -> v18: move the last duplicated routing values into Directory, then
+  // remove Project's physical copies. API Project fields are computed from its
+  // owning Directory for compatibility with existing consumers.
+  (db: DatabaseSync) => {
+    db.exec(`
+      UPDATE directories
+      SET workspace_path = COALESCE(NULLIF(workspace_path, ''), (
+        SELECT p.workspace_path FROM projects p
+        WHERE p.directory_id = directories.id AND p.workspace_path <> ''
+        ORDER BY p.created_at LIMIT 1
+      ), '');
+      UPDATE directories
+      SET server_url = COALESCE(NULLIF(server_url, ''), (
+        SELECT p.wake_channel FROM projects p
+        WHERE p.directory_id = directories.id AND p.wake_channel <> ''
+        ORDER BY p.created_at LIMIT 1
+      ), '');
+    `);
+    if (hasColumn(db, 'projects', 'workspace_path')) {
+      db.exec('ALTER TABLE projects DROP COLUMN workspace_path');
+    }
+    if (hasColumn(db, 'projects', 'wake_channel')) {
+      db.exec('ALTER TABLE projects DROP COLUMN wake_channel');
+    }
+  }
+
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after

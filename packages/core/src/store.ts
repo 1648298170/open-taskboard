@@ -160,84 +160,54 @@ export class Store {
     return this.directories.get(id)!;
   }
 
-  updateDirectory(
-    id: string,
-    patch: DirectoryPatchInput,
-    options: { syncProjects?: boolean } = {}
-  ): WorkspaceDirectory {
+  updateDirectory(id: string, patch: DirectoryPatchInput): WorkspaceDirectory {
     const directory = this.directories.get(id);
     if (!directory) throw new NotFoundError(`directory not found: ${id}`);
 
-    const syncRouting = options.syncProjects === true &&
-      (patch.workspacePath !== undefined || patch.serverUrl !== undefined);
+    const routingChanged =
+      (patch.workspacePath !== undefined && patch.workspacePath.trim() !== directory.workspacePath) ||
+      (patch.serverUrl !== undefined && patch.serverUrl.trim() !== directory.serverUrl);
     const directoryProjects = this.projects.list().filter(project => project.directoryId === id);
-    const projectUpdates = syncRouting
-      ? directoryProjects.flatMap(project => {
-          const projectPatch: { workspacePath?: string; wakeChannel?: string } = {};
-          if (patch.workspacePath !== undefined) {
-            const workspacePath = patch.workspacePath.trim();
-            if (workspacePath !== project.workspacePath) projectPatch.workspacePath = workspacePath;
-          }
-          if (patch.serverUrl !== undefined) {
-            const wakeChannel = patch.serverUrl.trim();
-            if (wakeChannel !== project.wakeChannel) projectPatch.wakeChannel = wakeChannel;
-          }
-          return Object.keys(projectPatch).length > 0 ? [{ project, patch: projectPatch }] : [];
-        })
-      : [];
 
-    // Changing a project's path or Server URL invalidates its current Session
-    // context. Refuse the whole directory operation before writing anything if
-    // any affected project still has an active agent lease.
-    const activeIssueIds = projectUpdates.flatMap(({ project }) =>
-      this.issues.list(project.id, { archived: 'all' }).filter(issue => activeClaim(issue)).map(issue => issue.id)
-    );
+    // Route changes affect every project in the directory. Prevent switching
+    // execution context while any task in the directory is actively claimed.
+    const activeIssueIds = routingChanged
+      ? directoryProjects.flatMap(project =>
+          this.issues.list(project.id, { archived: 'all' }).filter(issue => activeClaim(issue)).map(issue => issue.id))
+      : [];
     if (activeIssueIds.length > 0) {
       throw new ConflictError(
-        `cannot sync directory workspace/server while ${activeIssueIds.length} task(s) have active agent leases; release or wait for the leases to expire first`
+        `cannot change directory workspace/server while ${activeIssueIds.length} task(s) have active agent leases; release or wait for the leases to expire first`
       );
     }
 
-    const projectEvents: Array<{ id: string; fields: string[]; unboundIssueIds: string[] }> = [];
+    const affectedProjects: string[] = [];
+    const unboundIssueIds: string[] = [];
     inTransaction(this.db, () => {
       this.directories.update(id, patch);
-      for (const { project, patch: routePatch } of projectUpdates) {
-        // Keep this cascade atomic with the directory update. Clear both the
-        // project default Session and task-level Session bindings because IDs
-        // from the old server/path must not be sent to the new context.
-        const effectivePatch = { ...routePatch, defaultSessionId: null };
-        this.projects.update(project.id, effectivePatch);
-        const unboundIssueIds: string[] = [];
+      if (!routingChanged) return;
+      for (const project of directoryProjects) {
+        // Default Sessions are specific to an OpenCode URL + workspace path.
+        this.projects.update(project.id, { defaultSessionId: null });
         for (const issue of this.issues.list(project.id, { archived: 'all' })) {
           if (!issue.sessionId) continue;
           this.issues.update(issue.id, { sessionId: null });
-          this.logActivity(
-            issue.id,
-            'system',
-            'session-unbound',
-            'Directory workspace/server changed; bind a session again'
-          );
+          this.logActivity(issue.id, 'system', 'session-unbound', 'Directory workspace/server changed; project Session cleared');
           unboundIssueIds.push(issue.id);
         }
-        projectEvents.push({
-          id: project.id,
-          fields: Object.keys(effectivePatch),
-          unboundIssueIds
-        });
+        affectedProjects.push(project.id);
       }
     });
 
     this.emit('directory.updated', { id, fields: Object.keys(patch) });
-    for (const event of projectEvents) {
-      for (const issueId of event.unboundIssueIds) {
-        this.emit('issue.updated', { id: issueId, fields: ['sessionId'] });
-      }
+    for (const projectId of affectedProjects) {
       this.emit('project.updated', {
-        id: event.id,
-        fields: event.fields,
-        unboundIssueIds: event.unboundIssueIds
+        id: projectId,
+        fields: ['defaultSessionId'],
+        unboundIssueIds: unboundIssueIds.filter(issueId => this.issues.get(issueId)?.projectId === projectId)
       });
     }
+    for (const issueId of unboundIssueIds) this.emit('issue.updated', { id: issueId, fields: ['sessionId'] });
     return this.directories.get(id)!;
   }
 
@@ -273,41 +243,25 @@ export class Store {
     return this.projects.get(id)!;
   }
 
-  updateProject(id: string, patch: { name?: string; workspacePath?: string; wakeChannel?: string; labels?: string; defaultSessionId?: string | null }): Project {
+  updateProject(id: string, patch: { name?: string; labels?: string; defaultSessionId?: string | null }): Project {
     const current = this.projects.get(id);
     if (!current) throw new NotFoundError(`project not found: ${id}`);
     if (patch.name !== undefined && patch.name.trim() === '') throw new ValidationError('name: must not be blank');
-    const routingChanged =
-      (patch.workspacePath !== undefined && patch.workspacePath.trim() !== current.workspacePath) ||
-      (patch.wakeChannel !== undefined && patch.wakeChannel.trim() !== current.wakeChannel);
-    if (routingChanged) {
+    if (patch.defaultSessionId !== undefined && patch.defaultSessionId !== current.defaultSessionId) {
       const activeIssues = this.issues.list(id, { archived: 'all' }).filter(issue => activeClaim(issue));
       if (activeIssues.length > 0) {
         throw new ConflictError(
-          `cannot change project workspace/server while ${activeIssues.length} task(s) have active agent leases; release or wait for the leases to expire first`
+          `cannot change project Session while ${activeIssues.length} task(s) have active agent leases; release or wait for the leases to expire first`
         );
       }
     }
-    const effectivePatch = routingChanged && patch.defaultSessionId === undefined
-      ? { ...patch, defaultSessionId: null }
-      : patch;
-    const unboundIssueIds: string[] = [];
-    inTransaction(this.db, () => {
-      this.projects.update(id, effectivePatch);
-      if (routingChanged) {
-        // A task's sessionId is meaningful only in the project server + path
-        // context. Clear bindings when that context changes to prevent routing
-        // an old session ID to a different OpenCode server or directory.
-        for (const issue of this.issues.list(id, { archived: 'all' })) {
-          if (!issue.sessionId) continue;
-          this.issues.update(issue.id, { sessionId: null });
-          this.logActivity(issue.id, 'system', 'session-unbound', 'Project workspace/server changed; bind a session again');
-          unboundIssueIds.push(issue.id);
-        }
-      }
-    });
-    for (const issueId of unboundIssueIds) this.emit('issue.updated', { id: issueId, fields: ['sessionId'] });
-    this.emit('project.updated', { id, fields: Object.keys(effectivePatch), unboundIssueIds });
+    this.projects.update(id, patch);
+    this.emit('project.updated', { id, fields: Object.keys(patch) });
+    // Session is projected from the project for every issue, so notify open details
+    // when the project default changes instead of storing the same ID on each task.
+    for (const issue of this.issues.list(id, { archived: 'all' })) {
+      this.emit('issue.updated', { id: issue.id, fields: ['sessionId'] });
+    }
     return this.projects.get(id)!;
   }
 

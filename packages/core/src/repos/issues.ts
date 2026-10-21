@@ -3,14 +3,15 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { Issue, IssuePatch, PRIORITIES, Priority, STATUSES, Status } from '../types.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
-const ISSUE_COLS = `id, project_id AS projectId, parent_id AS parentId, title, description,
-  status, priority, labels, branch, worktree, worktree_path AS worktreePath,
-  session_id AS sessionId, archived_at AS archivedAt,
-  claimed_by AS claimedBy, lease_expires_at AS leaseExpiresAt, assignee, version,
-  start_date AS startDate, due_date AS dueDate,
-  started_at AS startedAt, completed_at AS completedAt,
-  acceptance_criteria AS acceptanceCriteria, review_status AS reviewStatus, review_notes AS reviewNotes,
-  created_at AS createdAt, updated_at AS updatedAt`;
+const ISSUE_COLS = `i.id, i.project_id AS projectId, i.parent_id AS parentId, i.title, i.description,
+  i.status, i.priority, i.labels, i.branch, i.worktree, i.worktree_path AS worktreePath,
+  p.default_session_id AS sessionId, i.archived_at AS archivedAt,
+  i.claimed_by AS claimedBy, i.lease_expires_at AS leaseExpiresAt, i.assignee, i.version,
+  i.start_date AS startDate, i.due_date AS dueDate,
+  i.started_at AS startedAt, i.completed_at AS completedAt,
+  i.acceptance_criteria AS acceptanceCriteria, i.review_status AS reviewStatus, i.review_notes AS reviewNotes,
+  i.created_at AS createdAt, i.updated_at AS updatedAt`;
+
 const now = (): string => new Date().toISOString();
 const shortId = (): string => randomUUID().slice(0, 8);
 
@@ -53,7 +54,7 @@ export class IssueRepo {
   }
 
   get(id: string): Issue | null {
-    return this.db.prepare(`SELECT ${ISSUE_COLS} FROM issues WHERE id = ?`).get(id) as unknown as Issue | null;
+    return this.db.prepare(`SELECT ${ISSUE_COLS} FROM issues i LEFT JOIN projects p ON p.id = i.project_id WHERE i.id = ?`).get(id) as unknown as Issue | null;
   }
 
   list(projectId: string, opts: { status?: Status; parentId?: string | null; includeDone?: boolean; archived?: 'only' | 'all' } = {}): Issue[] {
@@ -70,8 +71,8 @@ export class IssueRepo {
     if (opts.archived === 'only') where.push('archived_at IS NOT NULL');
     else if (opts.archived !== 'all') where.push('archived_at IS NULL');
     return this.db.prepare(
-      `SELECT ${ISSUE_COLS} FROM issues WHERE ${where.join(' AND ')}
-       ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, created_at`
+      `SELECT ${ISSUE_COLS} FROM issues i LEFT JOIN projects p ON p.id = i.project_id WHERE ${where.map(clause => clause.replace(/^(project_id|parent_id|status|archived_at)\b/, 'i.$1')).join(' AND ')}
+       ORDER BY CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, i.created_at`
     ).all(...args) as unknown as Issue[];
   }
 

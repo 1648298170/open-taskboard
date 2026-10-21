@@ -30,9 +30,9 @@ export interface AppSettings {
 export interface WorkspaceDirectory {
   id: string;
   name: string;
-  /** Default filesystem workspace inherited by newly created projects in this directory. */
+  /** Single source of truth for the filesystem workspace inherited by all projects in this directory. */
   workspacePath: string;
-  /** Default OpenCode Server URL inherited by newly created projects in this directory. */
+  /** Single source of truth for the OpenCode Server URL inherited by all projects in this directory. */
   serverUrl: string;
   createdAt: string;
 }
@@ -44,8 +44,9 @@ export interface Project {
   directoryId: string | null;
   /** Optional session preselected when creating tasks in this project. */
   defaultSessionId: string | null;
+  /** Computed from the owning Directory; never persisted on Project. */
   workspacePath: string;
-  /** TUI URL (e.g. http://127.0.0.1:4097) the watch delivers this project's wakes to; '' = unbound. */
+  /** Computed from the owning Directory; never persisted on Project. */
   wakeChannel: string;
   labels: string;
   createdAt: string;
