@@ -1,7 +1,7 @@
 # open-taskboard — no native deps (node:sqlite built into Node 22), so the
 # image is plain node + pnpm. Build context: repo root.
 #
-#   docker compose build && docker compose up -d   # board on host port 47825
+#   docker compose build && docker compose up -d   # board on host port 47824
 #
 # NODE_IMAGE exists so compose can pin a registry mirror on networks where
 # docker.io is unreliable; the default keeps the Dockerfile upstream-clean.
