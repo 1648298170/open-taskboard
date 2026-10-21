@@ -394,3 +394,28 @@ describe('wake engine: channel watchdog', () => {
     }
   });
 });
+
+describe('wake engine: re-wake', () => {
+  it('a pending status patch re-delivers an already processed wake comment', async () => {
+    const { store, issueId, engine, fetchCalls } = fixture({
+      sessionId: 'ses_x',
+      fetchImpl: () => okResponse(),
+    });
+    const promptDeliveries = (): number => fetchCalls.filter(u => u.includes('/prompt_async')).length;
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 第一轮' }).id;
+      await waitFor(() => promptDeliveries() >= 1);
+      await waitFor(() => store.getComment(commentId)!.status === 'processing');
+      assert.equal(promptDeliveries(), 1);
+      // 重新唤醒：pending 状态补丁必须穿透 seen 去重并再次投递。
+      // 注：prompt_async 路径在 stub 下不会到 processed（monitor 无完成信号），
+      // 所以重投递的断言是「prompt 再次发生 + 重新认领为 processing」。
+      store.updateComment(commentId, { status: 'pending' });
+      await waitFor(() => promptDeliveries() >= 2);
+      await waitFor(() => store.getComment(commentId)!.status === 'processing');
+    } finally {
+      await engine.stop();
+    }
+  });
+});
