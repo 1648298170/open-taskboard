@@ -94,4 +94,5 @@ export class SearchRepo {
         OR i.id IN (SELECT issue_id FROM comments WHERE body LIKE ? ESCAPE '\\'))
        ORDER BY CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, i.created_at`
     ).all(`%${escaped}%`, `%${escaped}%`, `%${escaped}%`) as unknown as Issue[];
-  }}
+  }
+}
