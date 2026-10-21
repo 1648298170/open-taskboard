@@ -97,6 +97,19 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   const authRequired = env.TASKBOARD_AUTH_REQUIRED === '1' || !loopback
     || Boolean(config.token) || browserAuth.initialized;
 
+  // T6-34: outbound webhooks. Keep the store event fan-out attached before
+  // any HTTP route can mutate data.
+  const hooks = config.webhookUrls;
+  if (hooks.length > 0) {
+    store.subscribe(event => {
+      for (const url of hooks) void postWebhook(url, event, config.webhookSecret);
+    });
+  }
+
+  const app = Fastify({ logger: false });
+  await app.register(fastifyCors, { origin: true });
+  registerErrorHandler(app);
+
   const authStatus = (cookieHeader: string | undefined) => {
     const username = browserAuth.sessionUser(cookieHeader);
     return {
