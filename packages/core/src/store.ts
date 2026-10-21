@@ -301,7 +301,6 @@ export class Store {
         projectId: input.projectId, parentId, title: input.title,
         description: input.description, status: input.status, priority: input.priority,
         labels: input.labels, branch: input.branch, worktree: input.worktree, worktreePath: input.worktreePath,
-        sessionId,
         assignee: input.assignee,
         startDate: input.startDate, dueDate: input.dueDate,
         acceptanceCriteria: input.acceptanceCriteria, reviewStatus: input.reviewStatus, reviewNotes: input.reviewNotes
@@ -514,9 +513,7 @@ export class Store {
    * like archiveIssue and logs a 'claimed' activity. A claimable `todo` is
    * auto-moved to `in_progress` in the same transaction (认领即开工，dashi
    * 语义): the board's in_progress column never lies about started work.
-   * When `sessionId` is given and the issue is unbound, it binds the
-   * claimer's session in the same transaction (认领即绑定); an existing
-   * binding is never overwritten (只绑空位，不抢绑).
+   * Session is inherited from Project and is never bound at task level.
    */
   claimIssue(id: string, agent: string, ttlMinutes = 30, actor = agent, sessionId?: string, branch?: string): Issue {
     if (!agent) throw new ValidationError('agent must be non-empty');
@@ -541,11 +538,8 @@ export class Store {
         this.issues.update(id, { status: 'in_progress', ...(issue.startedAt === null ? { startedAt: t } : {}) });
         this.logActivity(id, actor, 'status', 'todo → in_progress (claim)');
       }
-      // 认领即绑定：只绑空位，绝不接管他人会话的绑定（所有权语义）。
-      if (sessionId && !issue.sessionId) {
-        this.issues.update(id, { sessionId });
-        this.logActivity(id, actor, 'session-bound', sessionId);
-      }
+      // Session ownership lives on Project. Legacy claim.sessionId is accepted
+      // for transport compatibility but never creates a task-level override.
       // 同一规则的分支版：开工即绑当前分支，只绑空位（branch-bound 留痕）。
       if (branch && !issue.branch) {
         this.issues.update(id, { branch });

@@ -55,12 +55,22 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     // a Directory initialize one, then every project reads these values through
     // directoryId.
     if (!directory) {
-      const serverUrl = normalizeOpenCodeBase(
-        settings.defaultOpenCodeServerUrl.trim() || resolveOpenCodeBase(undefined, recentProjectChannels(store))
-      );
+      // Backwards compatibility for legacy POST /api/projects clients: convert
+      // project-level routing inputs into a new Directory instead of persisting
+      // them on Project. When directoryId is supplied, Directory remains the
+      // sole source of route configuration and the legacy values are ignored.
+      const workspacePath = input.workspacePath?.trim() || settings.defaultWorkspacePath.trim();
+      let serverUrl: string;
+      try {
+        serverUrl = normalizeOpenCodeBase(
+          input.wakeChannel?.trim() || settings.defaultOpenCodeServerUrl.trim() || resolveOpenCodeBase(undefined, recentProjectChannels(store))
+        );
+      } catch (err) {
+        return reply.code(400).send({ error: `OpenCode Server URL 无效：${(err as Error).message}` });
+      }
       directory = store.createDirectory({
-        name: settings.defaultWorkspacePath.trim().split(/[\\/]/).filter(Boolean).at(-1) || '默认目录',
-        workspacePath: settings.defaultWorkspacePath.trim(),
+        name: workspacePath.split(/[\\/]/).filter(Boolean).at(-1) || '默认目录',
+        workspacePath,
         serverUrl
       });
     }

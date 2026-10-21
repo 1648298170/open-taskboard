@@ -83,6 +83,11 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     const project = store.getProject(req.params.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    // The browser creates task content only. Execution metadata is Agent-managed.
+    if (actor === 'web' && ['branch', 'worktree', 'worktreePath', 'assignee']
+      .some(key => (parsed.data as Record<string, unknown>)[key] !== undefined)) {
+      return reply.code(403).send({ error: '负责人、Git 分支和工作树属性由 Agent 维护' });
+    }
     // Every task inherits its Session from the owning Project. Legacy sessionId
     // body/header values are ignored and can never override the Project binding.
     if (actor === 'web' && !project.defaultSessionId) {
@@ -131,6 +136,12 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     const currentIssue = store.getIssue(req.params.id);
     if (!currentIssue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    // Session, assignee and git execution metadata are maintained by Project /
+    // Agent workflows; the browser may not override them through issue PATCH.
+    if (actor === 'web' && ['branch', 'worktree', 'worktreePath', 'assignee', 'sessionId']
+      .some(key => (parsed.data as Record<string, unknown>)[key] !== undefined)) {
+      return reply.code(403).send({ error: 'Session、负责人、Git 分支和工作树属性由项目配置或 Agent 维护' });
+    }
     const statusChanging = parsed.data.status !== undefined && parsed.data.status !== currentIssue.status;
     // Every agent-driven status transition must carry its audit note in the
     // same PATCH request. Store persists the status + comment in one SQLite
