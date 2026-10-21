@@ -455,12 +455,8 @@ export const openApiSpec: OpenApiDocument = {
       parameters: [{ name: 'directoryId', in: 'path', required: true, schema: { type: 'string' } }],
       get: {
         operationId: 'listDirectoryOpenCodeSessions',
-        summary: 'List OpenCode sessions for the supplied project workspace path and server',
+        summary: 'List OpenCode sessions using the workspace path and Server URL configured on the Directory',
         tags: ['directories'],
-        parameters: [
-          { name: 'workspacePath', in: 'query', required: true, schema: { type: 'string' } },
-          { name: 'serverUrl', in: 'query', required: true, schema: { type: 'string', format: 'uri' } }
-        ],
         responses: {
           200: { description: 'Sessions in the directory', ...jsonResponse({ type: 'object', additionalProperties: true }) },
           400: { $ref: '#/components/responses/BadRequest' },
@@ -525,7 +521,7 @@ export const openApiSpec: OpenApiDocument = {
       },
       patch: {
         operationId: 'patchProject',
-        summary: 'Update project configuration; an explicitly bound default Session is validated against the effective workspace path and Server URL',
+        summary: 'Update project configuration; a default Session is validated only against its owning Directory route',
         tags: ['projects'],
         requestBody: {
           required: true,
