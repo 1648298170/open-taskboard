@@ -47,7 +47,7 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
       await listOpenCodeSessions(serverUrl);
     } catch (err) {
       return reply.code(200).send({
-        checkedAt, serverStatus: 'unavailable', serverUrl: '',
+        checkedAt, serverStatus: 'unavailable',
         error: (err as Error).message, projects: []
       });
     }
@@ -75,7 +75,7 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
         return { ...base, status: 'unavailable', busy: null, error: (err as Error).message };
       }
     }));
-    return { checkedAt, serverStatus: 'connected', serverUrl, projects: states };
+    return { checkedAt, serverStatus: 'connected', projects: states };
   });
 
 
@@ -105,7 +105,7 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
       const compatible = sessions.filter(session =>
         session.directory && normalizePath(session.directory) === expectedPath
       );
-      return { sessions: compatible, directoryId: directory.id, directoryPath: workspacePath, serverUrl: base };
+      return { sessions: compatible, directoryId: directory.id, directoryPath: workspacePath };
     } catch (err) {
       return reply.code(502).send({ error: `无法读取 OpenCode 会话：${(err as Error).message}` });
     }
@@ -130,7 +130,7 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
       if (normalizePath(session.directory) !== normalizePath(workspacePath)) {
         return reply.code(502).send({ error: 'OpenCode 返回的 Session 目录与目标工作目录不一致，未绑定该 Session' });
       }
-      return reply.code(201).send({ session, directoryId: directory.id, serverUrl: normalizeOpenCodeBase(serverUrl) });
+      return reply.code(201).send({ session, directoryId: directory.id });
     } catch (err) {
       return reply.code(502).send({ error: `创建 OpenCode Session 失败：${(err as Error).message}` });
     }
