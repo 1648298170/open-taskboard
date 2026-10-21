@@ -1,6 +1,6 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import {
-  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync
+  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync
 } from 'node:fs';
 import { join } from 'node:path';
 
@@ -9,6 +9,9 @@ const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_LOGIN_ATTEMPTS = 10;
 const HASH_BYTES = 64;
+// Sliding-expiry bumps happen on every request; flush them to disk at most
+// once per minute so a restart loses at most one minute of sliding time.
+const SESSION_PERSIST_THROTTLE_MS = 60 * 1000;
 
 interface AdminRecord {
   version: 1;
@@ -21,6 +24,11 @@ interface AdminRecord {
 interface SessionRecord {
   username: string;
   expiresAt: number;
+}
+
+interface SessionFile {
+  version: 1;
+  sessions: Record<string, SessionRecord>;
 }
 
 interface LoginAttemptRecord {
@@ -44,16 +52,62 @@ function derivePassword(password: string, salt: string): Promise<Buffer> {
   });
 }
 
-/** Single-admin browser auth. Credentials persist in /data; sessions are deliberately
- * memory-only, so restarting the server invalidates every browser session. */
+/** Single-admin browser auth. Credentials and sessions persist in /data, so a
+ * server restart no longer invalidates browser sessions (expired ones are
+ * dropped on load). Session tokens are stored 0600 next to the credentials
+ * file; losing that file equals logging every browser out. */
 export class BrowserAuth {
   private readonly filePath: string;
+  private readonly sessionsFilePath: string;
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly loginAttempts = new Map<string, LoginAttemptRecord>();
+  private lastSessionsPersistAt = 0;
 
   constructor(dataDir: string) {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     this.filePath = join(dataDir, 'taskboard-auth.json');
+    this.sessionsFilePath = join(dataDir, 'taskboard-sessions.json');
+    this.loadSessions();
+  }
+
+  private loadSessions(): void {
+    if (!existsSync(this.sessionsFilePath)) return;
+    try {
+      const parsed = JSON.parse(readFileSync(this.sessionsFilePath, 'utf8')) as Partial<SessionFile>;
+      if (parsed.version !== 1 || typeof parsed.sessions !== 'object' || parsed.sessions === null) {
+        throw new Error('invalid shape');
+      }
+      const now = Date.now();
+      for (const [token, record] of Object.entries(parsed.sessions)) {
+        if (typeof token !== 'string' || typeof record?.username !== 'string'
+          || typeof record?.expiresAt !== 'number') continue;
+        if (record.expiresAt <= now) continue;
+        this.sessions.set(token, { username: record.username, expiresAt: record.expiresAt });
+      }
+    } catch {
+      // A corrupt sessions file must never brick the board: start clean and
+      // the next login rewrites it.
+      this.sessions.clear();
+    }
+  }
+
+  private persistSessions(): void {
+    const payload: SessionFile = { version: 1, sessions: Object.fromEntries(this.sessions) };
+    const tmp = `${this.sessionsFilePath}.tmp`;
+    const fd = openSync(tmp, 'w', 0o600);
+    try {
+      writeSync(fd, JSON.stringify(payload, null, 2), undefined, 'utf8');
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, this.sessionsFilePath);
+    this.lastSessionsPersistAt = Date.now();
+  }
+
+  private persistSessionsThrottled(): void {
+    if (Date.now() - this.lastSessionsPersistAt < SESSION_PERSIST_THROTTLE_MS) return;
+    this.persistSessions();
   }
 
   get initialized(): boolean {
@@ -73,6 +127,7 @@ export class BrowserAuth {
   private startSession(username: string): string {
     const token = randomBytes(32).toString('base64url');
     this.sessions.set(token, { username, expiresAt: Date.now() + SESSION_TTL_MS });
+    this.persistSessions();
     return token;
   }
 
@@ -158,11 +213,14 @@ export class BrowserAuth {
     if (!session) return null;
     if (session.expiresAt <= Date.now()) {
       this.sessions.delete(token);
+      this.persistSessions();
       return null;
     }
     // Sliding expiration keeps an active board signed in while still bounding
-    // an abandoned session to at most SESSION_TTL_MS.
+    // an abandoned session to at most SESSION_TTL_MS. The bump is flushed to
+    // disk at most once per minute (persistSessionsThrottled).
     session.expiresAt = Date.now() + SESSION_TTL_MS;
+    this.persistSessionsThrottled();
     return session.username;
   }
 
@@ -170,7 +228,9 @@ export class BrowserAuth {
     if (!cookieHeader) return;
     const pair = cookieHeader.split(';').map(value => value.trim())
       .find(value => value.startsWith(`${COOKIE_NAME}=`));
-    if (pair) this.sessions.delete(pair.slice(COOKIE_NAME.length + 1));
+    if (pair && this.sessions.delete(pair.slice(COOKIE_NAME.length + 1))) {
+      this.persistSessions();
+    }
   }
 
   cookie(sessionToken: string, secure: boolean): string {
