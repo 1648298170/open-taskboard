@@ -1,7 +1,7 @@
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { Store, ValidationError } from '@taskboard/core';
 import { createDirectorySchema, directoryPatchSchema, z } from '@taskboard/core/schemas';
-import { createOpenCodeSession, listOpenCodeDirectories, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
+import { createOpenCodeSession, getOpenCodeSessionRuntimeState, listOpenCodeDirectories, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
 
 interface DirectoryParams { directoryId: string }
 interface DirectorySessionQuery { workspacePath?: string; serverUrl?: string }
@@ -41,6 +41,67 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
   });
 
   app.get('/api/directories', async () => store.listDirectories());
+
+  app.get('/api/directories/:directoryId/opencode-status', async (
+    req: FastifyRequest<{ Params: DirectoryParams }>,
+    reply
+  ) => {
+    const directory = store.getDirectory(req.params.directoryId);
+    if (!directory) return reply.code(404).send({ error: `directory not found: ${req.params.directoryId}` });
+    const projects = store.listProjects().filter(project => project.directoryId === directory.id);
+    const checkedAt = new Date().toISOString();
+    const serverUrl = directory.serverUrl.trim();
+
+    if (!serverUrl) {
+      return {
+        directoryId: directory.id, name: directory.name, workspacePath: directory.workspacePath,
+        serverUrl, checkedAt, serverStatus: 'unconfigured',
+        error: '请先在目录右键菜单中配置 OpenCode Server URL',
+        projects: projects.map(project => ({
+          projectId: project.id, projectName: project.name, sessionId: project.defaultSessionId,
+          status: project.defaultSessionId ? 'unavailable' : 'no-session',
+          busy: null, error: '目录尚未配置 OpenCode Server URL'
+        }))
+      };
+    }
+
+    let serverError: string | undefined;
+    try {
+      await listOpenCodeSessions(normalizeOpenCodeBase(serverUrl), directory.workspacePath.trim());
+    } catch (error) {
+      serverError = (error as Error).message;
+    }
+
+    const projectStates = await Promise.all(projects.map(async project => {
+      const sessionId = project.defaultSessionId?.trim() ?? '';
+      if (!sessionId) {
+        return { projectId: project.id, projectName: project.name, sessionId: null, status: 'no-session', busy: null };
+      }
+      if (serverError) {
+        return { projectId: project.id, projectName: project.name, sessionId, status: 'unavailable', busy: null, error: serverError };
+      }
+      try {
+        const state = await getOpenCodeSessionRuntimeState(
+          normalizeOpenCodeBase(serverUrl), directory.workspacePath.trim(), sessionId
+        );
+        return {
+          projectId: project.id, projectName: project.name, sessionId,
+          status: state.busy ? 'busy' : (state.status?.type ?? 'idle'),
+          busy: state.busy, statusType: state.status?.type ?? null, observedAt: state.observedAt
+        };
+      } catch (error) {
+        return { projectId: project.id, projectName: project.name, sessionId, status: 'unavailable', busy: null, error: (error as Error).message };
+      }
+    }));
+
+    return {
+      directoryId: directory.id, name: directory.name, workspacePath: directory.workspacePath,
+      serverUrl, checkedAt, serverStatus: serverError ? 'unavailable' : 'connected',
+      ...(serverError ? { error: serverError } : {}), projects: projectStates
+    };
+  });
+
+
 
   app.post('/api/directories', async (req, reply) => {
     const parsed = createDirectorySchema.safeParse(req.body);
@@ -96,8 +157,7 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
   app.patch('/api/directories/:directoryId', async (req: FastifyRequest<{ Params: DirectoryParams }>) => {
     const parsed = directoryPatchSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
-    const { syncProjects, ...patch } = parsed.data;
-    return store.updateDirectory(req.params.directoryId, patch, { syncProjects });
+    return store.updateDirectory(req.params.directoryId, parsed.data);
   });
 
   app.delete('/api/directories/:directoryId', async (req: FastifyRequest<{ Params: DirectoryParams; Querystring: { cascade?: string } }>) => {

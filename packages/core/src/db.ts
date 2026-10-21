@@ -314,7 +314,7 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       ALTER TABLE issues ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending';
       ALTER TABLE issues ADD COLUMN review_notes TEXT NOT NULL DEFAULT '';
     `);
-  },,
+  },
   // v17 -> v18: move the last duplicated routing values into Directory, then
   // remove Project's physical copies. API Project fields are computed from its
   // owning Directory for compatibility with existing consumers.
