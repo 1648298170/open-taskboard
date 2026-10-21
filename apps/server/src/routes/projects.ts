@@ -113,7 +113,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store; openCodeUrl?: string }>
         return reply.code(400).send({ error: '请先在所属目录中配置工作目录，再绑定默认 Session' });
       }
       try {
-        const serverUrl = getConfiguredOpenCodeBase();
+        const serverUrl = getConfiguredOpenCodeBase(openCodeUrl);
         const sessions = await listOpenCodeSessions(serverUrl, workspacePath);
         const session = sessions.find(item => item.id === defaultSessionId);
         if (!session) {
@@ -138,7 +138,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store; openCodeUrl?: string }>
   // Stateless session discovery always uses the deployment-configured server.
   app.get('/api/opencode/sessions', async (req: FastifyRequest<{ Querystring: { url?: string; workspacePath?: string } }>, reply) => {
     let base: string;
-    try { base = getConfiguredOpenCodeBase(); }
+    try { base = getConfiguredOpenCodeBase(openCodeUrl); }
     catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
     try {
       const workspace = String(req.query.workspacePath ?? '').trim();
@@ -160,7 +160,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store; openCodeUrl?: string }>
       return reply.code(400).send({ error: '请先在所属目录配置工作目录，再查询 OpenCode Session' });
     }
     try {
-      const base = getConfiguredOpenCodeBase();
+      const base = getConfiguredOpenCodeBase(openCodeUrl);
       const sessions = await listOpenCodeSessions(base, project.workspacePath);
       const workspace = project.workspacePath.trim();
       const compatible = workspace
