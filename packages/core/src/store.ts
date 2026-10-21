@@ -174,30 +174,19 @@ export class Store {
       );
     }
 
+    // The Directory path is a discovery context for Session binding, not the
+    // owner of an already-bound Session. Keep every Project.defaultSessionId
+    // unchanged when the path changes; the OpenCode history remains untouched.
     inTransaction(this.db, () => {
       this.directories.update(id, patch);
-      if (routingChanged) {
-        // All tasks inherit Session from their Project. Clearing the project's
-        // default automatically unbinds every task; keep a task-scoped audit
-        // entry for each inherited binding that becomes invalid.
-        for (const project of directoryProjects) {
-          this.projects.update(project.id, { defaultSessionId: null });
-          if (project.defaultSessionId) {
-            for (const issue of this.issues.list(project.id, { archived: 'all' })) {
-              this.logActivity(issue.id, 'system', 'session-unbound', 'Directory workspace/server changed; project Session cleared');
-            }
-          }
-        }
-      }
     });
 
     this.emit('directory.updated', { id, fields: Object.keys(patch) });
     if (routingChanged) {
+      // Projects and their tasks inherit the new workspace path from Directory,
+      // but Session bindings did not change and must not emit session updates.
       for (const project of directoryProjects) {
-        this.emit('project.updated', { id: project.id, fields: ['workspacePath', 'defaultSessionId'] });
-        for (const issue of this.issues.list(project.id, { archived: 'all' })) {
-          this.emit('issue.updated', { id: issue.id, fields: ['sessionId'] });
-        }
+        this.emit('project.updated', { id: project.id, fields: ['workspacePath'] });
       }
     }
     return this.directories.get(id)!;
