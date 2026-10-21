@@ -112,7 +112,10 @@ function Get-CommandPath([string]$Name) {
 function Get-NodeInfo {
   $nodePath = Get-CommandPath 'node'
   if (-not $nodePath) { throw 'Node.js was not found in PATH. Install Node.js >=22.5.0, reopen the terminal, and run start.bat again.' }
-  $versionText = (& $nodePath --version 2>$null | Select-Object -First 1)
+  # Capture output into a variable first: piping into Select-Object -First 1 can
+  # terminate the native process early and leave $LASTEXITCODE = -1 spuriously.
+  $versionLines = @(& $nodePath --version 2>$null)
+  $versionText = [string]$versionLines[0]
   if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)') { throw "Could not read Node.js version from '$nodePath'." }
   $major = [int]$Matches[1]
   $minor = [int]$Matches[2]
@@ -122,7 +125,8 @@ function Get-NodeInfo {
 function Get-PnpmPath {
   $pnpm = Get-CommandPath 'pnpm'
   if (-not $pnpm) { throw 'pnpm was not found in PATH. Install pnpm 9+ (for example: corepack enable), reopen the terminal, and try again.' }
-  $versionText = (& $pnpm --version 2>$null | Select-Object -First 1)
+  $versionLines = @(& $pnpm --version 2>$null)
+  $versionText = [string]$versionLines[0]
   if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '^(\d+)\.') { throw "Could not read pnpm version from '$pnpm'." }
   if ([int]$Matches[1] -lt 9) { throw "pnpm 9+ is required; found $versionText." }
   return $pnpm
