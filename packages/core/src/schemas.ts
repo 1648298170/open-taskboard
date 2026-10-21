@@ -38,7 +38,6 @@ export const createProjectSchema = z
     directoryId: z.string().min(1).optional(),
     // Deprecated compatibility inputs: only initialize a Directory when directoryId is absent.
     workspacePath: z.string().optional(),
-    wakeChannel: z.string().max(200).optional(),
     defaultSessionId: z.string().trim().min(1).nullable().optional(),
     labels: z.string().optional(),
     // v13: project default opencode session for new tasks.
