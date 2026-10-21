@@ -158,6 +158,65 @@ describe('TASKBOARD_TOKEN auth', () => {
   });
 });
 
+describe('authenticated comment author', () => {
+  it('uses the logged-in username instead of a client-supplied author', async () => {
+    const { app, store, cleanup } = await makeApp({ TASKBOARD_HOST: '0.0.0.0' });
+    try {
+      const setup = await app.inject({
+        method: 'POST', url: '/api/auth/setup', headers: json,
+        payload: { username: 'jerry', password: 'correct horse battery staple' }
+      });
+      assert.equal(setup.statusCode, 201);
+      const setupHeader = setup.headers['set-cookie'];
+      const setupCookie = (Array.isArray(setupHeader) ? setupHeader[0] : setupHeader) ?? '';
+      const cookie = setupCookie.split(';')[0];
+      assert.ok(cookie);
+
+      const project = await app.inject({
+        method: 'POST', url: '/api/projects', headers: { ...json, cookie },
+        payload: { id: 'p1', name: 'P' }
+      });
+      assert.equal(project.statusCode, 201);
+
+      const issue = await app.inject({
+        method: 'POST', url: '/api/projects/p1/issues',
+        headers: { ...json, cookie, 'x-taskboard-actor': 'cli' },
+        payload: { title: 'Authenticated comment test' }
+      });
+      assert.equal(issue.statusCode, 201);
+      const issueId = issue.json<{ id: string }>().id;
+
+      const created = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/comments`,
+        headers: { ...json, cookie, 'x-taskboard-actor': 'web' },
+        payload: { author: 'web', body: 'hello from the session user' }
+      });
+      assert.equal(created.statusCode, 201);
+      const comment = created.json<{ id: string; author: string }>();
+      assert.equal(comment.author, 'jerry', 'authenticated username must override the submitted author');
+
+      const edited = await app.inject({
+        method: 'PATCH', url: `/api/comments/${comment.id}`,
+        headers: { ...json, cookie, 'x-taskboard-actor': 'web' },
+        payload: { body: 'edited by jerry' }
+      });
+      assert.equal(edited.statusCode, 200);
+      assert.equal(edited.json<{ author: string; body: string }>().author, 'jerry');
+      assert.equal(edited.json<{ author: string; body: string }>().body, 'edited by jerry');
+      assert.ok(store.listActivities(issueId).some(activity => activity.actor === 'jerry' && activity.action === 'commented'));
+
+      const withoutSession = await app.inject({
+        method: 'POST', url: `/api/issues/${issueId}/comments`,
+        headers: { ...json, 'x-taskboard-actor': 'web' },
+        payload: { author: 'jerry', body: 'attempt without a session' }
+      });
+      assert.equal(withoutSession.statusCode, 401);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 describe('browser admin session auth', () => {
   it('requires a one-time admin setup on non-loopback binds, then uses HttpOnly sessions', async () => {
     const { app, cleanup } = await makeApp({ TASKBOARD_HOST: '0.0.0.0' });
