@@ -23,8 +23,9 @@ const humanSize = (bytes: number): string =>
 // 规则同源；taskboard watch --on 可改运行时前缀，此处只反映默认值）。
 const MENTION_CANDIDATES: MentionCandidate[] = [{ value: WAKE_PREFIX, label: '唤醒 agent 干活（主进程忙时排队：收尾当前任务后接手 · Enter 选择）' }];
 
-export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onChanged, onToast, onOpenIssue, issues }: {
+export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onChanged, onToast, onOpenIssue, issues, commentAuthor }: {
   issueId: string;
+  commentAuthor: string;
   /** Incremented by the app-level SSE handler to refresh live execution history. */
   refreshKey: number;
   /** 当前项目 id —— 抽屉打开时拉一次 git 分支/工作树列表（T2-8） */
@@ -225,7 +226,7 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
               : '唤醒 agent：按项目路由发送或创建新会话'}
             onClick={async () => {
               try {
-                const created = await api_.addComment(detail.id, 'web', `${WAKE_PREFIX} 认领此任务并编排（拆解子任务、排依赖）`);
+                const created = await api_.addComment(detail.id, `${WAKE_PREFIX} 认领此任务并编排（拆解子任务、排依赖）`);
                 onToast(detail.sessionId
                   ? `已入队——watch 将投递到绑定会话 ${detail.sessionId}`
                   : '已入队——watch 将按项目路由送达或新建 headless 会话');
@@ -477,7 +478,7 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                     }}>确认删除</button>
                 ) : (
                   <>
-                    {c.status === 'pending' && (c.author === 'web' || c.author === '') && (
+                    {c.status === 'pending' && (c.author === commentAuthor || (commentAuthor === 'web' && c.author === '')) && (
                       <button className="icon-btn dep-remove" title="编辑评论（仅自己发的评论可编辑；编辑保存后重新唤醒 agent）"
                         onClick={e => {
                           e.stopPropagation();
@@ -520,7 +521,7 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
         e.preventDefault();
         if (!comment.trim()) return;
         try {
-          await api_.addComment(detail.id, 'web', comment.trim());
+          await api_.addComment(detail.id, comment.trim());
           setComment(''); onChanged(); await load();
         } catch (err) { onToast(`✗ ${(err as Error).message}`); }
       }}>
