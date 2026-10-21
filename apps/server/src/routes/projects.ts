@@ -58,12 +58,10 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     // A project linked to a Directory must never fall back to another server/path.
     if (input.defaultSessionId) {
       let serverUrl = input.directoryId
-        ? input.wakeChannel?.trim() ?? ''
-        : input.wakeChannel?.trim() || resolveOpenCodeBase(undefined, recentProjectChannels(store));
-      let workspacePath = input.directoryId
-        ? input.workspacePath?.trim() ?? ''
-        : input.workspacePath?.trim() ?? '';
-      if (!workspacePath || !serverUrl) {
+        ? (input.wakeChannel?.trim() ?? '')
+        : (input.wakeChannel?.trim() || resolveOpenCodeBase(undefined, recentProjectChannels(store)));
+      let workspacePath = input.workspacePath?.trim() ?? '';
+      if (input.directoryId && (!workspacePath || !serverUrl)) {
         return reply.code(400).send({ error: '请先配置目录工作目录和 OpenCode Server URL，再绑定项目默认 Session' });
       }
       try {
