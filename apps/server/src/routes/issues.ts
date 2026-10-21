@@ -148,7 +148,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       && actor !== 'web'
       && !currentIssue.sessionId) {
       return reply.code(403).send({
-        error: 'starting a task requires binding: claim/PATCH with sessionId and branch; confirm:true is not an approval credential (TASKBOARD_REQUIRE_SESSION)'
+        error: 'starting a task requires a Project default OpenCode Session and an Agent-supplied branch; confirm:true is not an approval credential (TASKBOARD_REQUIRE_SESSION)'
       });
     }
     // T7-36: optional human final-review gate. With TASKBOARD_HUMAN_DONE=1, only
@@ -411,13 +411,13 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     const parsed = claimSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
-    if (config.requireSession && !parsed.data.sessionId && !store.getIssue(req.params.id)?.sessionId
+    if (config.requireSession && !store.getIssue(req.params.id)?.sessionId
       && String(req.headers['x-taskboard-actor'] ?? '') !== 'web') {
       return reply.code(403).send({
         error: 'starting a task requires binding: claim/PATCH with sessionId and branch; confirm:true is not an approval credential (TASKBOARD_REQUIRE_SESSION)'
       });
     }
-    return store.claimIssue(req.params.id, parsed.data.agent, parsed.data.ttlMinutes ?? 30, actor || parsed.data.agent, parsed.data.sessionId, parsed.data.branch);
+    return store.claimIssue(req.params.id, parsed.data.agent, parsed.data.ttlMinutes ?? 30, actor || parsed.data.agent, undefined, parsed.data.branch);
   });
 
   app.post('/api/issues/:id/heartbeat', async (req: FastifyRequest<{ Params: IssueParams }>) => {

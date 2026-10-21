@@ -64,6 +64,7 @@ export const createIssueSchema = z
     status: z.enum(STATUSES).optional(),
     priority: z.enum(PRIORITIES).optional(),
     labels: z.string().optional(),
+    // Branch, worktree, worktree path and assignee are Agent-owned execution metadata.
     branch: z.string().optional(),
     // T2-8: null creates as unbound ('' after the repo's ?? '' normalization).
     worktree: z.string().nullable().optional(),
@@ -71,7 +72,7 @@ export const createIssueSchema = z
     acceptanceCriteria: z.string().max(20000).optional(),
     reviewStatus: z.enum(['pending', 'approved', 'changes_requested']).optional(),
     reviewNotes: z.string().max(20000).optional(),
-    // v0.4: opencode session binding 鈥?null/absent = unbound.
+    // Session is inherited from the Project and is never supplied on task creation.
     assignee: z.string().optional(),
     startDate: nullableDate,
     dueDate: nullableDate,
@@ -146,8 +147,6 @@ export const claimSchema = z
   .object({
     agent: z.string().min(1),
     ttlMinutes: z.number().int().positive().max(1440).optional(),
-    // 璁ら鍗崇粦瀹氾細缁戠┖浣嶄笉鎶㈢粦锛堝凡鏈夌粦瀹氳蹇界暐锛夛紝璇箟瑙?store.claimIssue銆?
-    sessionId: z.string().min(1).optional(),
     branch: z.string().min(1).optional(),
     // Deprecated compatibility field. The server never treats confirm:true as approval or a binding substitute.
     confirm: z.boolean().optional(),

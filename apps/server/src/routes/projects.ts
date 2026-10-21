@@ -54,14 +54,18 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
       return reply.code(400).send({ error: '新建项目必须先选择一个 OpenCode 会话（sessionId 不能为空）' });
     }
 
-    // When a project binds a default Session, verify the binding against the
-    // authoritative OpenCode server response. Missing server/workspace values
-    // are resolved from the environment, recent projects, the directory, or the
-    // Session's own directory so session-only creation still works.
+    // When a project binds a default Session, verify it against the canonical route.
+    // A project linked to a Directory must never fall back to another server/path.
     if (input.defaultSessionId) {
-      let serverUrl = input.wakeChannel?.trim() || resolveOpenCodeBase(undefined, recentProjectChannels(store));
-      let workspacePath = input.workspacePath?.trim()
-        || (input.directoryId ? (store.getDirectory(input.directoryId)?.workspacePath ?? '').trim() : '');
+      let serverUrl = input.directoryId
+        ? input.wakeChannel?.trim() ?? ''
+        : input.wakeChannel?.trim() || resolveOpenCodeBase(undefined, recentProjectChannels(store));
+      let workspacePath = input.directoryId
+        ? input.workspacePath?.trim() ?? ''
+        : input.workspacePath?.trim() ?? '';
+      if (!workspacePath || !serverUrl) {
+        return reply.code(400).send({ error: '请先配置目录工作目录和 OpenCode Server URL，再绑定项目默认 Session' });
+      }
       try {
         const base = normalizeOpenCodeBase(serverUrl);
         const sessions = await listOpenCodeSessions(base, workspacePath);
@@ -69,8 +73,7 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
         if (!session) {
           return reply.code(400).send({ error: '默认 Session 不存在，或无法从 OpenCode 服务读取；未创建项目' });
         }
-        if (!workspacePath) workspacePath = (session.directory ?? '').trim();
-        if (!workspacePath || !session.directory || normalizeDirectoryPath(session.directory) !== normalizeDirectoryPath(workspacePath)) {
+        if (!session.directory || normalizeDirectoryPath(session.directory) !== normalizeDirectoryPath(workspacePath)) {
           return reply.code(400).send({ error: '默认 Session 的实际工作目录与项目工作目录不一致；未创建项目' });
         }
         serverUrl = base;
@@ -96,18 +99,15 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     const current = store.getProject(req.params.projectId);
     if (!current) return reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
 
-    // Validate every explicit default-Session binding against the effective
-    // workspace/server pair before persisting it. Missing values fall back to
-    // the directory default, the environment, recent projects, or the Session's
-    // own directory.
+    // Validate a default-Session binding against the current Directory route.
+    // Never fall back to global or another project's routing configuration.
     let effectivePatch = patch;
     if (typeof patch.defaultSessionId === 'string') {
-      const directoryPath = current.directoryId
-        ? (store.getDirectory(current.directoryId)?.workspacePath ?? '').trim()
-        : '';
-      let workspacePath = current.workspacePath.trim() || directoryPath;
-      let serverUrl = current.wakeChannel.trim()
-        || resolveOpenCodeBase(undefined, recentProjectChannels(store));
+      const workspacePath = current.workspacePath.trim();
+      const serverUrl = current.wakeChannel.trim();
+      if (!workspacePath || !serverUrl) {
+        return reply.code(400).send({ error: '请先在所属目录中配置工作目录和 OpenCode Server URL，再绑定默认 Session' });
+      }
       try {
         const base = normalizeOpenCodeBase(serverUrl);
         const sessions = await listOpenCodeSessions(base, workspacePath);
