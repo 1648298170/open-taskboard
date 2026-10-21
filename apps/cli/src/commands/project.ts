@@ -18,25 +18,21 @@ export const projectCommands: Record<string, Command> = {
     }
   },
   'project set': {
-    summary: 'Update project name / wake channel binding',
-    usage: 'project set --id ID [--name NAME] [--wake-port PORT] [--session-id ID] [--labels LIST] [--wake-port 0 TO CLEAR]',
+    summary: 'Update project name / default Session / labels',
+    usage: 'project set --id ID [--name NAME] [--session-id ID] [--labels LIST]',
     async run(ctx) {
       const { api, flags } = ctx;
-      need(!!flags.id, 'project set --id ID [--name NAME] [--wake-port PORT] [--session-id ID] [--labels LIST]');
-      const body: { name?: string; wakeChannel?: string; labels?: string; defaultSessionId?: string | null } = {};
+      need(!!flags.id, 'project set --id ID [--name NAME] [--session-id ID] [--labels LIST]');
+      const body: { name?: string; labels?: string; defaultSessionId?: string | null } = {};
       if (flags.name) body.name = String(flags.name);
       if (flags.labels !== undefined) body.labels = String(flags.labels).trim();
       if (flags['session-id'] !== undefined) {
         const raw = String(flags['session-id']).trim();
         body.defaultSessionId = raw === '' ? null : raw;
       }
-      if (flags['wake-port'] !== undefined) {
-        const raw = String(flags['wake-port']).trim();
-        body.wakeChannel = raw === '0' || raw === '-' ? '' : `http://127.0.0.1:${raw}`;
-      }
-      if (Object.keys(body).length === 0) throw new Error('nothing to update: pass --name, --wake-port, --session-id and/or --labels');
+      if (Object.keys(body).length === 0) throw new Error('nothing to update: pass --name, --session-id and/or --labels; configure routing on the Directory');
       const p = await api('PATCH', `/api/projects/${flags.id}`, body);
-      console.log(`updated ${p.id}: ${p.name} — wake → ${p.wakeChannel || '(unbound)'}`);
+      console.log(`updated ${p.id}: ${p.name}`);
     }
   },
   'project list': {

@@ -107,7 +107,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     }
     // 兼容旧客户端的 confirm 字段不作为审批凭证，且不透传 Store
     const { confirm: _confirm, ...body } = parsed.data;
-    return reply.code(201).send(store.createIssue({ ...body, projectId: req.params.projectId }, actor, agentSession));
+    return reply.code(201).send(store.createIssue({ ...body, projectId: req.params.projectId }, actor));
   });
 
   app.get('/api/projects/:projectId/progress', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {

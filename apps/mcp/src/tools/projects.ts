@@ -20,18 +20,18 @@ export const projectTools: ToolTable = [
       ...(args.directoryId ? { directoryId: args.directoryId } : {}),
       ...(args.defaultSessionId !== undefined ? { defaultSessionId: args.defaultSessionId } : {}),
       ...(args.workspacePath ? { workspacePath: args.workspacePath } : {}),
-      ...(args.wakeChannel !== undefined ? { wakeChannel: args.wakeChannel } : {}),
+      
       ...(args.labels !== undefined ? { labels: args.labels } : {}),
     }),
   )],
   ['update_project', defineTool(
     projectPatchSchema.extend({ id: z.string() }),
-    '更新项目名称/工作目录/默认 Session/唤醒通道/标签（defaultSessionId 传 null 清除；wakeChannel 传空串清除绑定；labels 逗号分隔）',
+    '更新项目名称/默认 Session/标签（defaultSessionId 传 null 清除；工作目录与 OpenCode Server URL 由所属 Directory 统一维护；labels 逗号分隔）',
     args => ensureServerOrThrow('PATCH', `/api/projects/${args.id}`, {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.defaultSessionId !== undefined ? { defaultSessionId: args.defaultSessionId } : {}),
-      ...(args.workspacePath !== undefined ? { workspacePath: args.workspacePath } : {}),
-      ...(args.wakeChannel !== undefined ? { wakeChannel: args.wakeChannel } : {}),
+      
+      
       ...(args.labels !== undefined ? { labels: args.labels } : {}),
     }),
   )],
