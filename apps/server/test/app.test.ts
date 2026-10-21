@@ -400,23 +400,29 @@ describe('workspace directory API', () => {
     } finally { cleanup(); }
   });
 
-  it('keeps project routing independent from directory grouping and cascades deletion on request', async () => {
+  it('projects inherit routing from the Directory and directory deletion can cascade', async () => {
     const { app, cleanup } = await makeApp();
     const created = await app.inject({
       method: 'POST', url: '/api/directories', headers: json,
-      payload: { name: 'Workspace' }
+      payload: { name: 'Workspace', workspacePath: '/workspace', serverUrl: 'http://127.0.0.1:4096' }
     });
     const directoryId = created.json<{ id: string }>().id;
     const project = await app.inject({
       method: 'POST', url: '/api/projects', headers: json,
-      payload: { name: 'Project', directoryId, workspacePath: '/workspace', wakeChannel: 'http://127.0.0.1:4096' }
+      payload: { name: 'Project', directoryId }
     });
+    assert.equal(project.statusCode, 201, project.body);
     const projectId = project.json<{ id: string }>().id;
-    const updated = await app.inject({
+    const rejectedProjectPatch = await app.inject({
       method: 'PATCH', url: `/api/projects/${projectId}`, headers: json,
       payload: { workspacePath: '/workspace/renamed', wakeChannel: 'http://127.0.0.1:4097' }
     });
-    assert.equal(updated.statusCode, 200);
+    assert.equal(rejectedProjectPatch.statusCode, 400, 'Project API does not accept route overrides');
+    const updated = await app.inject({
+      method: 'PATCH', url: `/api/directories/${directoryId}`, headers: json,
+      payload: { workspacePath: '/workspace/renamed', serverUrl: 'http://127.0.0.1:4097' }
+    });
+    assert.equal(updated.statusCode, 200, updated.body);
     const projectAfter = (await app.inject({ method: 'GET', url: `/api/projects/${projectId}` })).json<{ workspacePath: string; wakeChannel: string }>();
     assert.equal(projectAfter.workspacePath, '/workspace/renamed');
     assert.equal(projectAfter.wakeChannel, 'http://127.0.0.1:4097');
@@ -658,12 +664,16 @@ describe('TASKBOARD_HUMAN_DONE gate', () => {
       method: 'PATCH', url: `/api/issues/${issueId}`,
       headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { status: 'done', version: v }
     });
-    const create = await app.inject({
+    const projectSessionApp = await gated();
+    projectSessionApp.store.updateProject('p1', { defaultSessionId: 'ses_web' });
+    const create = await projectSessionApp.app.inject({
       method: 'POST', url: '/api/projects/p1/issues',
-      headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { title: 't', status: 'done', sessionId: 'ses_web' }
+      headers: { ...json, 'x-taskboard-actor': 'web' }, payload: { title: 't', status: 'done', sessionId: 'ses_other' }
     });
     assert.equal(patch.statusCode, 200);
-    assert.equal(create.statusCode, 201);
+    assert.equal(create.statusCode, 201, create.body);
+    assert.equal(create.json<{ sessionId: string }>().sessionId, 'ses_web');
+    projectSessionApp.cleanup();
     cleanup();
   });
 
@@ -1049,12 +1059,13 @@ describe('server bind safety', () => {
 });
 
 
-describe('project routing safety', () => {
-  it('rejects workspace/server changes while an agent holds an active lease', async () => {
+describe('Directory routing safety', () => {
+  it('rejects inherited workspace/server changes while an Agent holds an active lease', async () => {
     const { app, cleanup } = await makeApp();
     try {
       await seedProject(app);
       const issueId = await seedIssue(app, {}, 'agent-a');
+      const projectBefore = (await app.inject({ method: 'GET', url: '/api/projects/p1' })).json<{ directoryId: string }>();
       const claim = await app.inject({
         method: 'POST', url: `/api/issues/${issueId}/claim`, headers: json,
         payload: { agent: 'agent-a', sessionId: 'ses_a', branch: 'feat/task-a', ttlMinutes: 30 }
@@ -1062,10 +1073,10 @@ describe('project routing safety', () => {
       assert.equal(claim.statusCode, 200);
 
       const changed = await app.inject({
-        method: 'PATCH', url: '/api/projects/p1', headers: json,
-        payload: { workspacePath: '/workspace/other', wakeChannel: 'http://127.0.0.1:4097' }
+        method: 'PATCH', url: `/api/directories/${projectBefore.directoryId}`, headers: json,
+        payload: { workspacePath: '/workspace/other', serverUrl: 'http://127.0.0.1:4097' }
       });
-      assert.equal(changed.statusCode, 409);
+      assert.equal(changed.statusCode, 409, changed.body);
       assert.match(changed.json<{ error: string }>().error, /active agent leases/);
 
       const project = await app.inject({ method: 'GET', url: '/api/projects/p1' });

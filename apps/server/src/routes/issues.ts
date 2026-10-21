@@ -463,7 +463,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     const parsed = claimSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
     const actor = String(req.headers['x-taskboard-actor'] ?? '');
-    if (config.requireSession && !parsed.data.sessionId && !store.getIssue(req.params.id)?.sessionId
+    if (config.requireSession && !store.getIssue(req.params.id)?.sessionId
       && String(req.headers['x-taskboard-actor'] ?? '') !== 'web') {
       return reply.code(403).send({
         error: 'starting a task requires a Project default Session; task-level sessionId cannot override project routing (TASKBOARD_REQUIRE_SESSION)'

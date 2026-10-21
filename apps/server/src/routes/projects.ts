@@ -124,8 +124,8 @@ const projectsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { store
     return p ?? reply.code(404).send({ error: `project not found: ${req.params.projectId}` });
   });
 
-  // Partial project update — name and/or the wake-channel binding. No version
-  // guard (projects have no optimistic lock); last write wins like the web UI.
+  // Project updates are limited to name, labels and the default Session. Route
+  // changes must go through Directory so every project inherits one source.
   app.patch('/api/projects/:projectId', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
     const parsed = projectPatchSchema.safeParse(req.body);
     if (!parsed.success) throw new ValidationError(validationMessage(parsed.error));
