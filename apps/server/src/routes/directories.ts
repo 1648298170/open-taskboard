@@ -1,10 +1,10 @@
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { Store, ValidationError } from '@taskboard/core';
 import { createDirectorySchema, directoryPatchSchema, z } from '@taskboard/core/schemas';
-import { createOpenCodeSession, getOpenCodeSessionRuntimeState, listOpenCodeDirectories, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
+import { createOpenCodeSession, getConfiguredOpenCodeBase, getOpenCodeSessionRuntimeState, listOpenCodeDirectories, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
 
 interface DirectoryParams { directoryId: string }
-interface DirectoryBrowseQuery { path?: string; serverUrl?: string }
+interface DirectoryBrowseQuery { path?: string }
 const createSessionSchema = z.object({
   title: z.string().min(1).max(200)
 }).strict();
@@ -18,12 +18,11 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
     req: FastifyRequest<{ Querystring: DirectoryBrowseQuery }>,
     reply
   ) => {
-    const serverUrl = String(req.query.serverUrl ?? '').trim();
     const path = String(req.query.path ?? '').trim();
-    if (!serverUrl) return reply.code(400).send({ error: '选择工作目录必须提供 OpenCode Server URL' });
-    if (serverUrl.length > 500 || path.length > 4096) {
-      return reply.code(400).send({ error: 'OpenCode Server URL 或目录路径过长' });
-    }
+    if (path.length > 4096) return reply.code(400).send({ error: '目录路径过长' });
+    let serverUrl: string;
+    try { serverUrl = getConfiguredOpenCodeBase(); }
+    catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
     const isWindowsDrivePath = /^[A-Za-z]:[\\/]/.test(path);
     const isWindowsUncPath = path.startsWith('\\\\');
     if (path && !path.startsWith('/') && !isWindowsDrivePath && !isWindowsUncPath) {
@@ -38,6 +37,47 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
   });
 
   app.get('/api/directories', async () => store.listDirectories());
+
+  // Global OpenCode health snapshot. It is deployment-configured and never tied to a directory.
+  app.get('/api/opencode/status', async (_req, reply) => {
+    const checkedAt = new Date().toISOString();
+    let serverUrl: string;
+    try {
+      serverUrl = getConfiguredOpenCodeBase();
+      await listOpenCodeSessions(serverUrl);
+    } catch (err) {
+      return reply.code(200).send({
+        checkedAt, serverStatus: 'unavailable', serverUrl: '',
+        error: (err as Error).message, projects: []
+      });
+    }
+
+    const projects = store.listProjects();
+    const states = await Promise.all(projects.map(async project => {
+      const directory = project.directoryId ? store.getDirectory(project.directoryId) : null;
+      const workspacePath = directory?.workspacePath.trim() ?? '';
+      const sessionId = project.defaultSessionId?.trim() ?? '';
+      const base = {
+        projectId: project.id, projectName: project.name,
+        directoryName: directory?.name ?? '未关联目录',
+        workspacePath, sessionId: sessionId || null
+      };
+      if (!sessionId) return { ...base, status: 'no-session', busy: null };
+      if (!workspacePath) return { ...base, status: 'unavailable', busy: null, error: '项目未配置工作目录' };
+      try {
+        const state = await getOpenCodeSessionRuntimeState(serverUrl, workspacePath, sessionId);
+        return {
+          ...base, status: state.busy ? 'busy' : (state.status?.type ?? 'idle'),
+          busy: state.busy, statusType: state.status?.type ?? null,
+          observedAt: state.observedAt
+        };
+      } catch (err) {
+        return { ...base, status: 'unavailable', busy: null, error: (err as Error).message };
+      }
+    }));
+    return { checkedAt, serverStatus: 'connected', serverUrl, projects: states };
+  });
+
 
   app.get('/api/directories/:directoryId/opencode-status', async (
     req: FastifyRequest<{ Params: DirectoryParams }>,
@@ -111,8 +151,10 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
     const directory = store.getDirectory(req.params.directoryId);
     if (!directory) return reply.code(404).send({ error: `directory not found: ${req.params.directoryId}` });
     const workspacePath = directory.workspacePath.trim();
-    const serverUrl = directory.serverUrl.trim();
-    if (!workspacePath || !serverUrl) return reply.code(400).send({ error: '请先在目录中配置工作目录和 OpenCode Server URL' });
+    let serverUrl: string;
+    try { serverUrl = getConfiguredOpenCodeBase(); }
+    catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
+    if (!workspacePath) return reply.code(400).send({ error: '请先在目录中配置工作目录' });
     try {
       const base = normalizeOpenCodeBase(serverUrl);
       const sessions = await listOpenCodeSessions(base, workspacePath);
