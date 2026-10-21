@@ -4,7 +4,7 @@
 // hand-rolled type assertions.
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { createTaskWorktree, GitWorktreeError, scanGitRefs } from '../git-refs.js';
-import { abortOpenCodeSession, getOpenCodeSessionRuntimeState, normalizeOpenCodeBase, openOpenCodeEventStream } from '../opencode.js';
+import { abortOpenCodeSession, getConfiguredOpenCodeBase, getOpenCodeSessionRuntimeState, openOpenCodeEventStream } from '../opencode.js';
 import { STATUSES, Store, ValidationError } from '@taskboard/core';
 import type { Status, TaskboardServerConfig } from '@taskboard/core';
 import { claimSchema, createIssueSchema, restUpdateIssueSchema, z } from '@taskboard/core/schemas';
@@ -262,11 +262,13 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     if (!issue.sessionId?.trim()) return reply.code(409).send({ error: '任务尚未绑定 OpenCode Session' });
     const project = store.getProject(issue.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
-    if (!project.wakeChannel.trim()) return reply.code(400).send({ error: '请先配置项目的 OpenCode Server URL' });
+    let serverUrl: string;
+    try { serverUrl = getConfiguredOpenCodeBase(); }
+    catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
     const directory = issue.worktreePath.trim() || project.workspacePath.trim();
     if (!directory) return reply.code(400).send({ error: '任务没有可用的工作目录' });
     try {
-      const state = await getOpenCodeSessionRuntimeState(project.wakeChannel, directory, issue.sessionId);
+      const state = await getOpenCodeSessionRuntimeState(serverUrl, directory, issue.sessionId);
       if (state.directory && normalizeOpenCodeDirectory(state.directory) !== normalizeOpenCodeDirectory(directory)) {
         return reply.code(409).send({ error: `OpenCode Session 的实际目录与任务执行目录不一致：${state.directory}` });
       }
@@ -294,7 +296,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
       if (!runtime.busy) {
         return reply.code(409).send({ error: 'OpenCode Session 当前未报告执行中；请先重新同步状态' });
       }
-      await abortOpenCodeSession(project.wakeChannel, directory, issue.sessionId);
+      await abortOpenCodeSession(serverUrl, directory, issue.sessionId);
       store.recordExecutionEvent(
         issue.id,
         'cancel_requested',
@@ -321,7 +323,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     const controller = new AbortController();
     let upstream: Response;
     try {
-      upstream = await openOpenCodeEventStream(project.wakeChannel, directory, controller.signal);
+      upstream = await openOpenCodeEventStream(serverUrl, directory, controller.signal);
     } catch (err) {
       return reply.code(502).send({ error: `无法订阅 OpenCode 事件：${(err as Error).message}` });
     }
