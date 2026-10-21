@@ -2215,3 +2215,242 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   .directory-status-summary { flex-wrap: wrap; }
   .directory-status-summary small { margin-left: 0; }
 }
+
+/* ---- drawer redesign: overview → comments → work → low-frequency details ---- */
+/* Structure: title/properties/description (primary zone) → comments → subtasks →
+   dependencies → attachments → activity → details. Colours, type and square
+   geometry stay on the existing terminal tokens. */
+.detail-overview { padding-bottom: 2px; }
+.detail-overview .task-detail-title {
+  margin: 14px 0 14px;
+  font-size: 20px;
+  line-height: 1.4;
+}
+
+/* One property per row: label left, control right (TaskDetail's property rhythm). */
+.detail-property-list {
+  display: grid;
+  margin: 0 0 14px;
+  border-top: 1px solid var(--line);
+}
+.detail-property-row {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+}
+.detail-property-label {
+  color: var(--ink-dim);
+  font: 10px/1.5 var(--mono);
+  letter-spacing: .1em;
+}
+.detail-property-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.detail-property-control .tb-select {
+  width: auto;
+  min-width: 120px;
+  max-width: 100%;
+  justify-content: space-between;
+}
+.detail-property-control input[type="date"] {
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+  font: 11px/1.4 var(--mono);
+}
+.detail-property-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.detail-property-value.is-empty { color: var(--ink-dim); }
+.detail-property-value svg { flex: none; color: var(--ink-dim); }
+
+.detail-overview .detail-actions {
+  margin: 12px 0 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.detail-overview .claim-info { margin: 10px 0 0; }
+
+/* Description is still part of the primary zone: properties → actions → body. */
+.detail-description {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.detail-block-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.detail-block-head h3 {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.detail-block-head .btn { margin-left: auto; }
+.detail-description .markdown { line-height: 1.65; }
+
+/* Section frame + one heading hierarchy for every content block. */
+.drawer-section {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.drawer .drawer-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--ink-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.drawer-section-head .btn { margin-left: auto; }
+.drawer-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 17px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--bg-panel);
+  color: var(--ink-dim);
+  font: 10px/1 var(--mono);
+  letter-spacing: 0;
+}
+
+/* Comments: first content block below the primary zone. */
+.drawer-comments .comments li { padding: 9px 11px; margin-bottom: 7px; }
+.drawer-comments .comments li:last-child { margin-bottom: 0; }
+.drawer-comments .comments .comment-head {
+  justify-content: flex-start;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+.drawer-comments .comments .comment-head > .who { margin-right: 0; }
+.drawer-comments .comments .comment-head > :last-child { margin-left: auto; }
+.drawer-comments .comment-form { margin-top: 10px; }
+
+.drawer-attachments .attachment-upload { margin: 0 0 10px; }
+
+/* Details disclosure: native <details>, styled like every other section heading. */
+.drawer-fold { padding-bottom: 2px; }
+.drawer-fold > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.drawer-fold > summary::-webkit-details-marker { display: none; }
+.drawer-fold > summary::after {
+  content: '+';
+  color: var(--ink-dim);
+  font: 400 15px/1 var(--mono);
+}
+.drawer-fold[open] > summary { margin-bottom: 12px; }
+.drawer-fold[open] > summary::after { content: '−'; }
+.drawer-fold-meta {
+  margin-left: auto;
+  color: var(--ink-dim);
+  font: 10px/1.4 var(--mono);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Compact fact list inside 详情: same label-left / value-right rhythm. */
+.detail-fact-list {
+  display: grid;
+  border-top: 1px solid var(--line);
+}
+.detail-fact-row {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 30px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+}
+.detail-fact-row > span {
+  color: var(--ink-dim);
+  font: 10px/1.5 var(--mono);
+  letter-spacing: .08em;
+}
+.detail-fact-row > code {
+  min-width: 0;
+  color: var(--ink);
+  font: 10px/1.5 var(--mono);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.detail-fact-row-edit > input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 4px 7px;
+  font-size: 11.5px;
+}
+.detail-fact-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+.detail-fact-field > span {
+  color: var(--ink-dim);
+  font: 10px/1.5 var(--mono);
+  letter-spacing: .08em;
+}
+.detail-fact-field textarea { min-height: 64px; }
+.detail-commits {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.detail-commits-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: var(--ink-dim);
+  font-size: 10px;
+  letter-spacing: .1em;
+}
+.detail-commits-head .drawer-fold-meta { margin-left: auto; }
+
+@media (max-width: 520px) {
+  .drawer { padding: 14px 16px; }
+  .detail-property-row,
+  .detail-fact-row { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; }
+  .detail-property-control .tb-select { min-width: 0; }
+  .detail-property-control input[type="date"] { max-width: 148px; }
+}

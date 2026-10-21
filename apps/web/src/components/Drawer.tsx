@@ -142,6 +142,9 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
     } catch (err) { onToast(`✗ ${(err as Error).message}`); }
   };
 
+  const depCount = (detail.blockedBy?.length ?? 0) + (detail.blocks?.length ?? 0);
+  const doneChildren = detail.children.filter(c => c.status === 'done').length;
+
   return (
     <>
       <div className="drawer-backdrop" onClick={onClose} />
@@ -150,445 +153,394 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
         <span className="issue-id">#{detail.id} · v{detail.version}</span>
         <button className="icon-btn" onClick={onClose}><X size={16} /></button>
       </div>
-      <h2 className="task-detail-title" contentEditable suppressContentEditableWarning
-        onBlur={e => { const v = e.currentTarget.textContent?.trim(); if (v && v !== detail.title) void patch({ title: v }); }}>
-        {detail.title}
-      </h2>
-      <div className="detail-primary-fields">
-        <div className="detail-status-fields">
-          <Select value={detail.status} onChange={v => void patch({ status: v as Status })}
-            options={statuses.map(st => ({ value: st, label: STATUS_CN[st] ?? st }))} />
-          <Select value={detail.priority} onChange={v => void patch({ priority: v as IssueDetail['priority'] })}
-            options={PRIORITIES.map(pr => ({ value: pr, label: pr }))} />
-        </div>
-        <div className="detail-assignee-field" title="负责人由 Agent 维护">
-          <UserRound size={13} />
-          <span>{detail.assignee ? `@${detail.assignee}` : '未分配'}</span>
-        </div>
-      </div>
 
-      <section className="detail-extra-properties" aria-label="任务属性">
-        <div className="detail-extra-heading">属性</div>
-        <div className="detail-extra-grid">
-          <div className="detail-attribute"><span>Session</span><code title={detail.sessionId ?? undefined}>{detail.sessionId || "未配置项目默认 Session"}</code></div>
-          <div className="detail-attribute"><span>Git 分支</span><code>{detail.branch || "—"}</code></div>
-          <div className="detail-attribute"><span>工作树</span><code>{detail.worktree || "—"}</code></div>
-          <div className="detail-attribute detail-attribute-wide"><span>工作树路径</span><code>{detail.worktreePath || "—"}</code></div>
-          <label className="detail-field">
-            <span>标签</span>
-            <input title="标签（逗号分隔）" placeholder="以逗号分隔" defaultValue={detail.labels}
-              onBlur={e => { const v = e.target.value.trim(); if (v !== detail.labels) void patch({ labels: v }); }} />
-          </label>
-          <label className="detail-field">
-            <span>计划开始</span>
-            <input type="date" title="计划开始日期" defaultValue={detail.startDate ?? ''}
-              onChange={e => { const v = e.target.value || null; if (v !== detail.startDate) void patch({ startDate: v }); }} />
-          </label>
-          <label className="detail-field">
-            <span>截止日期</span>
-            <input type="date" title="截止日期" defaultValue={detail.dueDate ?? ''}
-              onChange={e => { const v = e.target.value || null; if (v !== detail.dueDate) void patch({ dueDate: v }); }} />
-          </label>
+      {/* 概览区：标题、状态/优先级、负责人、日期——打开抽屉第一眼要看到的信息。 */}
+      <div className="detail-overview">
+        <h2 className="task-detail-title" contentEditable suppressContentEditableWarning
+          onBlur={e => { const v = e.currentTarget.textContent?.trim(); if (v && v !== detail.title) void patch({ title: v }); }}>
+          {detail.title}
+        </h2>
+        {/* 一行一个属性：标签在左、控件靠右（参考 TaskDetail 的属性行结构）。 */}
+        <div className="detail-property-list" aria-label="任务属性">
+          <div className="detail-property-row">
+            <span className="detail-property-label" id="drawer-prop-status">状态</span>
+            <div className="detail-property-control">
+              <Select value={detail.status} ariaLabel="状态" onChange={v => void patch({ status: v as Status })}
+                options={statuses.map(st => ({ value: st, label: STATUS_CN[st] ?? st }))} />
+            </div>
+          </div>
+          <div className="detail-property-row">
+            <span className="detail-property-label" id="drawer-prop-assignee">负责人</span>
+            <div className="detail-property-control">
+              <span className={`detail-property-value${detail.assignee ? '' : ' is-empty'}`}
+                title="负责人由 Agent 维护" aria-labelledby="drawer-prop-assignee">
+                <UserRound size={13} /> {detail.assignee ? `@${detail.assignee}` : '未分配'}
+              </span>
+            </div>
+          </div>
+          <div className="detail-property-row">
+            <span className="detail-property-label" id="drawer-prop-priority">优先级</span>
+            <div className="detail-property-control">
+              <Select value={detail.priority} ariaLabel="优先级"
+                onChange={v => void patch({ priority: v as IssueDetail['priority'] })}
+                options={PRIORITIES.map(pr => ({ value: pr, label: pr }))} />
+            </div>
+          </div>
+          <div className="detail-property-row">
+            <label className="detail-property-label" htmlFor="drawer-start-date">计划开始</label>
+            <div className="detail-property-control">
+              <input id="drawer-start-date" type="date" title="计划开始日期" defaultValue={detail.startDate ?? ''}
+                onChange={e => { const v = e.target.value || null; if (v !== detail.startDate) void patch({ startDate: v }); }} />
+            </div>
+          </div>
+          <div className="detail-property-row">
+            <label className="detail-property-label" htmlFor="drawer-due-date">截止日期</label>
+            <div className="detail-property-control">
+              <input id="drawer-due-date" type="date" title="截止日期" defaultValue={detail.dueDate ?? ''}
+                onChange={e => { const v = e.target.value || null; if (v !== detail.dueDate) void patch({ dueDate: v }); }} />
+            </div>
+          </div>
         </div>
-      </section>
 
-      <div className="detail-actions">
-        <button className="btn tiny detail-danger-action" onClick={async () => {
-          if (!await confirmDialog({ title: `删除 #${detail.id} 及其子任务/评论？`, danger: true, confirmText: '删除' })) return;
-          try {
-            await api_.deleteIssue(detail.id);
-            onToast('已删除');
-            onClose(); onChanged();
-          } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-        }}>删除任务</button>
-        {detail.archivedAt
-          ? <button className="btn tiny" onClick={async () => {
-              try {
-                await api_.unarchiveIssue(detail.id);
-                onToast('已取消归档');
-                onChanged(); await load();
-              } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-            }}>取消归档</button>
-          : detail.status === 'done' && (
-            <button className="btn tiny" onClick={async () => {
-              if (!await confirmDialog({ title: `归档 #${detail.id}？`, lines: ['将从看板移除（可随时取消归档）'], confirmText: '归档' })) return;
-              try {
-                await api_.archiveIssue(detail.id);
-                onToast('已归档');
-                onClose(); onChanged();
-              } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-            }}>归档</button>
-          )}
-        {detail.status !== 'done' && (
-          <button className="btn tiny detail-wake-action"
-            title={detail.sessionId
-              ? `唤醒 agent：继续绑定会话 ${detail.sessionId}`
-              : '唤醒 agent：按项目路由发送或创建新会话'}
-            onClick={async () => {
-              try {
-                const created = await api_.addComment(detail.id, `${WAKE_PREFIX} 认领此任务并编排（拆解子任务、排依赖）`);
-                onToast(detail.sessionId
-                  ? `已入队——watch 将投递到绑定会话 ${detail.sessionId}`
-                  : '已入队——watch 将按项目路由送达或新建 headless 会话');
-                onChanged();
-                void (async () => {
-                  for (let i = 0; i < 5; i++) {
-                    await new Promise(r => setTimeout(r, 1000));
-                    try {
-                      const fresh = await api_.showIssue(issueId);
-                      setDetail(fresh);
-                      const st = fresh.comments.find(c => c.id === created.id)?.status;
-                      if (st && st !== 'pending') {
-                        await new Promise(r => setTimeout(r, 250));
-                        try { setDetail(await api_.showIssue(issueId)); } catch { /* keep latest successful detail */ }
-                        onToast(st === 'processed' ? '✓ agent 已处理本条唤醒' : '✓ 已送达，agent 处理中');
-                        onChanged();
-                        return;
-                      }
-                    } catch { return; }
-                  }
-                  onToast('⚠ 5 秒内未确认送达：评论仍为 pending。请检查 watch 日志和 OpenCode 服务地址。');
-                })();
-              } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-            }}><Sparkles size={14} /> 唤醒</button>
-        )}
-        {activeClaim(detail) !== null
-          ? <button className="btn tiny" onClick={async () => {
-              try {
-                await api_.releaseIssue(detail.id);
-                onToast(`#${detail.id} 已释放租约`);
-                onChanged(); await load();
-              } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-            }}>释放认领</button>
-          : <button className="btn tiny" onClick={async () => {
-              try {
-                const claimed = await api_.claimIssue(detail.id);
-                onToast(`#${detail.id} 已认领，租约至 ${claimed.leaseExpiresAt ? fmtHMLocal(claimed.leaseExpiresAt) : ''}`);
-                onChanged(); await load();
-              } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-            }}>认领任务</button>}
-      </div>
-
-      {/* T7-34: 认领信息（meta 行下单独一行，含续租）。仅有效租约显示。 */}
-      {(() => {
-        const holder = activeClaim(detail);
-        if (holder === null || detail.leaseExpiresAt === null) return null;
-        const minutes = Math.max(0, Math.ceil((Date.parse(detail.leaseExpiresAt) - Date.now()) / 60_000));
-        return (
-          <div className="claim-info">
-            <span className="claim-badge"><UserRound size={12} /> {holder} · 剩余 {minutes}m（至 {fmtHMLocal(detail.leaseExpiresAt)}）</span>
-            {holder === 'web' && (
-              <button className="btn tiny" onClick={async () => {
+        <div className="detail-actions detail-primary-actions">
+          <button className="btn tiny detail-danger-action" onClick={async () => {
+            if (!await confirmDialog({ title: `删除 #${detail.id} 及其子任务/评论？`, danger: true, confirmText: '删除' })) return;
+            try {
+              await api_.deleteIssue(detail.id);
+              onToast('已删除');
+              onClose(); onChanged();
+            } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+          }}>删除任务</button>
+          {detail.archivedAt
+            ? <button className="btn tiny" onClick={async () => {
                 try {
-                  const beat = await api_.heartbeatIssue(detail.id);
-                  onToast(`#${detail.id} 续租成功，至 ${beat.leaseExpiresAt ? fmtHMLocal(beat.leaseExpiresAt) : ''}`);
+                  await api_.unarchiveIssue(detail.id);
+                  onToast('已取消归档');
                   onChanged(); await load();
                 } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-              }}>续租</button>
+              }}>取消归档</button>
+            : detail.status === 'done' && (
+              <button className="btn tiny" onClick={async () => {
+                if (!await confirmDialog({ title: `归档 #${detail.id}？`, lines: ['将从看板移除（可随时取消归档）'], confirmText: '归档' })) return;
+                try {
+                  await api_.archiveIssue(detail.id);
+                  onToast('已归档');
+                  onClose(); onChanged();
+                } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+              }}>归档</button>
             )}
-          </div>
-        );
-      })()}
-
-      <h3>描述
-        {!editingDesc && <button className="btn tiny" onClick={() => setEditingDesc(true)}><Pencil size={12} /> 编辑</button>}
-      </h3>
-      {editingDesc
-        ? <textarea rows={8} autoFocus placeholder="任务描述（Markdown）" value={desc || detail.description} onChange={e => setDesc(e.target.value)}
-            onBlur={() => {
-              if (desc && desc !== detail.description) void patch({ description: desc });
-              setEditingDesc(false);
-            }} />
-        : detail.description
-          ? <Markdown src={detail.description} />
-          : <p style={{ color: 'var(--ink-dim)', fontSize: 12 }}>暂无描述</p>}
-
-      <h3>子任务
-        <button className="btn tiny" onClick={async () => {
-          const title = await promptDialog({ title: '子任务标题' });
-          if (!title) return;
-          try {
-            await api_.createIssue(detail.projectId, { parentId: detail.id, title });
-            onChanged(); await load();
-          } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-        }}><Plus size={12} /> 拆解子任务</button>
-      </h3>
-      <ul className="children">
-        {detail.children.length
-          ? detail.children.map(c => (
-            <li key={c.id} onClick={() => onOpenIssue(c.id)}>
-              <span className="st">[{STATUS_CN[c.status] ?? c.status}]</span>{c.title}
-            </li>))
-          : <li style={{ color: 'var(--ink-dim)' }}>暂无子任务</li>}
-      </ul>
-
-      <h3>依赖</h3>
-      {/* v0.4: 依赖选择器 —— 下拉选择后立即建边；「手动输入 ID…」保留原 prompt 回退。
-          候选：本项目未完成任务，排除自身与已存在的边（双向）。 */}
-      <div className="dep-picker">
-        <Select value="" placeholder="＋ 添加依赖（选择任务…）"
-          onChange={v => {
-            if (v === '__manual__') {
-              void (async () => {
-                const depId = await promptDialog({ title: '被哪个任务阻塞？', placeholder: '输入任务 ID，如 ab12cd34' });
-                if (!depId) return;
-                await addDep(depId);
-              })();
-              return;
-            }
-            void addDep(v);
-          }}
-          options={[
-            ...issues
-              .filter(i => i.id !== detail.id
-                && i.status !== 'done'
-                && !(detail.blockedBy ?? []).includes(i.id)
-                && !(detail.blocks ?? []).includes(i.id))
-              .map(c => ({ value: c.id, label: `#${c.id} ${c.title} [${STATUS_CN[c.status] ?? c.status}]` })),
-            { value: '__manual__', label: '手动输入 ID…' }
-          ]} />
-      </div>
-      <ul className="deps">
-        {(() => {
-          const byId = new Map(issues.map(i => [i.id, i]));
-          const row = (id: string, mark: string, markCls: string, onRemove: (() => Promise<void>) | null, key: string) => {
-            const dep = byId.get(id);
-            return (
-              <li key={key} className="clickable" onClick={() => onOpenIssue(id)}>
-                <span className={`mark ${markCls}`}>{mark}</span>
-                <span className="st">[{dep?.status ?? '?'}]</span>
-                <span className="dep-title">{dep ? dep.title : `#${id}`}</span>
-                <span className="dep-id">#{id}</span>
-                {onRemove && (confirmingDep === id ? (
-                  <button className="btn tiny danger" title="再次点击确认移除"
-                    onClick={e => { e.stopPropagation(); setConfirmingDep(null); void onRemove(); }}>确认移除</button>
-                ) : (
-                  <button className="icon-btn dep-remove" title="移除依赖"
-                    onClick={e => {
-                      e.stopPropagation();
-                      setConfirmingDep(id);
-                      setTimeout(() => setConfirmingDep(cur => cur === id ? null : cur), 3000);
-                    }}><X size={12} /></button>
-                ))}
-              </li>
-            );
-          };
-          const removeDep = async (dependsOnId: string): Promise<void> => {
-            try {
-              await api_.removeDependency(detail.id, dependsOnId);
-              onToast(`已解除对 #${dependsOnId} 的依赖`);
-              onChanged(); await load();
-            } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-          };
-          const blockedBy = detail.blockedBy ?? [];
-          const blocks = detail.blocks ?? [];
-          if (!blockedBy.length && !blocks.length) {
-            return <li style={{ color: 'var(--ink-dim)' }}>暂无依赖</li>;
-          }
-          return (<>
-            {blockedBy.map(id => row(
-              id,
-              byId.get(id)?.status === 'done' ? '✓' : '○',
-              byId.get(id)?.status === 'done' ? 'done-mark' : 'undone-mark',
-              () => removeDep(id),
-              `by-${id}`
-            ))}
-            {blocks.map(id => row(id, '→', 'blocks-mark', null, `blk-${id}`))}
-          </>);
-        })()}
-      </ul>
-
-      <details className="detail-section detail-disclosure review-context">
-        <summary>验收与审核</summary>
-        <label className="detail-field">
-          <span>验收标准（Markdown）</span>
-          <textarea rows={4} defaultValue={detail.acceptanceCriteria}
-            placeholder="列出可验证的完成条件，例如：功能行为、边界情况、测试要求…"
-            onBlur={e => {
-              const value = e.currentTarget.value;
-              if (value !== detail.acceptanceCriteria) void patch({ acceptanceCriteria: value });
-            }} />
-        </label>
-        <div className="review-status-row">
-          <span>审核结论</span>
-          <Select value={detail.reviewStatus} onChange={v => {
-            if (v !== detail.reviewStatus) void patch({ reviewStatus: v as IssueDetail['reviewStatus'] });
-          }} options={[
-            { value: 'pending', label: '待审核' },
-            { value: 'approved', label: '已通过' },
-            { value: 'changes_requested', label: '需要修改' }
-          ]} />
-        </div>
-        <label className="detail-field">
-          <span>审核意见 / 验收证据</span>
-          <textarea rows={3} defaultValue={detail.reviewNotes}
-            placeholder="记录验证结果、未覆盖项或需要修改的内容…"
-            onBlur={e => {
-              const value = e.currentTarget.value;
-              if (value !== detail.reviewNotes) void patch({ reviewNotes: value });
-            }} />
-        </label>
-      </details>
-
-      {/* T6-36: 最近提交预览 —— 绑定了分支或工作树才显示。 */}
-      {commitRef && (
-        <details className="detail-section detail-disclosure detail-commits">
-          <summary>
-            <span>最近提交</span>
-            <span className="detail-summary-meta">{commits === null ? '读取中' : `${commits.length} 条`}</span>
-          </summary>
-          <ul className="commits">
-            {commits === null
-              ? <li>加载中…</li>
-              : commits.length === 0
-                ? <li>暂无提交</li>
-                : commits.map(c => (
-                  <li key={`${c.hash} ${c.subject}`}>
-                    <span className="hash">{c.hash}</span>
-                    <span className="subject">{c.subject}</span>
-                    <span className="when">({c.when})</span>
-                  </li>
-                ))}
-          </ul>
-        </details>
-      )}
-
-      <h3>评论</h3>
-      <ul className="comments">
-        {detail.comments.length
-          ? detail.comments.map(c => (
-            <li key={c.id}>
-              {/* v0.4: 头行（作者+删除）与正文分层——正文独立整行，长文不再绕排 */}
-              <div className="comment-head">
-                <span className="who">{c.author || 'anon'}</span>
-                {c.status !== 'pending' && (
-                  <span className={`comment-status ${c.status}`}>
-                    {c.status === 'processing' ? '唤醒中' : '已处理'}
-                  </span>
-                )}
-                {confirmingComment === c.id ? (
-                  <button className="btn tiny danger" title="再次点击确认删除"
-                    onClick={async e => {
-                      e.stopPropagation();
-                      setConfirmingComment(null);
+          {detail.status !== 'done' && (
+            <button className="btn tiny detail-wake-action"
+              title={detail.sessionId
+                ? `唤醒 agent：继续绑定会话 ${detail.sessionId}`
+                : '唤醒 agent：按项目路由发送或创建新会话'}
+              onClick={async () => {
+                try {
+                  const created = await api_.addComment(detail.id, `${WAKE_PREFIX} 认领此任务并编排（拆解子任务、排依赖）`);
+                  onToast(detail.sessionId
+                    ? `已入队——watch 将投递到绑定会话 ${detail.sessionId}`
+                    : '已入队——watch 将按项目路由送达或新建 headless 会话');
+                  onChanged();
+                  void (async () => {
+                    for (let i = 0; i < 5; i++) {
+                      await new Promise(r => setTimeout(r, 1000));
                       try {
-                        await api_.deleteComment(c.id);
-                        onChanged(); await load();
-                      } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-                    }}>确认删除</button>
-                ) : (
-                  <>
-                    {c.status === 'pending' && (c.author === commentAuthor || (commentAuthor === 'web' && c.author === '')) && (
-                      <button className="icon-btn dep-remove" title="编辑评论（仅自己发的评论可编辑；编辑保存后重新唤醒 agent）"
+                        const fresh = await api_.showIssue(issueId);
+                        setDetail(fresh);
+                        const st = fresh.comments.find(c => c.id === created.id)?.status;
+                        if (st && st !== 'pending') {
+                          await new Promise(r => setTimeout(r, 250));
+                          try { setDetail(await api_.showIssue(issueId)); } catch { /* keep latest successful detail */ }
+                          onToast(st === 'processed' ? '✓ agent 已处理本条唤醒' : '✓ 已送达，agent 处理中');
+                          onChanged();
+                          return;
+                        }
+                      } catch { return; }
+                    }
+                    onToast('⚠ 5 秒内未确认送达：评论仍为 pending。请检查 watch 日志和 OpenCode 服务地址。');
+                  })();
+                } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+              }}><Sparkles size={14} /> 唤醒</button>
+          )}
+          {activeClaim(detail) !== null
+            ? <button className="btn tiny" onClick={async () => {
+                try {
+                  await api_.releaseIssue(detail.id);
+                  onToast(`#${detail.id} 已释放租约`);
+                  onChanged(); await load();
+                } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+              }}>释放认领</button>
+            : <button className="btn tiny" onClick={async () => {
+                try {
+                  const claimed = await api_.claimIssue(detail.id);
+                  onToast(`#${detail.id} 已认领，租约至 ${claimed.leaseExpiresAt ? fmtHMLocal(claimed.leaseExpiresAt) : ''}`);
+                  onChanged(); await load();
+                } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+              }}>认领任务</button>}
+        </div>
+
+        {/* T7-34: 认领信息（meta 行下单独一行，含续租）。仅有效租约显示。 */}
+        {(() => {
+          const holder = activeClaim(detail);
+          if (holder === null || detail.leaseExpiresAt === null) return null;
+          const minutes = Math.max(0, Math.ceil((Date.parse(detail.leaseExpiresAt) - Date.now()) / 60_000));
+          return (
+            <div className="claim-info">
+              <span className="claim-badge"><UserRound size={12} /> {holder} · 剩余 {minutes}m（至 {fmtHMLocal(detail.leaseExpiresAt)}）</span>
+              {holder === 'web' && (
+                <button className="btn tiny" onClick={async () => {
+                  try {
+                    const beat = await api_.heartbeatIssue(detail.id);
+                    onToast(`#${detail.id} 续租成功，至 ${beat.leaseExpiresAt ? fmtHMLocal(beat.leaseExpiresAt) : ''}`);
+                    onChanged(); await load();
+                  } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+                }}>续租</button>
+              )}
+            </div>
+          );
+        })()}
+
+        <section className="detail-description" aria-labelledby="drawer-description-heading">
+          <div className="detail-block-head">
+            <h3 id="drawer-description-heading">描述</h3>
+            {!editingDesc && <button className="btn tiny" onClick={() => setEditingDesc(true)}><Pencil size={12} /> 编辑</button>}
+          </div>
+          {editingDesc
+            ? <textarea rows={8} autoFocus placeholder="任务描述（Markdown）" value={desc || detail.description} onChange={e => setDesc(e.target.value)}
+                onBlur={() => {
+                  if (desc && desc !== detail.description) void patch({ description: desc });
+                  setEditingDesc(false);
+                }} />
+            : detail.description
+              ? <Markdown src={detail.description} />
+              : <p style={{ color: 'var(--ink-dim)', fontSize: 12 }}>暂无描述</p>}
+        </section>
+      </div>
+
+      {/* 评论紧跟概览：最高频的协作入口，打开即可写。 */}
+      <section className="drawer-section drawer-comments" aria-labelledby="drawer-comments-heading">
+        <h3 className="drawer-section-head" id="drawer-comments-heading">评论
+          {detail.comments.length > 0 && <span className="drawer-count">{detail.comments.length}</span>}
+        </h3>
+        <ul className="comments">
+          {detail.comments.length
+            ? detail.comments.map(c => (
+              <li key={c.id}>
+                {/* v0.4: 头行（作者+删除）与正文分层——正文独立整行，长文不再绕排 */}
+                <div className="comment-head">
+                  <span className="who">{c.author || 'anon'}</span>
+                  {c.status !== 'pending' && (
+                    <span className={`comment-status ${c.status}`}>
+                      {c.status === 'processing' ? '唤醒中' : '已处理'}
+                    </span>
+                  )}
+                  {confirmingComment === c.id ? (
+                    <button className="btn tiny danger" title="再次点击确认删除"
+                      onClick={async e => {
+                        e.stopPropagation();
+                        setConfirmingComment(null);
+                        try {
+                          await api_.deleteComment(c.id);
+                          onChanged(); await load();
+                        } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+                      }}>确认删除</button>
+                  ) : (
+                    <>
+                      {c.status === 'pending' && (c.author === commentAuthor || (commentAuthor === 'web' && c.author === '')) && (
+                        <button className="icon-btn dep-remove" title="编辑评论（仅自己发的评论可编辑；编辑保存后重新唤醒 agent）"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setEditingComment(c.id);
+                            setCommentDraft(c.body);
+                          }}><Pencil size={12} /></button>
+                      )}
+                      <button className="icon-btn dep-remove" title="删除评论"
                         onClick={e => {
                           e.stopPropagation();
-                          setEditingComment(c.id);
-                          setCommentDraft(c.body);
-                        }}><Pencil size={12} /></button>
-                    )}
-                    <button className="icon-btn dep-remove" title="删除评论"
+                          setConfirmingComment(c.id);
+                          setTimeout(() => setConfirmingComment(cur => cur === c.id ? null : cur), 3000);
+                        }}><X size={12} /></button>
+                    </>
+                  )}
+                </div>
+                {editingComment === c.id ? (
+                  <form className="comment-edit" onSubmit={async ev => {
+                    ev.preventDefault();
+                    try {
+                      await api_.updateComment(c.id, { body: commentDraft.trim() });
+                      setEditingComment(null); onChanged(); await load();
+                    } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+                  }}>
+                    <textarea rows={3} value={commentDraft} autoFocus
+                      onChange={e => setCommentDraft(e.target.value)} />
+                    <div className="comment-edit-row">
+                      <button type="submit" className="btn tiny">保存并重新唤醒</button>
+                      <button type="button" className="btn tiny ghost" onClick={() => setEditingComment(null)}>取消</button>
+                    </div>
+                  </form>
+                ) : (
+                <Markdown src={c.body} />
+                )}
+              </li>))
+            : <li style={{ color: 'var(--ink-dim)' }}>暂无评论</li>}
+        </ul>
+        {/* v0.4: 评论输入改自动增高 textarea——长文本自动换行，Enter 发送/Shift+Enter 换行 */}
+        <form className="comment-form" onSubmit={async e => {
+          e.preventDefault();
+          if (!comment.trim()) return;
+          try {
+            await api_.addComment(detail.id, comment.trim());
+            setComment(''); onChanged(); await load();
+          } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+        }}>
+          <textarea ref={commentInputRef} rows={2} value={comment}
+            onChange={e => setComment(e.target.value)}
+            onBlur={() => { if (mentionOpen) setMentionDismissed(true); }}
+            onInput={e => {
+              const el = e.currentTarget;
+              el.style.height = 'auto';
+              el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+            }}
+            onKeyDown={e => {
+              if (e.nativeEvent.isComposing) return; // IME 组合中不抢键（Enter 是组词提交）
+              if (mentionOpen) {
+                e.stopPropagation();
+                if (e.key === 'ArrowDown') { e.preventDefault(); setMentionHi(h => nextHi(h, mentionHits.length, 1)); return; }
+                if (e.key === 'ArrowUp') { e.preventDefault(); setMentionHi(h => nextHi(h, mentionHits.length, -1)); return; }
+                if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionHits[mentionHiSafe]); return; }
+                if (e.key === 'Escape') { e.preventDefault(); setMentionDismissed(true); return; }
+              }
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder="添加评论…（@ 唤醒 agent，Enter 发送，Shift+Enter 换行）" />
+          {/* 输入 @ 时弹出提及候选（chat 式补全面板）：↑↓ 高亮、Enter/Tab 选中、Esc 关闭；点击填入并保持输入框焦点。 */}
+          {mentionOpen && (
+            <span ref={mentionRef} className="mention-hint" role="listbox" aria-label="唤醒 agent 候选">
+              {mentionHits.map((c, i) => (
+                <button key={c.value} type="button" role="option" aria-selected={i === mentionHiSafe}
+                  className={`mention-opt${i === mentionHiSafe ? ' hi' : ''}`}
+                  onMouseDown={e => e.preventDefault()}
+                  onMouseEnter={() => setMentionHi(i)}
+                  onClick={() => pickMention(c)}>
+                  <strong>{c.value}</strong><span>{c.label}</span>
+                </button>
+              ))}
+            </span>
+          )}
+          <button className="btn tiny" type="submit">发送</button>
+        </form>
+      </section>
+
+      <section className="drawer-section" aria-labelledby="drawer-children-heading">
+        <h3 className="drawer-section-head" id="drawer-children-heading">子任务
+          {detail.children.length > 0 && <span className="drawer-count">{doneChildren}/{detail.children.length}</span>}
+          <button className="btn tiny" onClick={async () => {
+            const title = await promptDialog({ title: '子任务标题' });
+            if (!title) return;
+            try {
+              await api_.createIssue(detail.projectId, { parentId: detail.id, title });
+              onChanged(); await load();
+            } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+          }}><Plus size={12} /> 拆解子任务</button>
+        </h3>
+        <ul className="children">
+          {detail.children.length
+            ? detail.children.map(c => (
+              <li key={c.id} onClick={() => onOpenIssue(c.id)}>
+                <span className="st">[{STATUS_CN[c.status] ?? c.status}]</span>{c.title}
+              </li>))
+            : <li style={{ color: 'var(--ink-dim)' }}>暂无子任务</li>}
+        </ul>
+      </section>
+
+      <section className="drawer-section" aria-labelledby="drawer-deps-heading">
+        <h3 className="drawer-section-head" id="drawer-deps-heading">依赖
+          {depCount > 0 && <span className="drawer-count">{depCount}</span>}
+        </h3>
+        {/* v0.4: 依赖选择器 —— 下拉选择后立即建边；「手动输入 ID…」保留原 prompt 回退。
+            候选：本项目未完成任务，排除自身与已存在的边（双向）。 */}
+        <div className="dep-picker">
+          <Select value="" placeholder="＋ 添加依赖（选择任务…）"
+            onChange={v => {
+              if (v === '__manual__') {
+                void (async () => {
+                  const depId = await promptDialog({ title: '被哪个任务阻塞？', placeholder: '输入任务 ID，如 ab12cd34' });
+                  if (!depId) return;
+                  await addDep(depId);
+                })();
+                return;
+              }
+              void addDep(v);
+            }}
+            options={[
+              ...issues
+                .filter(i => i.id !== detail.id
+                  && i.status !== 'done'
+                  && !(detail.blockedBy ?? []).includes(i.id)
+                  && !(detail.blocks ?? []).includes(i.id))
+                .map(c => ({ value: c.id, label: `#${c.id} ${c.title} [${STATUS_CN[c.status] ?? c.status}]` })),
+              { value: '__manual__', label: '手动输入 ID…' }
+            ]} />
+        </div>
+        <ul className="deps">
+          {(() => {
+            const byId = new Map(issues.map(i => [i.id, i]));
+            const row = (id: string, mark: string, markCls: string, onRemove: (() => Promise<void>) | null, key: string) => {
+              const dep = byId.get(id);
+              return (
+                <li key={key} className="clickable" onClick={() => onOpenIssue(id)}>
+                  <span className={`mark ${markCls}`}>{mark}</span>
+                  <span className="st">[{dep?.status ?? '?'}]</span>
+                  <span className="dep-title">{dep ? dep.title : `#${id}`}</span>
+                  <span className="dep-id">#{id}</span>
+                  {onRemove && (confirmingDep === id ? (
+                    <button className="btn tiny danger" title="再次点击确认移除"
+                      onClick={e => { e.stopPropagation(); setConfirmingDep(null); void onRemove(); }}>确认移除</button>
+                  ) : (
+                    <button className="icon-btn dep-remove" title="移除依赖"
                       onClick={e => {
                         e.stopPropagation();
-                        setConfirmingComment(c.id);
-                        setTimeout(() => setConfirmingComment(cur => cur === c.id ? null : cur), 3000);
+                        setConfirmingDep(id);
+                        setTimeout(() => setConfirmingDep(cur => cur === id ? null : cur), 3000);
                       }}><X size={12} /></button>
-                  </>
-                )}
-              </div>
-              {editingComment === c.id ? (
-                <form className="comment-edit" onSubmit={async ev => {
-                  ev.preventDefault();
-                  try {
-                    await api_.updateComment(c.id, { body: commentDraft.trim() });
-                    setEditingComment(null); onChanged(); await load();
-                  } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-                }}>
-                  <textarea rows={3} value={commentDraft} autoFocus
-                    onChange={e => setCommentDraft(e.target.value)} />
-                  <div className="comment-edit-row">
-                    <button type="submit" className="btn tiny">保存并重新唤醒</button>
-                    <button type="button" className="btn tiny ghost" onClick={() => setEditingComment(null)}>取消</button>
-                  </div>
-                </form>
-              ) : (
-              <Markdown src={c.body} />
-              )}
-            </li>))
-          : <li style={{ color: 'var(--ink-dim)' }}>暂无评论</li>}
-      </ul>
-      {/* v0.4: 评论输入改自动增高 textarea——长文本自动换行，Enter 发送/Shift+Enter 换行 */}
-      <form className="comment-form" onSubmit={async e => {
-        e.preventDefault();
-        if (!comment.trim()) return;
-        try {
-          await api_.addComment(detail.id, comment.trim());
-          setComment(''); onChanged(); await load();
-        } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-      }}>
-        <textarea ref={commentInputRef} rows={2} value={comment}
-          onChange={e => setComment(e.target.value)}
-          onBlur={() => { if (mentionOpen) setMentionDismissed(true); }}
-          onInput={e => {
-            const el = e.currentTarget;
-            el.style.height = 'auto';
-            el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-          }}
-          onKeyDown={e => {
-            if (e.nativeEvent.isComposing) return; // IME 组合中不抢键（Enter 是组词提交）
-            if (mentionOpen) {
-              e.stopPropagation();
-              if (e.key === 'ArrowDown') { e.preventDefault(); setMentionHi(h => nextHi(h, mentionHits.length, 1)); return; }
-              if (e.key === 'ArrowUp') { e.preventDefault(); setMentionHi(h => nextHi(h, mentionHits.length, -1)); return; }
-              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionHits[mentionHiSafe]); return; }
-              if (e.key === 'Escape') { e.preventDefault(); setMentionDismissed(true); return; }
+                  ))}
+                </li>
+              );
+            };
+            const removeDep = async (dependsOnId: string): Promise<void> => {
+              try {
+                await api_.removeDependency(detail.id, dependsOnId);
+                onToast(`已解除对 #${dependsOnId} 的依赖`);
+                onChanged(); await load();
+              } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+            };
+            const blockedBy = detail.blockedBy ?? [];
+            const blocks = detail.blocks ?? [];
+            if (!blockedBy.length && !blocks.length) {
+              return <li style={{ color: 'var(--ink-dim)' }}>暂无依赖</li>;
             }
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              e.stopPropagation();
-              e.currentTarget.form?.requestSubmit();
-            }
-          }}
-          placeholder="添加评论…（@ 唤醒 agent，Enter 发送，Shift+Enter 换行）" />
-        {/* 输入 @ 时弹出提及候选（chat 式补全面板）：↑↓ 高亮、Enter/Tab 选中、Esc 关闭；点击填入并保持输入框焦点。 */}
-        {mentionOpen && (
-          <span ref={mentionRef} className="mention-hint" role="listbox" aria-label="唤醒 agent 候选">
-            {mentionHits.map((c, i) => (
-              <button key={c.value} type="button" role="option" aria-selected={i === mentionHiSafe}
-                className={`mention-opt${i === mentionHiSafe ? ' hi' : ''}`}
-                onMouseDown={e => e.preventDefault()}
-                onMouseEnter={() => setMentionHi(i)}
-                onClick={() => pickMention(c)}>
-                <strong>{c.value}</strong><span>{c.label}</span>
-              </button>
-            ))}
-          </span>
-        )}
-        <button className="btn tiny" type="submit">发送</button>
-      </form>
-
-      <details className="detail-section detail-disclosure detail-history">
-        <summary>
-          <span>活动</span>
-          <span className="detail-summary-meta">{visibleActivities.length} 条</span>
-        </summary>
-        <ul className="activities">
-          {visibleActivities.length
-            ? visibleActivities.map(a => (
-              <li key={a.id}>
-                <span className="when">{fmtWhen(a.createdAt)}</span>
-                <span className="who">{a.actor || 'anon'}</span>
-                <span className="act">{a.action}</span>
-                {a.detail && <span className="det">{a.detail}</span>}
-              </li>))
-            : <li style={{ color: 'var(--ink-dim)' }}>暂无活动</li>}
+            return (<>
+              {blockedBy.map(id => row(
+                id,
+                byId.get(id)?.status === 'done' ? '✓' : '○',
+                byId.get(id)?.status === 'done' ? 'done-mark' : 'undone-mark',
+                () => removeDep(id),
+                `by-${id}`
+              ))}
+              {blocks.map(id => row(id, '→', 'blocks-mark', null, `blk-${id}`))}
+            </>);
+          })()}
         </ul>
-      </details>
+      </section>
 
-      <details className="detail-section detail-disclosure detail-attachments">
-        <summary>
-          <span>附件</span>
-          <span className="detail-summary-meta">{detail.attachments.length} 个</span>
-        </summary>
+      <section className="drawer-section drawer-attachments" aria-labelledby="drawer-attachments-heading">
+        <h3 className="drawer-section-head" id="drawer-attachments-heading">附件
+          {detail.attachments.length > 0 && <span className="drawer-count">{detail.attachments.length}</span>}
+        </h3>
         <label className="attachment-upload">
           <span>上传文件</span>
           <input type="file" className="attach-input" title="上传附件" onChange={e => {
@@ -610,6 +562,76 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
               </li>))
             : <li style={{ color: 'var(--ink-dim)' }}>暂无附件</li>}
         </ul>
+      </section>
+
+      <section className="drawer-section drawer-history" aria-labelledby="drawer-activity-heading">
+        <h3 className="drawer-section-head" id="drawer-activity-heading">活动
+          {visibleActivities.length > 0 && <span className="drawer-count">{visibleActivities.length}</span>}
+        </h3>
+        <ul className="activities">
+          {visibleActivities.length
+            ? visibleActivities.map(a => (
+              <li key={a.id}>
+                <span className="when">{fmtWhen(a.createdAt)}</span>
+                <span className="who">{a.actor || 'anon'}</span>
+                <span className="act">{a.action}</span>
+                {a.detail && <span className="det">{a.detail}</span>}
+              </li>))
+            : <li style={{ color: 'var(--ink-dim)' }}>暂无活动</li>}
+        </ul>
+      </section>
+
+      {/* 详情：低频属性收进原生折叠区；工作树/工作树路径与审核结论/意见不再展示。 */}
+      <details className="drawer-section drawer-fold drawer-details">
+        <summary className="drawer-section-head">
+          <span>详情</span>
+          <span className="drawer-fold-meta">{detail.branch || '无分支'}</span>
+        </summary>
+        <div className="drawer-details-body">
+          <div className="detail-fact-list">
+            <label className="detail-fact-row detail-fact-row-edit">
+              <span>标签</span>
+              <input title="标签（逗号分隔）" placeholder="以逗号分隔" defaultValue={detail.labels}
+                onBlur={e => { const v = e.target.value.trim(); if (v !== detail.labels) void patch({ labels: v }); }} />
+            </label>
+            <div className="detail-fact-row"><span>任务 ID</span><code>{detail.id}</code></div>
+            <div className="detail-fact-row"><span>Git 分支</span><code>{detail.branch || '—'}</code></div>
+            <div className="detail-fact-row"><span>Session</span><code title={detail.sessionId ?? undefined}>{detail.sessionId || '未配置项目默认 Session'}</code></div>
+            <div className="detail-fact-row"><span>创建时间</span><code>{fmtWhen(detail.createdAt)}</code></div>
+            <div className="detail-fact-row"><span>更新时间</span><code>{fmtWhen(detail.updatedAt)}</code></div>
+          </div>
+          <label className="detail-fact-field">
+            <span>验收标准（Markdown）</span>
+            <textarea rows={4} defaultValue={detail.acceptanceCriteria}
+              placeholder="列出可验证的完成条件，例如：功能行为、边界情况、测试要求…"
+              onBlur={e => {
+                const value = e.currentTarget.value;
+                if (value !== detail.acceptanceCriteria) void patch({ acceptanceCriteria: value });
+              }} />
+          </label>
+          {/* T6-36: 最近提交预览 —— 绑定了分支或工作树才显示。 */}
+          {commitRef && (
+            <div className="detail-commits">
+              <div className="detail-commits-head">
+                <span>最近提交</span>
+                <span className="drawer-fold-meta">{commits === null ? '读取中' : `${commits.length} 条`}</span>
+              </div>
+              <ul className="commits">
+                {commits === null
+                  ? <li>加载中…</li>
+                  : commits.length === 0
+                    ? <li>暂无提交</li>
+                    : commits.map(c => (
+                      <li key={`${c.hash} ${c.subject}`}>
+                        <span className="hash">{c.hash}</span>
+                        <span className="subject">{c.subject}</span>
+                        <span className="when">({c.when})</span>
+                      </li>
+                    ))}
+              </ul>
+            </div>
+          )}
+        </div>
       </details>
     </aside>
     </>
