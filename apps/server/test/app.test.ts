@@ -444,6 +444,50 @@ describe('workspace directory API', () => {
     } finally { cleanup(); }
   });
 
+  it('never uses global defaults to bind a Session for an unconfigured Directory', async () => {
+    const { app, store, cleanup } = await makeApp();
+    const originalFetch = globalThis.fetch;
+    let upstreamRequests = 0;
+    globalThis.fetch = (async () => {
+      upstreamRequests++;
+      return new Response(JSON.stringify([
+        { id: 'ses_fake', title: 'Fake fallback', directory: '/workspace/a', time: { updated: 10 } }
+      ]), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+    try {
+      await app.inject({
+        method: 'PUT', url: '/api/settings', headers: json,
+        payload: { defaultOpenCodeServerUrl: 'http://127.0.0.1:4096' }
+      });
+      const directory = store.createDirectory({
+        name: 'No Server', workspacePath: '/workspace/a', serverUrl: ''
+      });
+
+      const boundCreate = await app.inject({
+        method: 'POST', url: '/api/projects', headers: { ...json, 'x-taskboard-actor': 'cli' },
+        payload: { id: 'p-bound', name: 'Must not bind', directoryId: directory.id, defaultSessionId: 'ses_fake' }
+      });
+      assert.equal(boundCreate.statusCode, 400, boundCreate.body);
+      assert.equal(upstreamRequests, 0, 'the global OpenCode URL must not be used as a Directory fallback');
+
+      const unboundCreate = await app.inject({
+        method: 'POST', url: '/api/projects', headers: { ...json, 'x-taskboard-actor': 'cli' },
+        payload: { id: 'p-unbound', name: 'Unbound', directoryId: directory.id }
+      });
+      assert.equal(unboundCreate.statusCode, 201, unboundCreate.body);
+
+      const bindPatch = await app.inject({
+        method: 'PATCH', url: '/api/projects/p-unbound', headers: json,
+        payload: { defaultSessionId: 'ses_fake' }
+      });
+      assert.equal(bindPatch.statusCode, 400, bindPatch.body);
+      assert.equal(upstreamRequests, 0, 'Session updates must use only the owning Directory route too');
+    } finally {
+      globalThis.fetch = originalFetch;
+      cleanup();
+    }
+  });
+
   it('exposes OpenCode status from the Directory menu endpoint', async () => {
     const { app, cleanup } = await makeApp();
     try {
