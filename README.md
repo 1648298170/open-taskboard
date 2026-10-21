@@ -34,7 +34,7 @@ pnpm clean        # 一键删除依赖：移除根目录及各子包的 node_mod
 pnpm start        # http://127.0.0.1:47824
 ```
 
-> **全平台兼容**：macOS / Windows / Linux 均可运行——Node ≥22.5 + pnpm 即可，零原生编译依赖（SQLite 用 Node 内置模块）。下文 shell 样例是 zsh/bash 语法，Windows 用户把 `&` 换成 `start /b`、或直接用 pm2 托管（见「评论唤醒 agent」的常驻方案对照表）。
+> **全平台兼容**：macOS / Windows / Linux 均可运行——Node ≥22.5 + pnpm 即可，零原生编译依赖（SQLite 用 Node 内置模块）。下文 shell 样例是 zsh/bash 语法，Windows 用户把 `&` 换成 `start /b`、或直接用 `taskboard setup` / pm2 托管（见「评论唤醒 agent」的常驻方案对照表）。
 
 ## Windows 一键启动（推荐本地使用）
 
@@ -182,7 +182,7 @@ opencode                                   # 终端 1：交互式 TUI
 # OpenCode Server 地址由服务端 TASKBOARD_OPENCODE_URL 统一配置；不再通过 project set 修改项目 URL
 ```
 
-**B 多实例（多终端接管不同项目，推荐）**：每终端一组 serve + attach，端口互不重复。serve 是一次性部署，交给进程管理器常驻（mac/linux 用后台方式即可零依赖上手；Windows 推荐 pm2，见下方对照表），日常每终端只有一条命令：
+**B 多实例（多终端接管不同项目，推荐）**：每终端一组 serve + attach，端口互不重复。serve 是一次性部署，交给进程管理器常驻（mac/linux 用后台方式即可零依赖上手；Windows 推荐 `taskboard setup` 或 pm2，见下方对照表），日常每终端只有一条命令：
 
 ```bash
 # ── 一次性部署（macOS / Linux，Windows 见下表）─────────────
@@ -199,9 +199,24 @@ opencode attach http://127.0.0.1:4097        # 终端 2：接管绑定了 4097 �
 
 | 平台 | 快速上手 | 常驻（开机自启 + 崩溃自愈） |
 |---|---|---|
-| macOS / Linux | 命令后加 `&`（或 systemd 用户单元） | launchd：`ai.taskboard.*` plist；systemd：`systemctl --user enable …` |
-| Windows（推荐） | `pm2 start "opencode serve --port 4096" --name serve-4096` | `pm2 save && pm2 startup`（按提示执行） |
+| macOS / Linux | 命令后加 `&`（或 systemd 用户单元） | `taskboard setup`（launchd，`com.taskboard.*` plist）；Linux 用 systemd：`systemctl --user enable …` |
+| Windows（推荐） | `pm2 start "opencode serve --port 4096" --name serve-4096` | `taskboard setup`，或 `pm2 save && pm2 startup`（按提示执行） |
 | Windows（原生） | `start /b opencode serve --port 4096` | NSSM 注册为 Windows 服务，或 `schtasks /create /sc onstart …` |
+
+**推荐：一条命令注册开机自启（macOS / Windows）**
+
+```bash
+taskboard setup                      # 注册 taskboard watch + opencode serve（登录自启、崩溃自愈）
+taskboard setup --opencode-url http://127.0.0.1:4096 --board-url http://127.0.0.1:47824
+taskboard setup --print              # 只打印将要写入的文件，不落盘
+taskboard setup --unregister         # 停止并移除自启
+taskboard stop-watch                 # 只停 watch；opencode serve 用 taskboard stop-opencode
+```
+
+- Windows 写入 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` 下的 `.cmd` + `.vbs`（隐藏窗口，watch 用 `:loop` 崩溃重启），下次登录由 Startup 拉起；macOS 写入 `~/Library/LaunchAgents/com.taskboard.*.plist`，注册时立即 `launchctl load -w`，launchd 以 `KeepAlive` 自动自愈。
+- 令牌不写入启动文件：watch 以 `--env-file-if-exists=<repo>/.env` 启动，`TASKBOARD_TOKEN` 留在 `.env`，改令牌不会泄漏到启动项，侧车下次启动自动读到新值。
+- Node、仓库与 CLI 产物路径在注册时固化为绝对路径；移动仓库或升级 Node 后重新执行一次 `taskboard setup`。Node 需 ≥ 22.9（`--env-file-if-exists` 要求）。
+- 习惯 pm2 的可以继续用上表方案；`setup` 只是把两套侧车的自启/自愈做成零额外依赖的一条命令。
 
 - attach 的端口必须对应一个**已经在跑**的 `opencode serve`；attach 只是"界面"，随时断/重连，serve 挂了 watch 自动降级下一通道
 - 唤醒时指令出现在该终端 TUI 输入框，**人工回车提交**；不用 TUI 时 watch 不带 `--tui-url`、走 headless

@@ -42,6 +42,9 @@ open-taskboard CLI
   taskboard import FILE [--project NEW_ID] [--dry-run]
   taskboard backup
   taskboard watch [--on @agent] [--exec "opencode run"]
+  taskboard setup [--opencode-url URL] [--board-url URL] [--unregister] [--print]
+  taskboard stop-watch
+  taskboard stop-opencode
   taskboard templates
 
 Env: ${URL_ENV} to point at another host (e.g. LAN teammate's board).

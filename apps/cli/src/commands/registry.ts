@@ -14,6 +14,7 @@ import { watchCommand } from './watch.js';
 import { exportCommand } from './export.js';
 import { importCommand } from './import.js';
 import { templatesCommand } from './templates.js';
+import { setupCommand, stopOpencodeCommand, stopWatchCommand } from './setup.js';
 
 /** Per-call options forwarded to `api()` (agent-session propagation). */
 export interface ApiOptions { sessionId?: string }
@@ -60,5 +61,8 @@ export const registry: Record<string, Command> = {
   watch: watchCommand,
   export: exportCommand,
   import: importCommand,
-  templates: templatesCommand
+  templates: templatesCommand,
+  setup: setupCommand,
+  'stop-watch': stopWatchCommand,
+  'stop-opencode': stopOpencodeCommand
 };

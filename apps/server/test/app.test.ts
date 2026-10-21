@@ -456,7 +456,7 @@ describe('workspace directory API', () => {
     }
   });
 
-  it('directory routing changes update every Project and clear inherited Session bindings', async () => {
+  it('directory routing changes update every Project and preserve Session bindings', async () => {
     const { app, store, cleanup } = await makeApp();
     try {
       const created = await app.inject({
@@ -488,12 +488,14 @@ describe('workspace directory API', () => {
       })).json<{ workspacePath: string; defaultSessionId: string | null }>();
       assert.equal(projectAfter.workspacePath, '/workspace/new');
       assert.equal('wakeChannel' in projectAfter, false);
-      assert.equal(projectAfter.defaultSessionId, null);
+      // Directory path is a discovery context, not the owner of a bound Session:
+      // 54ae221 keeps Project.defaultSessionId unchanged when the path changes.
+      assert.equal(projectAfter.defaultSessionId, 'ses-old');
       const issueAfter = (await app.inject({
         method: 'GET', url: `/api/issues/${issueId}`
       })).json<{ sessionId: string | null; activities: { action: string }[] }>();
-      assert.equal(issueAfter.sessionId, null);
-      assert.ok(issueAfter.activities.some(activity => activity.action === 'session-unbound'));
+      assert.equal(issueAfter.sessionId, 'ses-old');
+      assert.ok(!issueAfter.activities.some(activity => activity.action === 'session-unbound'));
     } finally { cleanup(); }
   });
 
