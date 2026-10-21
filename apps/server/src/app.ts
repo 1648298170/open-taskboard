@@ -89,6 +89,8 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   const loopback = normalizedHost === 'localhost' || normalizedHost === '::1'
     || /^127(?:\.\d{1,3}){3}$/.test(normalizedHost);
   const env = opts.env ?? process.env;
+  const openCodeUrl = env.TASKBOARD_OPENCODE_URL;
+  const publicOpenCodeUrl = env.TASKBOARD_OPENCODE_PUBLIC_URL;
   const dataDir = opts.dataDir ?? config.dataDir;
   const store = opts.store ?? new Store(dataDir);
   const browserAuth = new BrowserAuth(dataDir);
@@ -218,9 +220,9 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   app.get('/api/meta', async () => ({ statuses: STATUSES, priorities: PRIORITIES }));
 
   await app.register(eventsRoutes, { store });
-  await app.register(directoriesRoutes, { store });
-  await app.register(projectsRoutes, { store });
-  await app.register(issuesRoutes, { store, config });
+  await app.register(directoriesRoutes, { store, openCodeUrl, publicOpenCodeUrl });
+  await app.register(projectsRoutes, { store, openCodeUrl });
+  await app.register(issuesRoutes, { store, config, openCodeUrl });
   await app.register(commentsRoutes, { store, sessionUser: cookieHeader => browserAuth.sessionUser(cookieHeader) });
   await app.register(dependencyRoutes, { store });
   await app.register(searchRoutes, { store });
