@@ -419,6 +419,114 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
         );
       })()}
 
+      <h3>描述
+        {!editingDesc && <button className="btn tiny" onClick={() => setEditingDesc(true)}><Pencil size={12} /> 编辑</button>}
+      </h3>
+      {editingDesc
+        ? <textarea rows={8} autoFocus placeholder="任务描述（Markdown）" value={desc || detail.description} onChange={e => setDesc(e.target.value)}
+            onBlur={() => {
+              if (desc && desc !== detail.description) void patch({ description: desc });
+              setEditingDesc(false);
+            }} />
+        : detail.description
+          ? <Markdown src={detail.description} />
+          : <p style={{ color: 'var(--ink-dim)', fontSize: 12 }}>暂无描述</p>}
+
+      <h3>子任务
+        <button className="btn tiny" onClick={async () => {
+          const title = await promptDialog({ title: '子任务标题' });
+          if (!title) return;
+          try {
+            await api_.createIssue(detail.projectId, { parentId: detail.id, title });
+            onChanged(); await load();
+          } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+        }}><Plus size={12} /> 拆解子任务</button>
+      </h3>
+      <ul className="children">
+        {detail.children.length
+          ? detail.children.map(c => (
+            <li key={c.id} onClick={() => onOpenIssue(c.id)}>
+              <span className="st">[{STATUS_CN[c.status] ?? c.status}]</span>{c.title}
+            </li>))
+          : <li style={{ color: 'var(--ink-dim)' }}>暂无子任务</li>}
+      </ul>
+
+      <h3>依赖</h3>
+      {/* v0.4: 依赖选择器 —— 下拉选择后立即建边；「手动输入 ID…」保留原 prompt 回退。
+          候选：本项目未完成任务，排除自身与已存在的边（双向）。 */}
+      <div className="dep-picker">
+        <Select value="" placeholder="＋ 添加依赖（选择任务…）"
+          onChange={v => {
+            if (v === '__manual__') {
+              void (async () => {
+                const depId = await promptDialog({ title: '被哪个任务阻塞？', placeholder: '输入任务 ID，如 ab12cd34' });
+                if (!depId) return;
+                await addDep(depId);
+              })();
+              return;
+            }
+            void addDep(v);
+          }}
+          options={[
+            ...issues
+              .filter(i => i.id !== detail.id
+                && i.status !== 'done'
+                && !(detail.blockedBy ?? []).includes(i.id)
+                && !(detail.blocks ?? []).includes(i.id))
+              .map(c => ({ value: c.id, label: `#${c.id} ${c.title} [${STATUS_CN[c.status] ?? c.status}]` })),
+            { value: '__manual__', label: '手动输入 ID…' }
+          ]} />
+      </div>
+      <ul className="deps">
+        {(() => {
+          const byId = new Map(issues.map(i => [i.id, i]));
+          const row = (id: string, mark: string, markCls: string, onRemove: (() => Promise<void>) | null, key: string) => {
+            const dep = byId.get(id);
+            return (
+              <li key={key} className="clickable" onClick={() => onOpenIssue(id)}>
+                <span className={`mark ${markCls}`}>{mark}</span>
+                <span className="st">[{dep?.status ?? '?'}]</span>
+                <span className="dep-title">{dep ? dep.title : `#${id}`}</span>
+                <span className="dep-id">#{id}</span>
+                {onRemove && (confirmingDep === id ? (
+                  <button className="btn tiny danger" title="再次点击确认移除"
+                    onClick={e => { e.stopPropagation(); setConfirmingDep(null); void onRemove(); }}>确认移除</button>
+                ) : (
+                  <button className="icon-btn dep-remove" title="移除依赖"
+                    onClick={e => {
+                      e.stopPropagation();
+                      setConfirmingDep(id);
+                      setTimeout(() => setConfirmingDep(cur => cur === id ? null : cur), 3000);
+                    }}><X size={12} /></button>
+                ))}
+              </li>
+            );
+          };
+          const removeDep = async (dependsOnId: string): Promise<void> => {
+            try {
+              await api_.removeDependency(detail.id, dependsOnId);
+              onToast(`已解除对 #${dependsOnId} 的依赖`);
+              onChanged(); await load();
+            } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+          };
+          const blockedBy = detail.blockedBy ?? [];
+          const blocks = detail.blocks ?? [];
+          if (!blockedBy.length && !blocks.length) {
+            return <li style={{ color: 'var(--ink-dim)' }}>暂无依赖</li>;
+          }
+          return (<>
+            {blockedBy.map(id => row(
+              id,
+              byId.get(id)?.status === 'done' ? '✓' : '○',
+              byId.get(id)?.status === 'done' ? 'done-mark' : 'undone-mark',
+              () => removeDep(id),
+              `by-${id}`
+            ))}
+            {blocks.map(id => row(id, '→', 'blocks-mark', null, `blk-${id}`))}
+          </>);
+        })()}
+      </ul>
+
       <details className="detail-section detail-disclosure execution-context">
         <summary>
           <span>执行环境</span>
@@ -688,114 +796,6 @@ export function Drawer({ issueId, projectId, refreshKey, workspacePath, sessionS
           </ul>
         </details>
       )}
-
-      <h3>描述
-        {!editingDesc && <button className="btn tiny" onClick={() => setEditingDesc(true)}><Pencil size={12} /> 编辑</button>}
-      </h3>
-      {editingDesc
-        ? <textarea rows={8} autoFocus placeholder="任务描述（Markdown）" value={desc || detail.description} onChange={e => setDesc(e.target.value)}
-            onBlur={() => {
-              if (desc && desc !== detail.description) void patch({ description: desc });
-              setEditingDesc(false);
-            }} />
-        : detail.description
-          ? <Markdown src={detail.description} />
-          : <p style={{ color: 'var(--ink-dim)', fontSize: 12 }}>暂无描述</p>}
-
-      <h3>子任务
-        <button className="btn tiny" onClick={async () => {
-          const title = await promptDialog({ title: '子任务标题' });
-          if (!title) return;
-          try {
-            await api_.createIssue(detail.projectId, { parentId: detail.id, title });
-            onChanged(); await load();
-          } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-        }}><Plus size={12} /> 拆解子任务</button>
-      </h3>
-      <ul className="children">
-        {detail.children.length
-          ? detail.children.map(c => (
-            <li key={c.id} onClick={() => onOpenIssue(c.id)}>
-              <span className="st">[{STATUS_CN[c.status] ?? c.status}]</span>{c.title}
-            </li>))
-          : <li style={{ color: 'var(--ink-dim)' }}>暂无子任务</li>}
-      </ul>
-
-      <h3>依赖</h3>
-      {/* v0.4: 依赖选择器 —— 下拉选择后立即建边；「手动输入 ID…」保留原 prompt 回退。
-          候选：本项目未完成任务，排除自身与已存在的边（双向）。 */}
-      <div className="dep-picker">
-        <Select value="" placeholder="＋ 添加依赖（选择任务…）"
-          onChange={v => {
-            if (v === '__manual__') {
-              void (async () => {
-                const depId = await promptDialog({ title: '被哪个任务阻塞？', placeholder: '输入任务 ID，如 ab12cd34' });
-                if (!depId) return;
-                await addDep(depId);
-              })();
-              return;
-            }
-            void addDep(v);
-          }}
-          options={[
-            ...issues
-              .filter(i => i.id !== detail.id
-                && i.status !== 'done'
-                && !(detail.blockedBy ?? []).includes(i.id)
-                && !(detail.blocks ?? []).includes(i.id))
-              .map(c => ({ value: c.id, label: `#${c.id} ${c.title} [${STATUS_CN[c.status] ?? c.status}]` })),
-            { value: '__manual__', label: '手动输入 ID…' }
-          ]} />
-      </div>
-      <ul className="deps">
-        {(() => {
-          const byId = new Map(issues.map(i => [i.id, i]));
-          const row = (id: string, mark: string, markCls: string, onRemove: (() => Promise<void>) | null, key: string) => {
-            const dep = byId.get(id);
-            return (
-              <li key={key} className="clickable" onClick={() => onOpenIssue(id)}>
-                <span className={`mark ${markCls}`}>{mark}</span>
-                <span className="st">[{dep?.status ?? '?'}]</span>
-                <span className="dep-title">{dep ? dep.title : `#${id}`}</span>
-                <span className="dep-id">#{id}</span>
-                {onRemove && (confirmingDep === id ? (
-                  <button className="btn tiny danger" title="再次点击确认移除"
-                    onClick={e => { e.stopPropagation(); setConfirmingDep(null); void onRemove(); }}>确认移除</button>
-                ) : (
-                  <button className="icon-btn dep-remove" title="移除依赖"
-                    onClick={e => {
-                      e.stopPropagation();
-                      setConfirmingDep(id);
-                      setTimeout(() => setConfirmingDep(cur => cur === id ? null : cur), 3000);
-                    }}><X size={12} /></button>
-                ))}
-              </li>
-            );
-          };
-          const removeDep = async (dependsOnId: string): Promise<void> => {
-            try {
-              await api_.removeDependency(detail.id, dependsOnId);
-              onToast(`已解除对 #${dependsOnId} 的依赖`);
-              onChanged(); await load();
-            } catch (err) { onToast(`✗ ${(err as Error).message}`); }
-          };
-          const blockedBy = detail.blockedBy ?? [];
-          const blocks = detail.blocks ?? [];
-          if (!blockedBy.length && !blocks.length) {
-            return <li style={{ color: 'var(--ink-dim)' }}>暂无依赖</li>;
-          }
-          return (<>
-            {blockedBy.map(id => row(
-              id,
-              byId.get(id)?.status === 'done' ? '✓' : '○',
-              byId.get(id)?.status === 'done' ? 'done-mark' : 'undone-mark',
-              () => removeDep(id),
-              `by-${id}`
-            ))}
-            {blocks.map(id => row(id, '→', 'blocks-mark', null, `blk-${id}`))}
-          </>);
-        })()}
-      </ul>
 
       <h3>评论</h3>
       <ul className="comments">
