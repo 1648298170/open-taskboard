@@ -287,7 +287,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     const project = store.getProject(issue.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
     let serverUrl: string;
-    try { serverUrl = getConfiguredOpenCodeBase(); }
+    try { serverUrl = getConfiguredOpenCodeBase(openCodeUrl); }
     catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
     const directory = issue.worktreePath.trim() || project.workspacePath.trim();
     try {
@@ -321,7 +321,7 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     const project = store.getProject(issue.projectId);
     if (!project) return reply.code(404).send({ error: `project not found: ${issue.projectId}` });
     let serverUrl: string;
-    try { serverUrl = getConfiguredOpenCodeBase(); }
+    try { serverUrl = getConfiguredOpenCodeBase(openCodeUrl); }
     catch (err) { return reply.code(503).send({ error: (err as Error).message }); }
     const directory = issue.worktreePath.trim() || project.workspacePath.trim();
     const controller = new AbortController();
