@@ -82,16 +82,16 @@ export class SearchRepo {
   likeScan(needle: string): Issue[] {
     const escaped = needle.replace(/[\\%_]/g, m => `\\${m}`);
     return this.db.prepare(
-      `SELECT id, project_id AS projectId, parent_id AS parentId, title, description,
-         status, priority, labels, branch, worktree, archived_at AS archivedAt,
-         claimed_by AS claimedBy, lease_expires_at AS leaseExpiresAt, session_id AS sessionId, assignee, version,
-         start_date AS startDate, due_date AS dueDate, created_at AS createdAt, updated_at AS updatedAt
-       FROM issues
-       WHERE archived_at IS NULL AND (
-           title LIKE ? ESCAPE '\\'
-        OR description LIKE ? ESCAPE '\\'
-        OR id IN (SELECT issue_id FROM comments WHERE body LIKE ? ESCAPE '\\'))
-       ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, created_at`
+      `SELECT i.id, i.project_id AS projectId, i.parent_id AS parentId, i.title, i.description,
+         i.status, i.priority, i.labels, i.branch, i.worktree, i.worktree_path AS worktreePath,
+         i.archived_at AS archivedAt, i.claimed_by AS claimedBy, i.lease_expires_at AS leaseExpiresAt,
+         p.default_session_id AS sessionId, i.assignee, i.version,
+         i.start_date AS startDate, i.due_date AS dueDate, i.created_at AS createdAt, i.updated_at AS updatedAt
+       FROM issues i LEFT JOIN projects p ON p.id = i.project_id
+       WHERE i.archived_at IS NULL AND (
+           i.title LIKE ? ESCAPE '\\'
+        OR i.description LIKE ? ESCAPE '\\'
+        OR i.id IN (SELECT issue_id FROM comments WHERE body LIKE ? ESCAPE '\\'))
+       ORDER BY CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, i.created_at`
     ).all(`%${escaped}%`, `%${escaped}%`, `%${escaped}%`) as unknown as Issue[];
-  }
-}
+  }}
