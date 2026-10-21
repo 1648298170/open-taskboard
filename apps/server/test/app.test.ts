@@ -338,6 +338,48 @@ describe('workspace directory API', () => {
     }
   });
 
+  it('optionally synchronizes existing project routes and clears Session bindings', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      const created = await app.inject({
+        method: 'POST', url: '/api/directories', headers: json,
+        payload: { name: 'Sync workspace', workspacePath: '/workspace/old', serverUrl: 'http://127.0.0.1:4096' }
+      });
+      const directoryId = created.json<{ id: string }>().id;
+      const projectRes = await app.inject({
+        method: 'POST', url: '/api/projects', headers: json,
+        payload: { name: 'Project A', directoryId, workspacePath: '/workspace/project-a', wakeChannel: 'http://127.0.0.1:4096' }
+      });
+      const projectId = projectRes.json<{ id: string }>().id;
+      const issueRes = await app.inject({
+        method: 'POST', url: `/api/projects/${projectId}/issues`, headers: json,
+        payload: { title: 'Has a bound session', sessionId: 'ses-old' }
+      });
+      assert.equal(issueRes.statusCode, 201);
+      const issueId = issueRes.json<{ id: string }>().id;
+
+      const changed = await app.inject({
+        method: 'PATCH', url: `/api/directories/${directoryId}`, headers: json,
+        payload: {
+          workspacePath: '/workspace/new', serverUrl: 'http://127.0.0.1:4097',
+          syncProjects: true
+        }
+      });
+      assert.equal(changed.statusCode, 200, changed.body);
+      const projectAfter = (await app.inject({
+        method: 'GET', url: `/api/projects/${projectId}`
+      })).json<{ workspacePath: string; wakeChannel: string; defaultSessionId: string | null }>();
+      assert.equal(projectAfter.workspacePath, '/workspace/new');
+      assert.equal(projectAfter.wakeChannel, 'http://127.0.0.1:4097');
+      assert.equal(projectAfter.defaultSessionId, null);
+      const issueAfter = (await app.inject({
+        method: 'GET', url: `/api/issues/${issueId}`
+      })).json<{ sessionId: string | null; activities: { action: string }[] }>();
+      assert.equal(issueAfter.sessionId, null);
+      assert.ok(issueAfter.activities.some(activity => activity.action === 'session-unbound'));
+    } finally { cleanup(); }
+  });
+
   it('keeps project routing independent from directory grouping and cascades deletion on request', async () => {
     const { app, cleanup } = await makeApp();
     const created = await app.inject({
