@@ -28,8 +28,7 @@ export const FALLBACK_OPENCODE_URL = 'http://127.0.0.1:4096';
 /**
  * Resolve the OpenCode origin for flows that have no explicit URL (web
  * create-project / stateless session discovery). Precedence:
- * explicit url → TASKBOARD_OPENCODE_URL → newest project wakeChannel →
- * FALLBACK_OPENCODE_URL. Blank candidates are skipped; an invalid candidate
+ * explicit url → TASKBOARD_OPENCODE_URL → FALLBACK_OPENCODE_URL. Blank candidates are skipped; an invalid candidate
  * throws (callers map that to 400).
  */
 export function resolveOpenCodeBase(explicitUrl: string | undefined, projectChannels: string[]): string {
