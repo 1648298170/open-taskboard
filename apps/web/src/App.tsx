@@ -39,7 +39,6 @@ export default function App() {
   const [directoryCreateOpen, setDirectoryCreateOpen] = useState(false);
   const [directoryName, setDirectoryName] = useState('');
   const [directoryWorkspacePath, setDirectoryWorkspacePath] = useState('');
-  const [directoryServerUrl, setDirectoryServerUrl] = useState('');
   const [directoryMenuOpen, setDirectoryMenuOpen] = useState<string | null>(null);
   const [projectMenu, setProjectMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [projectSessionProject, setProjectSessionProject] = useState<Project | null>(null);
@@ -47,17 +46,12 @@ export default function App() {
   const [directoryStatusLoading, setDirectoryStatusLoading] = useState(false);
   const [directoryStatusError, setDirectoryStatusError] = useState<string | null>(null);
   const [defaultWorkspacePath, setDefaultWorkspacePath] = useState('');
-  const [defaultOpenCodeServerUrl, setDefaultOpenCodeServerUrl] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPathInput, setSettingsPathInput] = useState('');
-  const [settingsServerInput, setSettingsServerInput] = useState('');
   const [directoryWorkspaceEditId, setDirectoryWorkspaceEditId] = useState<string | null>(null);
   const [directoryWorkspaceEditPath, setDirectoryWorkspaceEditPath] = useState('');
-  const [directoryServerEditId, setDirectoryServerEditId] = useState<string | null>(null);
-  const [directoryServerEditUrl, setDirectoryServerEditUrl] = useState('');
   const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
   const [directoryPickerTarget, setDirectoryPickerTarget] = useState<DirectoryPickerTarget>('settings');
-  const [directoryPickerServerUrl, setDirectoryPickerServerUrl] = useState('');
   const [directoryPickerInitialPath, setDirectoryPickerInitialPath] = useState('');
   const [projectDirectoryId, setProjectDirectoryId] = useState('');
   const [projInheritLocked, setProjInheritLocked] = useState(false);
@@ -111,7 +105,6 @@ export default function App() {
   const [projId, setProjId] = useState('');
   const [projLabels, setProjLabels] = useState('');
   const [projWorkspacePath, setProjWorkspacePath] = useState('');
-  const [projServerUrl, setProjServerUrl] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
   // v0.4: 旧标签页检测 —— SPA 部署后旧标签页继续跑旧 bundle（多次坑用户的根源）。
   // 周期比对服务器最新 bundle 与当前运行版本，不一致则提示刷新。
@@ -686,13 +679,7 @@ export default function App() {
                           setDirectoryWorkspaceEditPath(directory.workspacePath);
                           
                         }}><Folder size={13} /> 修改工作目录</button>
-                        <button role="menuitem" onClick={() => {
-                          setDirectoryMenuOpen(null);
-                          setDirectoryServerEditId(directory.id);
-                          setDirectoryServerEditUrl(directory.serverUrl);
-                          
-                        }}><Link size={13} /> 修改 OpenCode Server URL</button>
-                        <button role="menuitem" onClick={() => {
+<button role="menuitem" onClick={() => {
                           setDirectoryMenuOpen(null);
                           setDirectoryStatusOpenId(directory.id);
                           setDirectoryOpenCodeStatus(null);
