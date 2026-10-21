@@ -31,6 +31,8 @@ export const directoryPatchSchema = z.object({
   name: z.string().min(1).optional(),
   workspacePath: z.string().optional(),
   serverUrl: z.string().trim().max(500).optional(),
+  // Explicit opt-in: also update existing projects assigned to this directory.
+  syncProjects: z.boolean().optional(),
 }).strict();
 
 export const createProjectSchema = z
