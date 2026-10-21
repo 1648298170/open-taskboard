@@ -39,7 +39,7 @@ const isoDay = (d: Date): string =>
 // build the activity detail ("status,title", "startDate", ...).
 const PATCH_KEYS: (keyof IssuePatch)[] = [
   'title', 'description', 'status', 'priority', 'labels', 'branch', 'worktree', 'worktreePath',
-  'sessionId', 'assignee', 'parentId', 'startDate', 'dueDate', 'acceptanceCriteria', 'reviewStatus', 'reviewNotes'
+  'assignee', 'parentId', 'startDate', 'dueDate', 'acceptanceCriteria', 'reviewStatus', 'reviewNotes'
 ];
 
 /**
@@ -293,7 +293,7 @@ export class Store {
     sessionId?: string | null;
     startDate?: string | null; dueDate?: string | null;
     acceptanceCriteria?: string; reviewStatus?: 'pending' | 'approved' | 'changes_requested'; reviewNotes?: string;
-  }, actor = '', agentSessionId: string | null = null): Issue {
+  }, actor = '', _legacyAgentSessionId: string | null = null): Issue {
     const parentId = input.parentId ?? null;
     const project = this.projects.get(input.projectId);
     if (!project) throw new NotFoundError(`project not found: ${input.projectId}`);

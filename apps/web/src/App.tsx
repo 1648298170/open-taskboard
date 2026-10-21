@@ -675,7 +675,6 @@ export default function App() {
                       <span className="side-directory-name">{directoryLabel(directory.name)}</span>
                     </button>
                     <button className="icon-btn" title="在此目录下新建项目" onClick={() => {
-                      const existing = children[0];
                       setProjName(''); setProjId(''); setProjLabels('');
                       setProjWorkspacePath(directory.workspacePath || '');
                       setProjServerUrl(directory.serverUrl || defaultOpenCodeServerUrl);
@@ -968,7 +967,7 @@ export default function App() {
               </div>
             </label>
             <label>OpenCode Server URL<input value={directoryServerUrl} placeholder="例如：http://127.0.0.1:4096" onChange={e => setDirectoryServerUrl(e.target.value)} /></label>
-            <p className="dialog-note">新建项目时会自动继承此工作目录与 OpenCode Server URL，且项目内不可修改；Session 在项目中绑定。全局设置可提供默认值。</p>
+            <p className="dialog-note">工作目录与 OpenCode Server URL 由目录统一维护，目录下所有项目都会继承；项目默认 Session 由项目维护，任务自动继承。全局设置只作为新建目录时的默认值。</p>
             <menu><button type="button" className="btn" onClick={() => setDirectoryCreateOpen(false)}>取消</button><button type="submit" className="btn primary">创建目录</button></menu>
           </form>
         </dialog>
