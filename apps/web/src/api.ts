@@ -64,7 +64,6 @@ export interface DirectoryOpenCodeProjectStatus {
 
 export interface GlobalOpenCodeStatus {
   checkedAt: string;
-  serverUrl: string;
   serverStatus: 'connected' | 'unavailable';
   error?: string;
   projects: (DirectoryOpenCodeProjectStatus & { directoryName: string; workspacePath: string })[];
@@ -78,16 +77,6 @@ export interface GlobalOpenCodeStatus {
   projects: (DirectoryOpenCodeProjectStatus & { directoryName: string; workspacePath: string })[];
 }
 
-export interface DirectoryOpenCodeStatus {
-  directoryId: string;
-  name: string;
-  workspacePath: string;
-  serverUrl: string;
-  checkedAt: string;
-  serverStatus: 'connected' | 'unavailable' | 'unconfigured';
-  error?: string;
-  projects: DirectoryOpenCodeProjectStatus[];
-}
 
 export interface WorkspaceDirectoryListing {
   path: string;
@@ -158,8 +147,6 @@ export const api_ = {
   },
   openCodeStatus: () => api<GlobalOpenCodeStatus>('GET', '/api/opencode/status'),
   listDirectories: () => api<WorkspaceDirectory[]>('GET', '/api/directories'),
-  directoryOpenCodeStatus: (id: string) =>
-    api<DirectoryOpenCodeStatus>('GET', `/api/directories/${encodeURIComponent(id)}/opencode-status`),
   createDirectory: (p: { id?: string; name: string; workspacePath?: string }) =>
     api<WorkspaceDirectory>('POST', '/api/directories', p),
   updateDirectory: (id: string, p: { name?: string; workspacePath?: string }) =>
@@ -167,11 +154,11 @@ export const api_ = {
   deleteDirectory: (id: string, options?: { cascade?: boolean }) =>
     api<{ ok: true }>('DELETE', `/api/directories/${encodeURIComponent(id)}${options?.cascade ? '?cascade=1' : ''}`),
   openCodeSessionsForDirectory: (id: string) =>
-    api<{ sessions: OpenCodeSessionOption[]; directoryId: string; directoryPath: string; serverUrl: string }>(
+    api<{ sessions: OpenCodeSessionOption[]; directoryId: string; directoryPath: string }>(
       'GET', `/api/directories/${encodeURIComponent(id)}/opencode-sessions`
     ),
   createOpenCodeSession: (id: string, title: string) =>
-    api<{ session: OpenCodeSessionOption; directoryId: string; serverUrl: string }>(
+    api<{ session: OpenCodeSessionOption; directoryId: string }>(
       'POST', `/api/directories/${encodeURIComponent(id)}/opencode-sessions`, { title }
     ),
   listProjects: () => api<Project[]>('GET', '/api/projects'),
@@ -224,7 +211,7 @@ export const api_ = {
     api<{ ok: true }>('DELETE', `/api/issues/${id}/dependencies/${dependsOnId}`),
   progress: (projectId: string) => api<Progress>('GET', `/api/projects/${projectId}/progress`),
   stats: (projectId: string) => api<Stats>('GET', `/api/projects/${projectId}/stats?weeks=8`),
-  openCodeSessions: (projectId: string) => api<{ sessions: OpenCodeSessionOption[]; workspacePath: string; serverUrl: string }>('GET', `/api/projects/${encodeURIComponent(projectId)}/opencode-sessions`),
+  openCodeSessions: (projectId: string) => api<{ sessions: OpenCodeSessionOption[]; workspacePath: string }>('GET', `/api/projects/${encodeURIComponent(projectId)}/opencode-sessions`),
   // 新建项目对话框用：无项目 id 的无状态查询，按服务地址 + 可选工作区过滤会话。
   // url 省略时由服务端解析默认地址（环境变量 → 项目 wakeChannel → 127.0.0.1:4096）。
   openCodeSessionsFor: (url?: string, workspacePath?: string) => {
@@ -232,7 +219,7 @@ export const api_ = {
     if (url) query.set('url', url);
     if (workspacePath) query.set('workspacePath', workspacePath);
     const qs = query.toString();
-    return api<{ sessions: OpenCodeSessionOption[]; workspacePath: string; serverUrl: string }>('GET', `/api/opencode/sessions${qs ? `?${qs}` : ''}`);
+    return api<{ sessions: OpenCodeSessionOption[]; workspacePath: string }>('GET', `/api/opencode/sessions${qs ? `?${qs}` : ''}`);
   },
   createTaskWorktree: (id: string) => api<{ issue: Issue; branch: string; worktree: string; worktreePath: string; alreadyBound: boolean }>('POST', `/api/issues/${encodeURIComponent(id)}/create-worktree`, {}),
   releaseGitBinding: (id: string) => api<Issue>('DELETE', `/api/issues/${encodeURIComponent(id)}/git-binding`),
