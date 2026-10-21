@@ -15,7 +15,6 @@ export interface DirectoryCreateInput {
 export interface DirectoryPatchInput {
   name?: string;
   workspacePath?: string;
-  serverUrl?: string;
 }
 
 export class DirectoryRepo {
