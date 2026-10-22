@@ -152,6 +152,40 @@ export interface Comment {
   priorityAt: string | null;
 }
 
+export interface WakeQueueItem {
+  commentId: string;
+  issueId: string;
+  issueTitle: string;
+  projectId: string;
+  projectName: string;
+  bodyPreview: string;
+  status: string;
+  queuePriority: number;
+  priorityAt: string | null;
+  queuedAt: string | null;
+  notBefore: string | null;
+  attempts: number;
+  lastError: string;
+  queueState: 'ready' | 'delayed' | 'processing' | 'manual';
+  waitReason: string | null;
+  sessionProtected: boolean;
+}
+
+export interface WakeQueueCounts {
+  pending: number;
+  readyByTime: number;
+  delayed: number;
+  processing: number;
+  manual: number;
+}
+
+export interface WakeQueueSnapshot {
+  generatedAt: string;
+  queueRevision: number;
+  counts: WakeQueueCounts;
+  items: WakeQueueItem[];
+}
+
 /**
  * One pending wake comment joined with its issue. This is the wake engine's
  * startup sweep payload: the engine filters the tiny pending set in JS with

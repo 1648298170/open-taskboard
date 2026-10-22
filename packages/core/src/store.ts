@@ -931,6 +931,13 @@ export class Store {
     return this.wakeLeases.findByComment(commentId, dispatchId);
   }
 
+  /** 队列快照（v10 Q3）：counts + items 同一读。 */
+  wakeQueueSnapshot(nowIso: string, opts?: { projectId?: string; prefix?: string; limit?: number }) {
+    return this.comments.queueSnapshot(nowIso, {
+      projectId: opts?.projectId, prefix: opts?.prefix ?? '@agent', limit: opts?.limit ?? 50,
+    });
+  }
+
   /** 队列优先级 CAS 更新（v10 Q1）。 */
   setWakePriority(commentId: string, expected: number, target: number): boolean {
     const changed = this.comments.setWakePriority(commentId, expected, target, now());

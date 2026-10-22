@@ -1320,6 +1320,54 @@ export const openApiSpec: OpenApiDocument = {
         }
       }
     },
+    '/api/wake-queue': {
+      summary: 'Wake queue center snapshot',
+      get: {
+        operationId: 'getWakeQueue',
+        summary: 'Get wake queue center snapshot (counts + items in one read)',
+        tags: ['meta'],
+        parameters: [
+          { name: 'projectId', in: 'query', schema: { type: 'string' }, description: 'Filter panel list by project (does not change global badge)' },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200, default: 50 } },
+        ],
+        responses: {
+          200: {
+            description: 'Wake queue snapshot (counts + items from same read)',
+            content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } },
+          },
+          401: { '$ref': '#/components/responses/Unauthorized' },
+        },
+      },
+    },
+    '/api/wake-queue/{commentId}/priority': {
+      summary: 'Update wake queue item priority (CAS)',
+      patch: {
+        operationId: 'setWakePriority',
+        summary: 'Set queue priority for a wake comment (CAS with expectedPriority)',
+        tags: ['meta'],
+        parameters: [
+          { name: 'commentId', in: 'path', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: {
+            type: 'object',
+            properties: {
+              priority: { type: 'integer', enum: [0, 1] },
+              expectedPriority: { type: 'integer', enum: [0, 1] },
+            },
+            required: ['priority', 'expectedPriority'],
+            additionalProperties: false,
+          } } },
+        },
+        responses: {
+          200: { description: 'Priority updated (or idempotent no-op)' },
+          404: { '$ref': '#/components/responses/NotFound' },
+          409: { description: 'Priority was changed by another request or comment is not pending' },
+          401: { '$ref': '#/components/responses/Unauthorized' },
+        },
+      },
+    },
     '/api/search': {
       summary: 'Full-text search',
       get: {

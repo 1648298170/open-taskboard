@@ -18,6 +18,7 @@ import dependencyRoutes from './routes/dependencies.js';
 import searchRoutes from './routes/search.js';
 import attachmentRoutes from './routes/attachments.js';
 import backupRoutes from './routes/backup.js';
+import wakeQueueRoutes from './routes/wake-queue.js';
 import openapiRoutes from './routes/openapi.js';
 import type { WakeEmbeddedOverrides } from './wake-embedded.js';
 
@@ -234,6 +235,7 @@ export async function buildApp(opts: ServerOptions = {}): Promise<{ app: Fastify
   await app.register(searchRoutes, { store });
   await app.register(attachmentRoutes, { store });
   await app.register(backupRoutes, { store, backupDir: join(dataDir, 'backups') });
+  await app.register(wakeQueueRoutes, { store });
   await app.register(openapiRoutes);
 
   return { app, store };

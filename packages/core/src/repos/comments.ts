@@ -328,6 +328,78 @@ export class CommentRepo {
     return result.changes > 0;
   }
 
+  /**
+   * 队列快照（v10 Q3）：counts + items 在同一只读查询中生成。
+   * 分桶互斥：terminal_at 非空 → manual（优先判）；status=processing → processing；
+   * 剩余 pending 按 not_before 分为 readyByTime / delayed。
+   */
+  queueSnapshot(nowIso: string, opts: { projectId?: string; prefix: string; limit?: number }): {
+    revision: number;
+    counts: { pending: number; readyByTime: number; delayed: number; processing: number; manual: number };
+    items: {
+      commentId: string; issueId: string; issueTitle: string; projectId: string;
+      bodyPreview: string; status: string; queuePriority: number; priorityAt: string | null;
+      queuedAt: string | null; notBefore: string | null; attempts: number; lastError: string;
+      queueState: 'ready' | 'delayed' | 'processing' | 'manual'; sessionProtected: boolean;
+    }[];
+  } {
+    const projectFilter = opts.projectId ? 'AND i.project_id = @projectId' : '';
+    const base = `
+      FROM comments c JOIN issues i ON i.id = c.issue_id
+      WHERE TRIM(c.body) LIKE @prefix || '%'
+        AND i.archived_at IS NULL
+        ${projectFilter}`;
+    const count = (where: string): number =>
+      (this.db.prepare(`SELECT COUNT(*) AS n ${base} ${where}`).get({ prefix: opts.prefix, projectId: opts.projectId ?? '' }) as { n: number }).n;
+    const pendingCount = count("AND c.status = 'pending' AND c.terminal_at IS NULL");
+    const processingCount = count("AND c.status = 'processing'");
+    const manualCount = count("AND c.terminal_at IS NOT NULL");
+    const readyCount = (this.db.prepare(
+      `SELECT COUNT(*) AS n ${base} AND c.status = 'pending' AND c.terminal_at IS NULL AND (c.not_before IS NULL OR c.not_before <= @now)`
+    ).get({ prefix: opts.prefix, projectId: opts.projectId ?? '', now: nowIso }) as { n: number }).n;
+    const delayed = pendingCount - readyCount;
+    const limit = opts.limit ?? 50;
+    const items = this.db.prepare(
+      `SELECT c.id AS commentId, c.issue_id AS issueId, i.title AS issueTitle,
+              i.project_id AS projectId, c.body, c.status,
+              c.queue_priority AS queuePriority, c.priority_at AS priorityAt,
+              c.queued_at AS queuedAt, c.not_before AS notBefore,
+              c.attempts, c.last_error AS lastError, c.terminal_at AS terminalAt,
+              p.name AS projectName
+       FROM comments c JOIN issues i ON i.id = c.issue_id JOIN projects p ON p.id = i.project_id
+       WHERE TRIM(c.body) LIKE @prefix || '%' AND i.archived_at IS NULL ${projectFilter}
+         AND (c.status IN ('pending', 'processing') OR c.terminal_at IS NOT NULL)
+       ORDER BY c.queue_priority DESC,
+                CASE WHEN c.queue_priority = 1 THEN c.priority_at END ASC,
+                COALESCE(c.queued_at, c.created_at) ASC, c.rowid
+       LIMIT @limit`
+    ).all({ prefix: opts.prefix, projectId: opts.projectId ?? '', limit }) as any[];
+    return {
+      revision: this.getQueueRevision(),
+      counts: {
+        pending: pendingCount,
+        readyByTime: readyCount,
+        delayed,
+        processing: processingCount,
+        manual: manualCount,
+      },
+      items: items.map(r => ({
+        commentId: r.commentId, issueId: r.issueId, issueTitle: r.issueTitle,
+        projectId: r.projectId, projectName: r.projectName,
+        bodyPreview: r.body.slice(0, 120), status: r.status,
+        queuePriority: r.queuePriority, priorityAt: r.priorityAt,
+        queuedAt: r.queuedAt, notBefore: r.notBefore,
+        attempts: r.attempts, lastError: r.lastError,
+        queueState: r.terminalAt !== null ? 'manual' as const
+          : r.status === 'processing' ? 'processing' as const
+          : (r.notBefore !== null && r.notBefore > nowIso) ? 'delayed' as const
+          : 'ready' as const,
+        waitReason: null,
+        sessionProtected: false,
+      })),
+    };
+  }
+
   /** 队列修订号递增（须与导致队列变更的写操作同事务调用）。 */
   bumpQueueRevision(): number {
     this.db.prepare(
