@@ -159,9 +159,18 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
   const allComments = detail ? detail.comments : [];
   const COMMENT_PREVIEW = 20;
   const ACTIVITY_PREVIEW = 8;
+  const COMMENT_BODY_LINES = 8;
   const [showAllComments, setShowAllComments] = useState(false);
   const [showAllActivities, setShowAllActivities] = useState(false);
-  useEffect(() => { setShowAllComments(false); setShowAllActivities(false); }, [issueId]);
+  const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
+  const toggleCommentExpanded = (id: string): void => setExpandedComments(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  useEffect(() => {
+    setShowAllComments(false); setShowAllActivities(false); setExpandedComments(new Set());
+  }, [issueId]);
   const hiddenCommentCount = showAllComments ? 0 : Math.max(0, allComments.length - COMMENT_PREVIEW);
   const visibleComments = showAllComments ? allComments : allComments.slice(hiddenCommentCount);
   const hiddenActivityCount = showAllActivities ? 0 : Math.max(0, visibleActivities.length - ACTIVITY_PREVIEW);
@@ -414,6 +423,11 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
             显示更早的 {hiddenCommentCount} 条评论
           </button>
         )}
+        {showAllComments && allComments.length > COMMENT_PREVIEW && (
+          <button className="btn tiny drawer-more" onClick={() => setShowAllComments(false)}>
+            收起，仅显示最新 {COMMENT_PREVIEW} 条
+          </button>
+        )}
         <ul className="comments">
           {allComments.length
             ? visibleComments.map(c => (
@@ -513,9 +527,23 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                       <button type="button" className="btn tiny ghost" onClick={() => setEditingComment(null)}>取消</button>
                     </div>
                   </form>
-                ) : (
-                <Markdown src={c.body} />
-                )}
+                ) : (() => {
+                  // 折叠按源码换行数判定：Markdown 渲染后的视觉行数只会更多，
+                  // 因此 8 行阈值是保守下界，长段落仍会被 line-clamp 兜底。
+                  const bodyLines = c.body.split('\n').length;
+                  if (bodyLines <= COMMENT_BODY_LINES) return <Markdown src={c.body} />;
+                  const clamped = !expandedComments.has(c.id);
+                  return (
+                    <>
+                      <div className={clamped ? 'comment-body-clamped' : undefined}>
+                        <Markdown src={c.body} />
+                      </div>
+                      <button className="btn tiny drawer-more-inline" onClick={() => toggleCommentExpanded(c.id)}>
+                        {clamped ? '展开全文' : '收起'}
+                      </button>
+                    </>
+                  );
+                })()}
               </li>))
             : <li style={{ color: 'var(--ink-dim)' }}>暂无评论</li>}
         </ul>

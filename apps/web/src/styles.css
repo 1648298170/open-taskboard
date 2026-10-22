@@ -2543,3 +2543,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 /* 抽屉长列表截断的展开按钮（评论「显示更早」/活动「显示全部」） */
 .drawer-more { display: block; width: 100%; margin: 6px 0; text-align: center; color: var(--ink-dim); }
 .drawer-more:hover { color: var(--ink); }
+
+/* 单条评论超 8 行折叠：line-clamp 兜住 Markdown 渲染后的视觉行数 */
+.comment-body-clamped { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
+.drawer-more-inline { margin: 2px 0 0; color: var(--ink-dim); }
+.drawer-more-inline:hover { color: var(--ink); }
