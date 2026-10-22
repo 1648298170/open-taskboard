@@ -5,6 +5,7 @@ import { Markdown } from '../markdown';
 import { confirmDialog, promptDialog } from './dialogs';
 import { fmtHMLocal, fmtWhenLocal } from '../logic/time';
 import { applyMentionAt, detectMentionAt, mentionCandidatesFor, MentionCandidate, nextHi } from '../logic/mention';
+import { shouldSkipRefresh } from '../logic/mutationDedupe';
 import { Copy, Pencil, Plus, Sparkles, UserRound, X } from 'lucide-react';
 import { WAKE_PREFIX } from '@taskboard/core/types';
 
@@ -110,7 +111,13 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
     }
   };
 
+  // 本地变更后的 load() 与服务端 issue.updated 的 SSE 回声会在毫秒内各取一次
+  // /api/issues/{id}；同任务 300ms 窗口内只保留第一次（本地主动刷新）。
+  const lastLoadRef = useRef<{ at: number; issueId: string }>({ at: 0, issueId: '' });
   const load = async (): Promise<void> => {
+    const now = Date.now();
+    if (lastLoadRef.current.issueId === issueId && shouldSkipRefresh(lastLoadRef.current.at, now)) return;
+    lastLoadRef.current = { at: now, issueId };
     try {
       setDetail(await api_.showIssue(issueId));
       setLoadError(null);

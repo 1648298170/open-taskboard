@@ -3,6 +3,7 @@ import { api_, connectSSE, ApiError, DependencyEdge, GlobalOpenCodeStatus, Progr
 import { Board, buildBlockedByMap, flattenCardOrder, GroupBy, todayStr } from './components/Board';
 import { issueMatchesFilters } from './logic/filters';
 import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
+import { shouldSkipRefresh } from './logic/mutationDedupe';
 import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
 import { Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings, LogOut, RefreshCw } from 'lucide-react';
@@ -120,6 +121,8 @@ export default function App() {
   const statsOpenRef = useRef(statsOpen);
   // SSE 路由要判断「是否正在看这条任务」，用 ref 镜像 openId 避免重连闭包过期。
   const openIdRef = useRef<string | null>(openId);
+  // 短窗口去重基准：本地变更 refresh 与随后的 SSE 重复刷新合并为一次。
+  const lastRefreshRef = useRef<{ at: number; pid: string }>({ at: 0, pid: '' });
 
   const isUnauthorized = (err: unknown): boolean => err instanceof ApiError && err.status === 401;
 
@@ -242,6 +245,11 @@ export default function App() {
 
   const refresh = useCallback(async (pid = projectId) => {
     if (!pid) return;
+    // 本地变更的主动 refresh 与服务端 issue.updated 的 SSE 回声会在毫秒内重复；
+    // 同项目 300ms 窗口内只放行第一次（leading edge），其余路径不受影响。
+    const now = Date.now();
+    if (lastRefreshRef.current.pid === pid && shouldSkipRefresh(lastRefreshRef.current.at, now)) return;
+    lastRefreshRef.current = { at: now, pid };
     try {
       // 聚合接口：issues+progress+dependencies 一次返回（同快照，3 请求 → 1）。
       const { issues: list, progress: prog, dependencies: edges } = await api_.board(pid);
