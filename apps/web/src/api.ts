@@ -293,6 +293,10 @@ export function connectSSE(onChange: (event: SseChangeEvent) => void): () => voi
   let es: EventSource | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let delay = 2000;
+  // 首次连接不触发 hello 全量刷新：调用方挂载时已自行加载首屏数据，
+  // 再刷一次等于把 projects/directories/issues/progress/deps 全部翻倍。
+  // 只有「重连」的 hello 才需要兜底（断线期间错过的 change 事件）。
+  let connectedBefore = false;
 
   const connect = (): void => {
     if (closed) return;
@@ -300,9 +304,10 @@ export function connectSSE(onChange: (event: SseChangeEvent) => void): () => voi
     es = new EventSource('/api/events');
     es.addEventListener('hello', () => {
       delay = 2000;
-      // hello（首次连接与每次重连）都全量刷新：断线期间的变更只会体现在
-      // 新数据里且 change 事件已错过，靠这次兜底拉取。首次连接无害——数据
-      // 本就要加载。
+      if (!connectedBefore) {
+        connectedBefore = true;
+        return;
+      }
       onChange({ type: 'hello', issueId: null });
     });
     // 每个 change 事件对应一次 store 变更；带上类型交给上层按需路由 + 合并。

@@ -358,18 +358,24 @@ export default function App() {
   }, []);
 
   useEffect(() => { if (projectId) { localStorage.setItem('project', projectId); void refresh(projectId); } }, [projectId, refresh]);
+  // SSE 订阅只建立一次：回调通过 ref 读取最新的 loadProjects/refresh，
+  // 避免 projectId 变化导致 refresh 身份变化 → 重连 → hello 再全量刷新。
+  const loadProjectsRef = useRef(loadProjects);
+  const refreshRef = useRef(refresh);
+  useEffect(() => { loadProjectsRef.current = loadProjects; }, [loadProjects]);
+  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
   useEffect(() => {
     if (authScreen !== 'board') return;
     // 一波事件（拖卡 / agent 活动 / 唤醒状态机）在 250ms 内折叠成最多一次
     // loadProjects + 一次 refresh；只有命中当前抽屉任务或重连 hello 才刷详情。
     const batcher = createSseBatcher({
-      onProjects: () => void loadProjects(),
-      onIssues: () => void refresh(),
+      onProjects: () => void loadProjectsRef.current(),
+      onIssues: () => void refreshRef.current(),
       onDetail: () => setDetailRefreshKey(key => key + 1)
     });
     const disconnect = connectSSE(event => batcher.push(event, openIdRef.current));
     return () => { disconnect(); batcher.dispose(); };
-  }, [authScreen, loadProjects, refresh]);
+  }, [authScreen]);
   // T6-31: 面板打开（或切换项目）时立即拉取一次；开着期间的更新走 refresh 内的重取。
   useEffect(() => {
     if (!statsOpen || !projectId) return;

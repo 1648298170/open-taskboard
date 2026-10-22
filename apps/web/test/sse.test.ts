@@ -62,23 +62,41 @@ describe('parseSseChange', () => {
 });
 
 describe('connectSSE', () => {
-  it('emits hello plus parsed change events and closes on dispose', () => {
+  it('parses change events and skips the first hello (caller already loaded the page)', () => {
     installFakeEventSource();
     const events: SseChangeEvent[] = [];
     const dispose = connectSSE(event => events.push(event));
     const es = FakeEventSource.instances[0]!;
     assert.equal(es.url, '/api/events');
     assert.equal(events.length, 0);
+    // 首连 hello 不再触发全量刷新（否则首屏接口全部翻倍）。
     es.emit('hello', '{"revision":1}');
+    assert.deepEqual(events, []);
     es.emit('change', '{"type":"issue.updated","payload":{"id":"i1"},"revision":2,"at":""}');
     es.emit('change', '{"type":"comment.created","payload":{"id":"c1","issueId":"i1"},"revision":3,"at":""}');
     assert.deepEqual(events, [
-      { type: 'hello', issueId: null },
       { type: 'issue.updated', issueId: 'i1' },
       { type: 'comment.created', issueId: 'i1' }
     ]);
     dispose();
     assert.equal(es.closed, true);
+  });
+
+  it('triggers a full refresh on a reconnect hello', async () => {
+    installFakeEventSource();
+    const events: SseChangeEvent[] = [];
+    const dispose = connectSSE(event => events.push(event));
+    const first = FakeEventSource.instances[0]!;
+    first.emit('hello', '{"revision":1}');
+    assert.deepEqual(events, []);
+    // 模拟断线：触发 onerror，等退避(2000ms)后的新连接再发 hello。
+    (first as unknown as { onerror?: () => void }).onerror?.();
+    await wait(2_100);
+    const second = FakeEventSource.instances[1];
+    assert.ok(second, 'a reconnect attempt must create a new EventSource');
+    second!.emit('hello', '{"revision":2}');
+    assert.deepEqual(events, [{ type: 'hello', issueId: null }]);
+    dispose();
   });
 });
 
