@@ -1475,10 +1475,13 @@ export const openApiSpec: OpenApiDocument = {
           id: { type: 'string' },
           issueId: { type: 'string' },
           author: { type: 'string', description: 'Falls back to the actor header/empty string' },
-          body: { type: 'string' },
-          createdAt: { type: 'string', format: 'date-time' }
-        },
-        required: ['id', 'issueId', 'author', 'body', 'createdAt'],
+            body: { type: 'string' },
+            createdAt: { type: 'string', format: 'date-time' },
+            attempts: { type: 'integer', description: '队列重试计数（人工重新唤醒会清零）' },
+            lastError: { type: 'string', description: '最近一次投递失败/超时原因；空字符串表示无错误' },
+            notBefore: { type: ['string', 'null'], description: '退避到期时间；null 表示立即可投' }
+          },
+          required: ['id', 'issueId', 'author', 'body', 'createdAt', 'attempts', 'lastError', 'notBefore'],
         additionalProperties: false
       },
       Activity: {

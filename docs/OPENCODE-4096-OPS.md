@@ -499,3 +499,21 @@ ps -o pid,ppid,lstart,command -p "$(lsof -t -iTCP:4096 -sTCP:LISTEN)"
 3. 不要用「换端口」绕开——会引入 PUBLIC_URL / compose / 自启模板的多处配置漂移
 
 **判断幽灵的方法**：`netstat -ano | findstr :4096` 显示 LISTENING，但 `Get-Process -Id <pid>` 查无此进程；`/global/health` 返回 000。
+
+---
+
+## 10. 唤醒队列排障（v22）
+
+评论唤醒现在走持久化队列（SQLite comments 表：`pending → processing → processed` + 重试元数据）。
+
+| 现象 | 含义 | 处理 |
+|---|---|---|
+| 评论徽章「排队中」 | 等待投递（会话空闲后自动发） | 无需操作；60s 轮询兜底 |
+| 「唤醒中」 | 已投递到会话，等待 agent 收尾 | agent 处理完会置 processed |
+| 「失败 n/5」 | 投递失败，按指数退避重试（30s→1m→2m→4m→10m 封顶） | 看 title 里的错误；修好服务后点「重新唤醒」（会自动清零计数） |
+| 「超时」 | 投递成功后 10min 内 agent 未标记 processed（会话已空闲） | 人工确认后点「重新唤醒」 |
+| 失败 5 次自动停止 | 终态失败：24h 长退避，不再自动重试 | 修复根因后手动「重新唤醒」 |
+| 会话 busy 时一直排队 | 执行通道互斥：不打断 agent 当前轮次；2h 上限后按超时回收 | 等待或人工处理 |
+
+**关键约束**：同一个 Session 同一时刻只有一个在飞投递；`@agent` 前缀仍是唤醒触发条件（2026-10-22 拍板保留）。
+

@@ -2535,3 +2535,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 .session-panel-error svg { color: var(--danger, #e5484d); }
 .session-panel-error strong { color: var(--ink); }
 .session-panel-error-actions { display: flex; gap: 8px; margin-top: 6px; }
+
+/* 评论队列态徽章：排队中 / 失败·超时 */
+.comment-status.queued { color: var(--ink-dim); border-color: var(--line); }
+.comment-status.failed { color: var(--danger, #e5484d); border-color: color-mix(in srgb, var(--danger, #e5484d) 40%, var(--line)); }

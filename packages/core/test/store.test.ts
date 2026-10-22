@@ -1882,3 +1882,21 @@ describe('wake queue primitives (v22)', () => {
     assert.equal(store.getComment(commentId)!.status, 'pending');
   });
 });
+
+describe('wake queue: claim clears stale backoff', () => {
+  it('a new claim clears a leftover not_before from an earlier attempt', () => {
+    const { store } = fresh();
+    const project = store.createProject({ id: 'p1', name: 'P' });
+    const issueId = store.createIssue({ projectId: project.id, title: 'T' }).id;
+    const commentId = store.addComment(issueId, { author: 'web', body: '@agent x' }).id;
+    const first = store.claimWake(commentId, 'watch');
+    assert.ok(first);
+    // 失败退避留下未来的 not_before
+    assert.equal(store.requeueWake(commentId, first, 'boom', '2099-01-01T00:00:00.000Z'), true);
+    assert.equal(store.queueMeta(commentId)!.notBefore, '2099-01-01T00:00:00.000Z');
+    // 崩溃恢复 / 重新认领后，旧退避必须被清掉，否则轮询永远跳过
+    const second = store.claimWake(commentId, 'watch');
+    assert.ok(second);
+    assert.equal(store.queueMeta(commentId)!.notBefore, null);
+  });
+});

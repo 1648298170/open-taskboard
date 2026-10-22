@@ -119,11 +119,15 @@ describe('comments.updated_at (v21)', () => {
     assert.ok(Date.parse(afterRelease.updatedAt) > Date.parse(afterClaim.updatedAt), 'release must bump updated_at');
   });
 
-  it('keeps claimed_by/updated_at out of the public Comment payload', () => {
+  it('keeps claimed_by/updated_at out of the public Comment payload (queue state is public)', () => {
     const { store, commentId } = fixture();
     const comment = store.getComment(commentId);
     assert.ok(comment);
-    assert.deepEqual(Object.keys(comment).sort(), ['author', 'body', 'createdAt', 'id', 'issueId', 'status']);
+    // attempts/lastError/notBefore 是刻意公开的队列状态（面板徽章需要）；
+    // claimed_by（认领令牌）与 updated_at（内部时长）仍然不出现在载荷里。
+    assert.deepEqual(Object.keys(comment).sort(), [
+      'attempts', 'author', 'body', 'createdAt', 'id', 'issueId', 'lastError', 'notBefore', 'status'
+    ]);
   });
 
   it('ships the v21 migration', () => {

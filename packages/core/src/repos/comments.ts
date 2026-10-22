@@ -4,7 +4,7 @@ import type { Comment, PendingWakeComment } from '../types.js';
 
 // Public comment projection. claimed_by/updated_at are wake-engine CAS state
 // (v21) and intentionally stay out of the API payload.
-const COMMENT_COLS = 'id, issue_id AS issueId, author, body, status, created_at AS createdAt';
+const COMMENT_COLS = 'id, issue_id AS issueId, author, body, status, created_at AS createdAt, attempts, last_error AS lastError, not_before AS notBefore';
 const now = (): string => new Date().toISOString();
 const shortId = (): string => randomUUID().slice(0, 8);
 
@@ -16,8 +16,8 @@ export class CommentRepo {
   add(issueId: string, input: { author?: string; body: string }): string {
     const id = shortId();
     const t = now();
-    this.db.prepare('INSERT INTO comments (id, issue_id, author, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, issueId, input.author ?? '', input.body, t, t);
+    this.db.prepare('INSERT INTO comments (id, issue_id, author, body, created_at, updated_at, queued_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, issueId, input.author ?? '', input.body, t, t, t);
     this.db.prepare('UPDATE issues SET updated_at = ? WHERE id = ?').run(t, issueId);
     return id;
   }
@@ -46,6 +46,7 @@ export class CommentRepo {
       // 否则上次的超时 not_before / attempts 上限会让手动重唤醒无声失效。
       if (patch.status === 'pending') {
         sets.push('attempts = 0', 'not_before = NULL', "last_error = ''");
+        sets.push('queued_at = ?'); vals.push(now());
       }
     }
     if (sets.length === 0) return;
@@ -63,7 +64,7 @@ export class CommentRepo {
   claim(id: string, claimer: string): string | null {
     const token = `${claimer}:${randomUUID()}`;
     const result = this.db.prepare(
-      "UPDATE comments SET status = 'processing', claimed_by = ?, updated_at = ? WHERE id = ? AND status = 'pending'"
+      "UPDATE comments SET status = 'processing', claimed_by = ?, not_before = NULL, updated_at = ? WHERE id = ? AND status = 'pending'"
     ).run(token, now(), id);
     return Number(result.changes) > 0 ? token : null;
   }

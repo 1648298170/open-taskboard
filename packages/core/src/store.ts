@@ -815,6 +815,22 @@ export class Store {
     return this.comments.listStaleProcessing(cutoffIso, claimerPrefix);
   }
 
+  /**
+   * 崩溃恢复：启动时把本实例前缀且超过 cutoff 的 processing 认领回退为 pending
+   * （attempts 保留，人工重新唤醒才清零）。只释放令牌仍匹配的行（CAS），
+   * 不会影响并发运行的其他实例的新鲜认领。
+   */
+  resetStaleClaims(cutoffIso: string, claimerPrefix = 'watch'): { id: string; issueId: string }[] {
+    return inTransaction(this.db, () => {
+      const rows = this.comments.listStaleProcessing(cutoffIso, claimerPrefix);
+      const released: { id: string; issueId: string }[] = [];
+      for (const row of rows) {
+        if (this.comments.release(row.id, row.claimToken, 'pending')) released.push({ id: row.id, issueId: row.issueId });
+      }
+      return released;
+    });
+  }
+
   // ---- activities: latest first, capped by the repo (default 50) ----
   listActivities(issueId: string): Activity[] {
     return this.activities.listByIssue(issueId);

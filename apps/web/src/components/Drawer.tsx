@@ -394,11 +394,26 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                 {/* v0.4: 头行（作者+删除）与正文分层——正文独立整行，长文不再绕排 */}
                 <div className="comment-head">
                   <span className="who">{c.author || 'anon'}</span>
-                  {c.status !== 'pending' && (
-                    <span className={`comment-status ${c.status}`}>
-                      {c.status === 'processing' ? '唤醒中' : '已处理'}
-                    </span>
-                  )}
+                  {(() => {
+                    // 评论队列态徽章：排队中 / 唤醒中 / 已处理 / 失败·超时
+                    if (c.status === 'processing') {
+                      return <span className="comment-status processing">唤醒中</span>;
+                    }
+                    if (c.status === 'processed') {
+                      return <span className="comment-status processed">已处理</span>;
+                    }
+                    // pending：只对唤醒评论显示队列状态
+                    if (!c.body.trimStart().startsWith(WAKE_PREFIX)) return null;
+                    if (c.lastError) {
+                      const timedOut = c.lastError.includes('超时') || c.lastError.includes('未确认结果');
+                      return (
+                        <span className={`comment-status failed`} title={c.lastError}>
+                          {timedOut ? '超时' : '失败'}{c.attempts > 0 ? ` · 重试 ${c.attempts} 次` : ''}
+                        </span>
+                      );
+                    }
+                    return <span className="comment-status queued" title="等待投递到绑定会话">排队中</span>;
+                  })()}
                   {confirmingComment === c.id ? (
                     <button className="btn tiny danger" title="再次点击确认删除"
                       onClick={async e => {

@@ -660,3 +660,45 @@ describe('wake engine: delivery failure activity dedupe', () => {
     }
   });
 });
+
+describe('wake engine: startup reconciliation (crash recovery)', () => {
+  it('recovers stale processing claims left by a previous process and reports them', async () => {
+    const { store, db, issueId, engine } = fixture({
+      sessionId: null,
+      fetchImpl: () => okResponse(),
+      config: { execParts: undefined },
+      engineOptions: { pollMs: 0, startupResetMs: 1_000 },
+    });
+    const commentId = store.addComment(issueId, { author: 'web', body: '@agent 崩溃前在飞' }).id;
+    // 模拟上一进程认领后死掉：processing + 旧 updated_at
+    store.claimWake(commentId, 'watch');
+    db.prepare("UPDATE comments SET updated_at = '2020-01-01T00:00:00.000Z' WHERE id = ?").run(commentId);
+    await engine.start();
+    try {
+      await waitFor(() => store.getComment(commentId)!.status === 'pending');
+      const interrupted = store.listActivities(issueId)
+        .filter(a => a.action === 'execution' && a.detail.includes('进程重启'));
+      assert.equal(interrupted.length, 1, 'recovery must be visible in the activity stream');
+      assert.equal(store.queueMeta(commentId)!.attempts, 0, 'recovery must preserve the retry budget');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('does not reset a fresh in-flight claim owned by a concurrent engine', async () => {
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_fresh',
+      fetchImpl: () => okResponse(),
+      engineOptions: { pollMs: 0, startupResetMs: 60_000 },
+    });
+    const commentId = store.addComment(issueId, { author: 'web', body: '@agent 别人正在投' }).id;
+    store.claimWake(commentId, 'watch'); // 刚认领，updated_at 是现在
+    await engine.start();
+    try {
+      await new Promise(r => setTimeout(r, 40));
+      assert.equal(store.getComment(commentId)!.status, 'processing', 'fresh claims must not be reset');
+    } finally {
+      await engine.stop();
+    }
+  });
+});

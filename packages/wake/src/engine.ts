@@ -28,7 +28,7 @@ import {
 /** The Store slice the engine depends on (the facade itself satisfies it). */
 export type WakeStore = Pick<
   Store,
-  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listQueueBatch' | 'queueMeta' | 'requeueWake' | 'deferWake' | 'listStaleProcessing' | 'recordExecutionEvent' | 'subscribe'
+  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listQueueBatch' | 'queueMeta' | 'requeueWake' | 'deferWake' | 'listStaleProcessing' | 'resetStaleClaims' | 'recordExecutionEvent' | 'subscribe'
 >;
 
 /** Narrow child-process surface so tests can inject a deterministic spawn. */
@@ -106,6 +106,8 @@ export interface WakeEngineOptions {
   backoffMaxMs?: number;
   /** 结果核对超时（毫秒）：投递成功后超过该时间未被 agent 标记 processed 视为超时。默认 10min。 */
   resultTimeoutMs?: number;
+  /** 启动对账阈值（毫秒）：启动时回收超过该时长未更新的 processing 认领。默认 5min。 */
+  startupResetMs?: number;
 }
 
 export interface WakeEngine {
@@ -733,6 +735,21 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     }
     lifecycle = new AbortController();
     running = true;
+    // 启动对账（崩溃恢复）：上一进程死在投递中途会留下 processing 认领。
+    // 超过阈值的按中断处理——回退 pending（attempts 保留）并写活动，随后由
+    // 本次 sweep 重新入队；阈值避免误伤并发实例的新鲜认领。
+    try {
+      const resetCutoff = new Date(Date.now() - (options.startupResetMs ?? 5 * 60_000)).toISOString();
+      const recovered = store.resetStaleClaims(resetCutoff, 'watch');
+      if (recovered.length > 0) {
+        log(`watch: recovered ${recovered.length} interrupted wake(s) left by a previous process`);
+        for (const row of recovered) {
+          await reportExecution(row.issueId, 'failed', '进程重启：上次投递未确认，已重新入队（保留重试计数）');
+        }
+      }
+    } catch (err) {
+      error(`watch: startup reconciliation failed (${(err as Error).message})`);
+    }
     unsubscribe = store.subscribe(onEvent);
     sweep();
     if (options.pollMs !== undefined && options.pollMs > 0) {

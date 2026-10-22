@@ -131,13 +131,19 @@ export interface IssuePatch {
 
 export type CommentStatus = 'pending' | 'processing' | 'processed';
 
-export interface Comment {
-  id: string;
-  issueId: string;
-  author: string;
-  body: string;
-  status: CommentStatus;
+export interface Comment {
+  id: string;
+  issueId: string;
+  author: string;
+  body: string;
+  status: CommentStatus;
   createdAt: string;
+  /** 队列重试计数（人工重新唤醒会清零）。 */
+  attempts: number;
+  /** 最近一次投递失败/超时原因（空字符串 = 无错误）。 */
+  lastError: string;
+  /** 退避到期时间（null = 立即可投）。 */
+  notBefore: string | null;
 }
 
 /**
