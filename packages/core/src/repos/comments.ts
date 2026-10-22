@@ -10,6 +10,7 @@ const now = (): string => new Date().toISOString();
 const shortId = (): string => randomUUID().slice(0, 8);
 
 export interface WakeQueueMeta {
+  status: string;
   attempts: number;
   lastError: string;
   notBefore: string | null;
