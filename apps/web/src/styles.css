@@ -2540,9 +2540,12 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 .comment-status.queued { color: var(--ink-dim); border-color: var(--line); }
 .comment-status.failed { color: var(--danger, #e5484d); border-color: color-mix(in srgb, var(--danger, #e5484d) 40%, var(--line)); }
 
-/* 抽屉长列表截断的展开按钮（评论「显示更早」/活动「显示全部」） */
-.drawer-more { display: block; width: 100%; margin: 6px 0; text-align: center; color: var(--ink-dim); }
-.drawer-more:hover { color: var(--ink); }
+/* 抽屉长列表区块内滚动：评论/活动各自限高，抽屉整体不再被撑长 */
+.drawer-comments .comments { max-height: 42vh; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
+.drawer-history .activities { max-height: 30vh; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
+
+/* 描述折叠：超长默认限高，底部渐隐提示可展开 */
+.desc-clamped { max-height: 220px; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent); mask-image: linear-gradient(to bottom, #000 78%, transparent); }
 
 /* 单条评论超 8 行折叠：line-clamp 兜住 Markdown 渲染后的视觉行数 */
 .comment-body-clamped { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }

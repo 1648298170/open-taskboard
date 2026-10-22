@@ -154,27 +154,20 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
   // 会话页地址：const 局部量让 TS 在回调里保持窄化（非空才有值）。
   const sessionUrl = detail ? detail.sessionUrl : null;
   const visibleActivities = detail ? detail.activities : [];
-  // 长列表截断：忙碌任务的评论/活动全量渲染会让抽屉滚很久——默认只展示
-  // 最新一段，按需展开；切换任务即回到折叠态。
+  // 长内容用区块内滚动承载（评论/活动各自 max-height），单条评论与描述
+  // 仍保留展开/收起；切换任务即重置展开状态。
   const allComments = detail ? detail.comments : [];
-  const COMMENT_PREVIEW = 20;
-  const ACTIVITY_PREVIEW = 8;
   const COMMENT_BODY_LINES = 8;
-  const [showAllComments, setShowAllComments] = useState(false);
-  const [showAllActivities, setShowAllActivities] = useState(false);
   const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
+  const [showFullDesc, setShowFullDesc] = useState(false);
   const toggleCommentExpanded = (id: string): void => setExpandedComments(prev => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
   useEffect(() => {
-    setShowAllComments(false); setShowAllActivities(false); setExpandedComments(new Set());
+    setExpandedComments(new Set()); setShowFullDesc(false);
   }, [issueId]);
-  const hiddenCommentCount = showAllComments ? 0 : Math.max(0, allComments.length - COMMENT_PREVIEW);
-  const visibleComments = showAllComments ? allComments : allComments.slice(hiddenCommentCount);
-  const hiddenActivityCount = showAllActivities ? 0 : Math.max(0, visibleActivities.length - ACTIVITY_PREVIEW);
-  const shownActivities = showAllActivities ? visibleActivities : visibleActivities.slice(0, ACTIVITY_PREVIEW);
   useEffect(() => {
     setCommits(null);
     if (!projectId || !commitRef) return;
@@ -408,7 +401,21 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                   setEditingDesc(false);
                 }} />
             : detail.description
-              ? <Markdown src={detail.description} />
+              ? (() => {
+                  const long = detail.description.length > 400 || detail.description.split('\n').length > 12;
+                  return (
+                    <>
+                      <div className={showFullDesc || !long ? undefined : 'desc-clamped'}>
+                        <Markdown src={detail.description} />
+                      </div>
+                      {long && (
+                        <button className="btn tiny drawer-more-inline" onClick={() => setShowFullDesc(v => !v)}>
+                          {showFullDesc ? '收起描述' : '展开全部描述'}
+                        </button>
+                      )}
+                    </>
+                  );
+                })()
               : <p style={{ color: 'var(--ink-dim)', fontSize: 12 }}>暂无描述</p>}
         </section>
       </div>
@@ -418,19 +425,9 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
         <h3 className="drawer-section-head" id="drawer-comments-heading">评论
           {detail.comments.length > 0 && <span className="drawer-count">{detail.comments.length}</span>}
         </h3>
-        {hiddenCommentCount > 0 && (
-          <button className="btn tiny drawer-more" onClick={() => setShowAllComments(true)}>
-            显示更早的 {hiddenCommentCount} 条评论
-          </button>
-        )}
-        {showAllComments && allComments.length > COMMENT_PREVIEW && (
-          <button className="btn tiny drawer-more" onClick={() => setShowAllComments(false)}>
-            收起，仅显示最新 {COMMENT_PREVIEW} 条
-          </button>
-        )}
         <ul className="comments">
           {allComments.length
-            ? visibleComments.map(c => (
+            ? allComments.map(c => (
               <li key={c.id}>
                 {/* v0.4: 头行（作者+删除）与正文分层——正文独立整行，长文不再绕排 */}
                 <div className="comment-head">
@@ -756,7 +753,7 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
         </h3>
         <ul className="activities">
           {visibleActivities.length
-            ? shownActivities.map(a => (
+            ? visibleActivities.map(a => (
               <li key={a.id}>
                 <span className="when">{fmtWhen(a.createdAt)}</span>
                 <span className="who">{a.actor || 'anon'}</span>
@@ -765,11 +762,6 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
               </li>))
              : <li style={{ color: 'var(--ink-dim)' }}>暂无活动</li>}
         </ul>
-        {hiddenActivityCount > 0 && (
-          <button className="btn tiny drawer-more" onClick={() => setShowAllActivities(true)}>
-            显示全部 {visibleActivities.length} 条活动
-          </button>
-        )}
       </section>
 
       {/* 详情：低频属性收进原生折叠区；工作树/工作树路径与审核结论/意见不再展示。 */}
