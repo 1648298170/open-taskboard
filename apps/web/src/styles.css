@@ -2551,3 +2551,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 .comment-body-clamped { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
 .drawer-more-inline { margin: 2px 0 0; color: var(--ink-dim); }
 .drawer-more-inline:hover { color: var(--ink); }
+
+/* 聊天式评论：头行元信息（时间/ID）弱化展示 */
+.comment-head .when, .comment-head .cid { color: var(--ink-dim); font-size: 11px; }

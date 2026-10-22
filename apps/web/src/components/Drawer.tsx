@@ -168,6 +168,15 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
   useEffect(() => {
     setExpandedComments(new Set()); setShowFullDesc(false);
   }, [issueId]);
+  // 聊天式：初始化与新评论到达时视口停在最底部（最新消息）
+  const commentsListRef = useRef<HTMLUListElement | null>(null);
+  useEffect(() => {
+    const el = commentsListRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    const raf = requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+    return () => cancelAnimationFrame(raf);
+  }, [issueId, allComments.length]);
   useEffect(() => {
     setCommits(null);
     if (!projectId || !commitRef) return;
@@ -425,13 +434,15 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
         <h3 className="drawer-section-head" id="drawer-comments-heading">评论
           {detail.comments.length > 0 && <span className="drawer-count">{detail.comments.length}</span>}
         </h3>
-        <ul className="comments">
+        <ul className="comments" ref={commentsListRef}>
           {allComments.length
             ? allComments.map(c => (
               <li key={c.id}>
                 {/* v0.4: 头行（作者+删除）与正文分层——正文独立整行，长文不再绕排 */}
                 <div className="comment-head">
                   <span className="who">{c.author || 'anon'}</span>
+                  <span className="when" title={c.createdAt}>{fmtWhen(c.createdAt)}</span>
+                  <span className="cid" title="评论 ID">#{c.id}</span>
                   <button className="icon-btn" title="复制评论内容" aria-label="复制评论内容"
                     onClick={() => void copyComment(c.body)}><Copy size={12} /></button>
                   {(() => {
