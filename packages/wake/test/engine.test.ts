@@ -342,33 +342,28 @@ describe('wake engine: periodic poll', () => {
 });
 
 describe('wake engine: fault isolation', () => {
-  it('logs a throwing event path and keeps delivering later wakes', async () => {
+  it('logs a throwing sweep and keeps delivering later wakes', async () => {
     let failNext = true;
     const { store, issueId, engine, logs } = fixture({
       sessionId: 'ses_1',
       fetchImpl: url => healthOk(url) ?? okResponse(),
       wrapStore: base => {
         const flaky = Object.create(base) as Store;
-        flaky.getIssue = (id: string) => {
+        flaky.listQueueBatch = (now: string) => {
           if (failNext) {
             failNext = false;
             throw new Error('boom');
           }
-          return base.getIssue(id);
+          return base.listQueueBatch(now);
         };
         return flaky;
       },
     });
     await engine.start();
     try {
-      // A throwing third-party listener must not stop the emitter either.
-      const unsubscribe = store.subscribe(() => { throw new Error('listener boom'); });
-      const broken = store.addComment(issueId, { author: 'web', body: '@agent 第一条' }).id;
-      unsubscribe();
-
-      await waitFor(() => logs.some(entry => entry.message.includes('event handling failed')));
-      assert.equal(store.getComment(broken)!.status, 'pending');
-
+      // 启动 sweep 的 listQueueBatch 抛错 → 补拉失败日志
+      await waitFor(() => logs.some(entry => entry.message.includes('补拉失败')));
+      // 引擎不 crash，后续事件投递正常
       const delivered = store.addComment(issueId, { author: 'web', body: '@agent 第二条' }).id;
       await waitFor(() => store.getComment(delivered)!.status === 'processing');
       assert.equal(engine.isRunning(), true);

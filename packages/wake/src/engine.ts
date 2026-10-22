@@ -804,38 +804,18 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   };
 
   const onEvent = (event: StoreEvent): void => {
-    // The EventBus already swallows listener throws; logging here keeps a
-    // broken event path observable instead of silently dropping a wake.
+    // Q2: 所有事件源只触发 priority 排序的 sweep——不直插特定评论到内存队列，
+    // 确保优先级顺序不被事件路径绕过。sweep 内部：listQueueBatch（priority 排序）
+    // → seen 去重 → enqueue → 串行投递。
     try {
       if (!shouldWake({ type: event.type, payload: event.payload }, config.prefix)) return;
-      const payload = event.payload;
-      const author = typeof payload.author === 'string' ? payload.author : undefined;
-      if (isIgnoredAuthor(author, config.ignoreAuthors)) return;
-      const issueId = String(payload.issueId ?? '');
-      if (!issueId) return;
-      const projectId = store.getIssue(issueId)?.projectId ?? null;
-      if (!wantsProject(config.projectFilter, projectId)) return;
-      const commentId = String(payload.id ?? '');
-      if (!commentId) return;
-      const key = wakeKey(issueId, commentId);
-      if (seen.has(key)) {
-        // Explicit re-wake: a pending status patch (重新唤醒 button / comment
-        // edit save) must re-deliver even though the sweep already enqueued
-        // this comment. Duplicate comment.created events still return early.
-        if (event.type !== 'comment.updated') return;
-        seen.delete(key);
+      // re-wake：状态改回 pending 时清 seen，让 sweep 重新入队
+      if (event.type === 'comment.updated') {
+        const pid = String((event.payload as Record<string, unknown>).id ?? '');
+        const iid = String((event.payload as Record<string, unknown>).issueId ?? '');
+        if (pid && iid) seen.delete(wakeKey(iid, pid));
       }
-      seen.add(key);
-      const issueTitle = String(payload.issueTitle ?? '');
-      // The event payload truncates body to 200 chars (store.addComment) —
-      // read the full comment from the Store so long instructions survive.
-      const meta = store.queueMeta(commentId);
-      if (meta?.terminalAt) return;
-      const fullBody = store.getComment(commentId)?.body ?? String(payload.body ?? '');
-      const instruction = fullBody.trimStart().slice(config.prefix.length).trim();
-      const by = author ? ` (${author})` : '';
-      log(`watch: wake${by}: ${instruction}`);
-      enqueue({ issueId, commentId, issueTitle, instruction, author, key, source: 'event' });
+      void sweep();
     } catch (err) {
       error(`watch: event handling failed: ${(err as Error).message}`);
     }
