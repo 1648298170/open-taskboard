@@ -580,7 +580,20 @@ describe('workspace directory API', () => {
       const res = await app.inject({ method: 'GET', url: '/api/opencode/status' });
       assert.equal(res.statusCode, 200, res.body);
       assert.equal(res.json<{ serverStatus: string }>().serverStatus, 'unavailable');
+      assert.equal(res.json<{ publicOrigin: string | null }>().publicOrigin, null);
       assert.deepEqual(res.json<{ projects: unknown[] }>().projects, []);
+    } finally { cleanup(); }
+  });
+
+  it('exposes the configured public origin even when the OpenCode server is unreachable', async () => {
+    const { app, cleanup } = await makeApp({
+      TASKBOARD_OPENCODE_URL: '',
+      TASKBOARD_OPENCODE_PUBLIC_URL: 'http://192.168.3.7:4096'
+    });
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/opencode/status' });
+      assert.equal(res.statusCode, 200, res.body);
+      assert.equal(res.json<{ publicOrigin: string | null }>().publicOrigin, 'http://192.168.3.7:4096');
     } finally { cleanup(); }
   });
 

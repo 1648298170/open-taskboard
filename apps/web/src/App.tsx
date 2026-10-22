@@ -6,7 +6,7 @@ import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
 import { shouldSkipRefresh } from './logic/mutationDedupe';
 import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
-import { Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings, LogOut, RefreshCw } from 'lucide-react';
+import { AppWindow, Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings, LogOut, RefreshCw } from 'lucide-react';
 import { Drawer } from './components/Drawer';
 import { SessionPanel } from './components/SessionPanel';
 import { DirectoryPickerDialog } from './components/DirectoryPickerDialog';
@@ -157,10 +157,37 @@ export default function App() {
     }
   }, []);
 
+  // 登录/刷新就绪后自动打开会话面板（访问配置的 OpenCode 服务）；
+  // 每次页面加载至多一次；未配 PUBLIC_URL 时静默跳过（topbar 图标会 toast 提示）。
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (authScreen !== 'board' || autoOpenedRef.current) return;
+    autoOpenedRef.current = true;
+    void (async () => {
+      try {
+        const status = await api_.openCodeStatus();
+        setOpenCodeStatus(status);
+        if (status.publicOrigin) setSessionPanel({ url: status.publicOrigin, sessionId: null, title: 'OpenCode 会话' });
+      } catch { /* 静默：topbar 图标可手动打开 */ }
+    })();
+  }, [authScreen]);
+
   const showToast = useCallback((msg: string, detail?: string) => {
     setToast({ msg, detail });
     setTimeout(() => setToast(null), 2600);
   }, []);
+
+  // topbar 会话窗口开关：开→关；关→用 publicOrigin 根地址打开（OpenCode 首页可选会话）。
+  const toggleSessionPanel = useCallback(async (): Promise<void> => {
+    if (sessionPanel) { setSessionPanel(null); return; }
+    try {
+      const status = openCodeStatus ?? await api_.openCodeStatus();
+      setOpenCodeStatus(status);
+      const origin = status.publicOrigin;
+      if (!origin) { showToast('✗ 未配置 TASKBOARD_OPENCODE_PUBLIC_URL，无法打开会话窗口'); return; }
+      setSessionPanel({ url: origin, sessionId: null, title: 'OpenCode 会话' });
+    } catch (err) { showToast(`✗ ${(err as Error).message}`); }
+  }, [sessionPanel, openCodeStatus, showToast]);
 
   const openWorkspaceDirectoryPicker = (target: DirectoryPickerTarget): void => {
     const initialPath = target === 'settings'
@@ -804,6 +831,9 @@ export default function App() {
               {/* T7-37 时间线视图开关（激活时替代看板主体）。 */}
               <button className={`icon-btn${timelineOpen ? ' on' : ''}`} aria-label="时间线" title="时间线视图（甘特 lite）"
                 onClick={() => setTimelineOpen(o => !o)}><GanttChart size={16} /></button>
+              {/* 会话面板开关（OpenCode 内嵌窗口）。 */}
+              <button className={`icon-btn${sessionPanel ? ' on' : ''}`} aria-label="会话窗口" title="OpenCode 会话窗口"
+                onClick={() => void toggleSessionPanel()}><AppWindow size={16} /></button>
               {/* v0.4: 快捷键帮助（? 键同效）。 */}
               <button className={`icon-btn${helpOpen ? ' on' : ''}`} aria-label="快捷键帮助" title="快捷键帮助（?）"
                 onClick={() => setHelpOpen(o => !o)}><Keyboard size={16} /></button>

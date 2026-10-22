@@ -70,6 +70,7 @@ export interface DirectoryOpenCodeProjectStatus {
 
 export interface GlobalOpenCodeStatus {
   checkedAt: string;
+  publicOrigin: string | null;
   serverStatus: 'connected' | 'unavailable';
   error?: string;
   projects: (DirectoryOpenCodeProjectStatus & { directoryName: string; workspacePath: string; sessionUrl?: string | null })[];

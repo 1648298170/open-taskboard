@@ -1,7 +1,7 @@
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { Store, ValidationError } from '@taskboard/core';
 import { createDirectorySchema, directoryPatchSchema, z } from '@taskboard/core/schemas';
-import { buildOpenCodePublicSessionUrl, createOpenCodeSession, getConfiguredOpenCodeBase, getOpenCodeSessionRuntimeState, listOpenCodeDirectories, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
+import { buildOpenCodePublicSessionUrl, createOpenCodeSession, getOpenCodePublicOrigin, getConfiguredOpenCodeBase, getOpenCodeSessionRuntimeState, listOpenCodeDirectories, listOpenCodeSessions, normalizeOpenCodeBase } from '../opencode.js';
 
 interface DirectoryParams { directoryId: string }
 interface DirectoryBrowseQuery { path?: string }
@@ -41,13 +41,14 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store; openCodeUrl?: string
   // Global OpenCode health snapshot. It is deployment-configured and never tied to a directory.
   app.get('/api/opencode/status', async (_req, reply) => {
     const checkedAt = new Date().toISOString();
+    const publicOrigin = getOpenCodePublicOrigin(publicOpenCodeUrl);
     let serverUrl: string;
     try {
       serverUrl = getConfiguredOpenCodeBase(openCodeUrl);
       await listOpenCodeSessions(serverUrl);
     } catch (err) {
       return reply.code(200).send({
-        checkedAt, serverStatus: 'unavailable',
+        checkedAt, serverStatus: 'unavailable', publicOrigin,
         error: (err as Error).message, projects: []
       });
     }
@@ -76,7 +77,7 @@ const directoriesRoutes: FastifyPluginAsync<{ store: Store; openCodeUrl?: string
         return { ...base, status: 'unavailable', busy: null, error: (err as Error).message };
       }
     }));
-    return { checkedAt, serverStatus: 'connected', projects: states };
+    return { checkedAt, serverStatus: 'connected', publicOrigin, projects: states };
   });
 
 

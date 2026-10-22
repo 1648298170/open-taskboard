@@ -91,6 +91,17 @@ export function normalizeOpenCodeBase(raw: string): string {
   return url.origin;
 }
 
+/** Browser-facing OpenCode origin for UI embedding (null when unconfigured). */
+export function getOpenCodePublicOrigin(configuredPublicOrigin = process.env.TASKBOARD_OPENCODE_PUBLIC_URL): string | null {
+  const origin = (configuredPublicOrigin ?? '').trim();
+  if (!origin) return null;
+  try {
+    return normalizeOpenCodeBase(origin);
+  } catch {
+    return null;
+  }
+}
+
 function isBlockedMetadataAddress(address: string): boolean {
   const normalized = address.toLowerCase().split('%')[0] ?? address.toLowerCase();
   return normalized === '100.100.100.200'
