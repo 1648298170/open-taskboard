@@ -28,6 +28,7 @@ Thumbs.db
 # Agent tooling state
 .omc/
 .sisyphus/
+.omo/
 
 # Local planning docs (not published)
 .roadmap/
