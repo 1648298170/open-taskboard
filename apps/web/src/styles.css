@@ -2539,3 +2539,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 /* 评论队列态徽章：排队中 / 失败·超时 */
 .comment-status.queued { color: var(--ink-dim); border-color: var(--line); }
 .comment-status.failed { color: var(--danger, #e5484d); border-color: color-mix(in srgb, var(--danger, #e5484d) 40%, var(--line)); }
+
+/* 抽屉长列表截断的展开按钮（评论「显示更早」/活动「显示全部」） */
+.drawer-more { display: block; width: 100%; margin: 6px 0; text-align: center; color: var(--ink-dim); }
+.drawer-more:hover { color: var(--ink); }

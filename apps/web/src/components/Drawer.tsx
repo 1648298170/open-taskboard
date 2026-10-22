@@ -104,6 +104,16 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
   const [commits, setCommits] = useState<Commit[] | null>(null);
 
   // 一键复制任务 ID（粘贴到 CLI / MCP 时直接用原始 id）。
+  // 复制单条评论正文，粘贴到 issue/文档时保持原文。
+  const copyComment = async (body: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(body);
+      onToast('已复制评论内容');
+    } catch {
+      onToast('复制失败，请手动选择复制');
+    }
+  };
+
   const copyIssueId = async (id: string): Promise<void> => {
     try {
       await navigator.clipboard.writeText(id);
@@ -144,6 +154,18 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
   // 会话页地址：const 局部量让 TS 在回调里保持窄化（非空才有值）。
   const sessionUrl = detail ? detail.sessionUrl : null;
   const visibleActivities = detail ? detail.activities : [];
+  // 长列表截断：忙碌任务的评论/活动全量渲染会让抽屉滚很久——默认只展示
+  // 最新一段，按需展开；切换任务即回到折叠态。
+  const allComments = detail ? detail.comments : [];
+  const COMMENT_PREVIEW = 20;
+  const ACTIVITY_PREVIEW = 8;
+  const [showAllComments, setShowAllComments] = useState(false);
+  const [showAllActivities, setShowAllActivities] = useState(false);
+  useEffect(() => { setShowAllComments(false); setShowAllActivities(false); }, [issueId]);
+  const hiddenCommentCount = showAllComments ? 0 : Math.max(0, allComments.length - COMMENT_PREVIEW);
+  const visibleComments = showAllComments ? allComments : allComments.slice(hiddenCommentCount);
+  const hiddenActivityCount = showAllActivities ? 0 : Math.max(0, visibleActivities.length - ACTIVITY_PREVIEW);
+  const shownActivities = showAllActivities ? visibleActivities : visibleActivities.slice(0, ACTIVITY_PREVIEW);
   useEffect(() => {
     setCommits(null);
     if (!projectId || !commitRef) return;
@@ -387,13 +409,20 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
         <h3 className="drawer-section-head" id="drawer-comments-heading">评论
           {detail.comments.length > 0 && <span className="drawer-count">{detail.comments.length}</span>}
         </h3>
+        {hiddenCommentCount > 0 && (
+          <button className="btn tiny drawer-more" onClick={() => setShowAllComments(true)}>
+            显示更早的 {hiddenCommentCount} 条评论
+          </button>
+        )}
         <ul className="comments">
-          {detail.comments.length
-            ? detail.comments.map(c => (
+          {allComments.length
+            ? visibleComments.map(c => (
               <li key={c.id}>
                 {/* v0.4: 头行（作者+删除）与正文分层——正文独立整行，长文不再绕排 */}
                 <div className="comment-head">
                   <span className="who">{c.author || 'anon'}</span>
+                  <button className="icon-btn" title="复制评论内容" aria-label="复制评论内容"
+                    onClick={() => void copyComment(c.body)}><Copy size={12} /></button>
                   {(() => {
                     // 评论队列态徽章：排队中 / 唤醒中 / 已处理 / 失败·超时
                     if (c.status === 'processing') {
@@ -699,15 +728,20 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
         </h3>
         <ul className="activities">
           {visibleActivities.length
-            ? visibleActivities.map(a => (
+            ? shownActivities.map(a => (
               <li key={a.id}>
                 <span className="when">{fmtWhen(a.createdAt)}</span>
                 <span className="who">{a.actor || 'anon'}</span>
                 <span className="act">{a.action}</span>
                 {a.detail && <span className="det">{a.detail}</span>}
               </li>))
-            : <li style={{ color: 'var(--ink-dim)' }}>暂无活动</li>}
+             : <li style={{ color: 'var(--ink-dim)' }}>暂无活动</li>}
         </ul>
+        {hiddenActivityCount > 0 && (
+          <button className="btn tiny drawer-more" onClick={() => setShowAllActivities(true)}>
+            显示全部 {visibleActivities.length} 条活动
+          </button>
+        )}
       </section>
 
       {/* 详情：低频属性收进原生折叠区；工作树/工作树路径与审核结论/意见不再展示。 */}
