@@ -252,4 +252,16 @@ describe('wake queue center: priority & revision (Q1)', () => {
     // 第三次 → 无候选
     assert.equal(store.claimNextWake('watch', 'run-pri', '@agent'), null);
   });
+
+  it('queueSnapshot works with and without projectId (regression: unused named parameter 500)', () => {
+    const { store, issueId } = fixture();
+    store.addComment(issueId, { author: 'web', body: '@agent A' }).id;
+    // 无 projectId：SQL 不含 @projectId，参数对象也不得携带（node:sqlite 对未使用命名参数抛 ERR_INVALID_STATE）
+    const snap = store.wakeQueueSnapshot(new Date().toISOString());
+    assert.ok(snap.counts.pending >= 1, 'pending count must include the wake comment');
+    assert.ok(snap.items.length >= 1, 'items must list the wake comment');
+    // 带 projectId：同一查询走 @projectId 过滤路径
+    const filtered = store.wakeQueueSnapshot(new Date().toISOString(), { projectId: 'p1' });
+    assert.ok(filtered.counts.pending >= 1, 'project-filtered snapshot must also work');
+  });
 });

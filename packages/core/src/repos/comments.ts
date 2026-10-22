@@ -349,14 +349,18 @@ export class CommentRepo {
       WHERE TRIM(c.body) LIKE @prefix || '%'
         AND i.archived_at IS NULL
         ${projectFilter}`;
+    // node:sqlite 对未使用的命名参数直接抛错（ERR_INVALID_STATE）——
+    // 仅在 SQL 真的含 @projectId 时才传入该参数。
+    const baseParams: Record<string, string | number> = { prefix: opts.prefix };
+    if (opts.projectId) baseParams.projectId = opts.projectId;
     const count = (where: string): number =>
-      (this.db.prepare(`SELECT COUNT(*) AS n ${base} ${where}`).get({ prefix: opts.prefix, projectId: opts.projectId ?? '' }) as { n: number }).n;
+      (this.db.prepare(`SELECT COUNT(*) AS n ${base} ${where}`).get(baseParams) as { n: number }).n;
     const pendingCount = count("AND c.status = 'pending' AND c.terminal_at IS NULL");
     const processingCount = count("AND c.status = 'processing'");
     const manualCount = count("AND c.terminal_at IS NOT NULL");
     const readyCount = (this.db.prepare(
       `SELECT COUNT(*) AS n ${base} AND c.status = 'pending' AND c.terminal_at IS NULL AND (c.not_before IS NULL OR c.not_before <= @now)`
-    ).get({ prefix: opts.prefix, projectId: opts.projectId ?? '', now: nowIso }) as { n: number }).n;
+    ).get({ ...baseParams, now: nowIso }) as { n: number }).n;
     const delayed = pendingCount - readyCount;
     const limit = opts.limit ?? 50;
     const items = this.db.prepare(
@@ -373,7 +377,7 @@ export class CommentRepo {
                 CASE WHEN c.queue_priority = 1 THEN c.priority_at END ASC,
                 COALESCE(c.queued_at, c.created_at) ASC, c.rowid
        LIMIT @limit`
-    ).all({ prefix: opts.prefix, projectId: opts.projectId ?? '', limit }) as any[];
+    ).all({ ...baseParams, limit }) as any[];
     return {
       revision: this.getQueueRevision(),
       counts: {
