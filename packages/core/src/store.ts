@@ -801,6 +801,15 @@ export class Store {
     return this.comments.requeue(commentId, claimToken, error, notBeforeIso);
   }
 
+  /**
+   * 执行通道互斥的延后（会话 busy）：回队列 + not_before，不增加 attempts
+   * （不是失败，只是等空闲）。令牌失效返回 false。
+   */
+  deferWake(commentId: string, claimToken: string, notBeforeIso: string): boolean {
+    if (!claimToken) return false;
+    return this.comments.defer(commentId, claimToken, notBeforeIso);
+  }
+
   // ---- activities: latest first, capped by the repo (default 50) ----
   listActivities(issueId: string): Activity[] {
     return this.activities.listByIssue(issueId);

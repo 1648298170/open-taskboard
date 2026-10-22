@@ -446,3 +446,36 @@ describe('wake engine: re-wake', () => {
     }
   });
 });
+
+describe('wake engine: session mutex (busy defer)', () => {
+  it('defers delivery while the bound session is busy, then delivers once idle', async () => {
+    let busy = true;
+    const prompts: string[] = [];
+    const { store, issueId, engine, fetchCalls } = fixture({
+      sessionId: 'ses_busy',
+      fetchImpl: url => {
+        if (url.includes('/session/status')) {
+          return Promise.resolve(new Response(JSON.stringify({ ses_busy: { type: busy ? 'busy' : 'idle' } }), { status: 200 }));
+        }
+        if (url.includes('/prompt_async')) prompts.push(url);
+        return okResponse();
+      },
+      engineOptions: { pollMs: 25, busyDeferMs: 10 },
+    });
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 干活' }).id;
+      // busy 期间：不注入 prompt，评论回到 pending 且带 not_before
+      await waitFor(() => store.queueMeta(commentId)!.notBefore !== null);
+      assert.equal(prompts.length, 0, 'must not inject into a busy session');
+      assert.equal(store.getComment(commentId)!.status, 'pending');
+      assert.equal(store.queueMeta(commentId)!.attempts, 0, 'busy wait must not count as a failed attempt');
+      // 空闲后：轮询重投成功
+      busy = false;
+      await waitFor(() => prompts.length >= 1 || fetchCalls.some(u => u.includes('/prompt_async')));
+      await waitFor(() => store.getComment(commentId)!.status === 'processing');
+    } finally {
+      await engine.stop();
+    }
+  });
+});

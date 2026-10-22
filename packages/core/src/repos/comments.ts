@@ -23,7 +23,7 @@ export class CommentRepo {
   }
 
   get(id: string): Comment | null {
-    // node:sqlite returns undefined for a missing row 鈥?normalize to the
+    // node:sqlite returns undefined for a missing row — normalize to the
     // declared null so callers can rely on the contract.
     return (this.db.prepare(`SELECT ${COMMENT_COLS} FROM comments WHERE id = ?`).get(id) ?? null) as unknown as Comment | null;
   }
@@ -50,7 +50,7 @@ export class CommentRepo {
   }
 
   /**
-   * Atomic pending 鈫?processing claim. Returns a fresh per-attempt token, or
+   * Atomic pending → processing claim. Returns a fresh per-attempt token, or
    * null when the row was not pending. The token is stored in claimed_by: that
    * column is the CAS guard for release(), so a stale attempt can never revert
    * a newer claim (ABA-safe).
@@ -94,7 +94,7 @@ export class CommentRepo {
     return this.db.prepare(`SELECT ${COMMENT_COLS} FROM comments WHERE issue_id = ? ORDER BY created_at, rowid`).all(issueId) as unknown as Comment[];
   }
 
-  // Deletes one comment and touches the parent issue's updated_at 鈥?the exact
+  // Deletes one comment and touches the parent issue's updated_at — the exact
   // mirror of add(). Caller wraps this in a transaction and owns FTS cleanup,
   // activity and events.
   delete(id: string, issueId: string): void {
@@ -102,7 +102,7 @@ export class CommentRepo {
     this.db.prepare('UPDATE issues SET updated_at = ? WHERE id = ?').run(now(), issueId);
   }
 
-  /** 闃熷垪鎵规锛歱ending 涓斿凡鍒?not_before 鐨勫敜閱掕瘎璁猴紝FIFO锛坬ueued_at 鈫?created_at 鈫?rowid锛夈€?*/
+  /** 队列批次：pending 且已到 not_before 的评论，FIFO（queued_at → created_at → rowid）。 */
   listQueueBatch(nowIso: string): PendingWakeComment[] {
     return this.db.prepare(
       `SELECT c.id, c.issue_id AS issueId, i.project_id AS projectId, i.title AS issueTitle,
@@ -113,14 +113,14 @@ export class CommentRepo {
     ).all(nowIso) as unknown as PendingWakeComment[];
   }
 
-  /** 闃熷垪鍏冩暟鎹紙attempts / last_error / not_before / queued_at锛夈€?*/
+  /** 队列元数据（attempts / lastError / notBefore / queuedAt）。 */
   queueMeta(id: string): { attempts: number; lastError: string; notBefore: string | null; queuedAt: string | null } | null {
     return this.db.prepare(
       'SELECT attempts, last_error AS lastError, not_before AS notBefore, queued_at AS queuedAt FROM comments WHERE id = ?'
     ).get(id) as { attempts: number; lastError: string; notBefore: string | null; queuedAt: string | null } | null;
   }
 
-  /** 鎶曢€掑け璐ョ殑閫€閬垮洖鏀讹細CAS锛坧rocessing + 璁ら浠ょ墝锛夆啋 pending锛宎ttempts+1 骞惰褰曢敊璇笌涓嬫鍙姇鏃堕棿銆?*/
+  /** 投递失败的退避回收：CAS（processing + 认领令牌）→ pending，attempts+1 并记录错误与下次可投时间。 */
   requeue(id: string, claimToken: string, error: string, notBeforeIso: string): boolean {
     const result = this.db.prepare(
       `UPDATE comments
@@ -128,6 +128,19 @@ export class CommentRepo {
            not_before = ?, claimed_by = '', updated_at = ?
        WHERE id = ? AND status = 'processing' AND claimed_by = ?`
     ).run(error, notBeforeIso, now(), id, claimToken);
+    return result.changes > 0;
+  }
+
+  /**
+   * 执行通道互斥的延后：会话 busy 时把评论放回队列（不增加 attempts——这不是
+   * 失败，只是等待空闲）。CAS 同上，令牌失效则返回 false。
+   */
+  defer(id: string, claimToken: string, notBeforeIso: string): boolean {
+    const result = this.db.prepare(
+      `UPDATE comments
+       SET status = 'pending', not_before = ?, claimed_by = '', updated_at = ?
+       WHERE id = ? AND status = 'processing' AND claimed_by = ?`
+    ).run(notBeforeIso, now(), id, claimToken);
     return result.changes > 0;
   }
 }

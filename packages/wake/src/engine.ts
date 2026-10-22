@@ -28,7 +28,7 @@ import {
 /** The Store slice the engine depends on (the facade itself satisfies it). */
 export type WakeStore = Pick<
   Store,
-  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listQueueBatch' | 'queueMeta' | 'requeueWake' | 'recordExecutionEvent' | 'subscribe'
+  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listQueueBatch' | 'queueMeta' | 'requeueWake' | 'deferWake' | 'recordExecutionEvent' | 'subscribe'
 >;
 
 /** Narrow child-process surface so tests can inject a deterministic spawn. */
@@ -89,6 +89,11 @@ export interface WakeEngineOptions {
    * Undefined (external sidecar) means no timer at all.
    */
   pollMs?: number;
+  /**
+   * 执行通道互斥的等待时长（毫秒）：目标会话 busy 时把评论放回队列并设置
+   * not_before，等 agent 当前轮次结束后再投。默认 30s。
+   */
+  busyDeferMs?: number;
 }
 
 export interface WakeEngine {
@@ -175,6 +180,28 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       }
     }
     return undefined;
+  };
+
+  /**
+   * GET /session/status 判断目标会话是否正在执行（busy/running/retry）。
+   * 探测失败按「空闲」处理（fail-open）：探测抖动不应无限推迟投递。
+   */
+  const sessionBusy = async (base: string, sessionId: string, directory: string): Promise<boolean> => {
+    try {
+      const url = new URL(`${base}/session/status`);
+      if (directory) url.searchParams.set('directory', directory);
+      const response = await request(url.toString(), { headers: { accept: 'application/json' } }, 3_000);
+      if (!response.ok) return false;
+      const payload = await response.json() as unknown;
+      if (typeof payload !== 'object' || payload === null) return false;
+      const raw = (payload as Record<string, unknown>)[sessionId];
+      const type = raw && typeof raw === 'object' && typeof (raw as { type?: unknown }).type === 'string'
+        ? (raw as { type: string }).type
+        : '';
+      return type === 'busy' || type === 'running' || type === 'retry';
+    } catch {
+      return false;
+    }
   };
 
   const reportExecution = async (issueId: string, outcome: ExecutionOutcome, detail: string): Promise<void> => {
@@ -320,6 +347,23 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       }
       const sessionId = issue.sessionId;
       const healthyBase = sessionBase!;
+      // 执行通道互斥（§5.1）：会话正忙（agent 在跑）时不注入新 prompt——会打断
+      // 当前轮次。放回队列 + not_before 退避，等空闲后由轮询重投；探测失败按空闲
+      // 处理（fail-open，不能因为探测抖动卡住投递）。
+      const busy = await sessionBusy(healthyBase, sessionId, issue.worktreePath);
+      if (busy) {
+        const deferMs = options.busyDeferMs ?? 30_000;
+        const deferUntil = new Date(Date.now() + deferMs).toISOString();
+        if (!store.deferWake(item.commentId, claimToken, deferUntil)) {
+          error(`watch: session ${sessionId} is busy and comment ${item.commentId} is no longer owned by this attempt`);
+          return true;
+        }
+        // 延后不是投递完成：清掉 seen，让轮询在 not_before 到期后重新入队。
+        seen.delete(item.key);
+        log(`watch: session ${sessionId} busy; deferred wake #${item.issueId} until ${deferUntil}`);
+        await reportExecution(item.issueId, 'queued', `目标会话执行中，唤醒已排队（${Math.round(deferMs / 1000)}s 后重试）`);
+        return true;
+      }
       // A task bound to a worktree must not dispatch into a Session rooted at
       // the project's main checkout. Query sessions in the target directory
       // and fail closed when the bound Session cannot be found there.
