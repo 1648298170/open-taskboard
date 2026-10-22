@@ -808,6 +808,32 @@ export const openApiSpec: OpenApiDocument = {
         }
       }
     },
+    '/api/projects/{projectId}/board': {
+      summary: 'Board aggregate (issues + progress + dependencies)',
+      get: {
+        operationId: 'getBoard',
+        summary: 'One snapshot of everything the board view needs',
+        description: 'Issues, progress counters and dependency edges in a single snapshot. The per-issue detail (comments/activities/attachments) is intentionally NOT included.',
+        tags: ['issues'],
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        responses: {
+          200: {
+            description: 'Board snapshot',
+            ...jsonResponse({
+              type: 'object',
+              properties: {
+                issues: { type: 'array', items: { $ref: '#/components/schemas/Issue' } },
+                progress: { $ref: '#/components/schemas/Progress' },
+                dependencies: { type: 'array', items: { $ref: '#/components/schemas/DependencyEdge' } }
+              },
+              required: ['issues', 'progress', 'dependencies']
+            })
+          },
+          404: { $ref: '#/components/responses/NotFound' },
+          ...commonResponses(false)
+        }
+      }
+    },
     '/api/projects/{projectId}/dependencies': {
       summary: 'Project dependency edge list',
       get: {

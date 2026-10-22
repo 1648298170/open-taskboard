@@ -1433,3 +1433,35 @@ describe('Agent execution event timeline', () => {
   });
 });
 
+
+describe('board aggregate endpoint', () => {
+  it('returns issues, progress and dependencies in one snapshot and 404s for unknown projects', async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      const projectRes = await app.inject({ method: 'POST', url: '/api/projects', headers: json, payload: { name: 'Board aggregate' } });
+      assert.equal(projectRes.statusCode, 201, projectRes.body);
+      const projectId = projectRes.json<{ id: string }>().id;
+      const a = (await app.inject({ method: 'POST', url: `/api/projects/${projectId}/issues`, headers: json, payload: { title: 'A' } })).json<{ id: string }>().id;
+      const b = (await app.inject({ method: 'POST', url: `/api/projects/${projectId}/issues`, headers: json, payload: { title: 'B' } })).json<{ id: string }>().id;
+      const dep = await app.inject({ method: 'POST', url: `/api/issues/${b}/dependencies`, headers: json, payload: { dependsOnId: a } });
+      assert.equal(dep.statusCode, 201, dep.body);
+
+      const res = await app.inject({ method: 'GET', url: `/api/projects/${projectId}/board` });
+      assert.equal(res.statusCode, 200, res.body);
+      const board = res.json<{
+        issues: { id: string }[];
+        progress: { total: number };
+        dependencies: { issueId: string; dependsOnId: string }[];
+      }>();
+      assert.equal(board.issues.length, 2);
+      assert.equal(board.progress.total, 2);
+      assert.deepEqual(board.dependencies, [{ issueId: b, dependsOnId: a }]);
+      // 与分散接口结果一致（同一快照语义）
+      const separate = (await app.inject({ method: 'GET', url: `/api/projects/${projectId}/progress` })).json<{ total: number }>();
+      assert.equal(board.progress.total, separate.total);
+
+      const missing = await app.inject({ method: 'GET', url: '/api/projects/nope/board' });
+      assert.equal(missing.statusCode, 404);
+    } finally { cleanup(); }
+  });
+});

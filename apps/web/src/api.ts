@@ -210,6 +210,8 @@ export const api_ = {
   removeDependency: (id: string, dependsOnId: string) =>
     api<{ ok: true }>('DELETE', `/api/issues/${id}/dependencies/${dependsOnId}`),
   progress: (projectId: string) => api<Progress>('GET', `/api/projects/${projectId}/progress`),
+  board: (projectId: string) => api<{ issues: Issue[]; progress: Progress; dependencies: DependencyEdge[] }>(
+    'GET', `/api/projects/${projectId}/board`),
   stats: (projectId: string) => api<Stats>('GET', `/api/projects/${projectId}/stats?weeks=8`),
   openCodeSessions: (projectId: string) => api<{ sessions: OpenCodeSessionOption[]; workspacePath: string }>('GET', `/api/projects/${encodeURIComponent(projectId)}/opencode-sessions`),
   // 新建项目对话框用：无项目 id 的无状态查询，按服务地址 + 可选工作区过滤会话。

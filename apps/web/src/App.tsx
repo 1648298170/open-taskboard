@@ -243,9 +243,8 @@ export default function App() {
   const refresh = useCallback(async (pid = projectId) => {
     if (!pid) return;
     try {
-      const [list, prog, edges] = await Promise.all([
-        api_.listIssues(pid), api_.progress(pid), api_.listDependencies(pid)
-      ]);
+      // 聚合接口：issues+progress+dependencies 一次返回（同快照，3 请求 → 1）。
+      const { issues: list, progress: prog, dependencies: edges } = await api_.board(pid);
       // T6-35: 粗粒度变更检测 —— ids+versions 签名与上次不同且页面隐藏时发桌面通知。
       const sig = list.map(i => `${i.id}@${i.version}`).join(',');
       const prev = lastSigRef.current;

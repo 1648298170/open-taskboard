@@ -117,6 +117,22 @@ const issuesRoutes: FastifyPluginAsync<{ store: Store; config: TaskboardServerCo
     return store.projectProgress(req.params.projectId);
   });
 
+  // Board aggregate: the web client always fetches issues+progress+dependencies
+  // together, so one round trip keeps them snapshot-consistent and cuts the
+  // per-refresh request count from three to one. Per-issue detail is NOT part
+  // of this payload (different lifecycle, comments/activities would bloat it).
+  app.get('/api/projects/:projectId/board', async (req: FastifyRequest<{ Params: ProjectParams }>, reply) => {
+    const { projectId } = req.params;
+    if (!store.getProject(projectId)) {
+      return reply.code(404).send({ error: `project not found: ${projectId}` });
+    }
+    return {
+      issues: store.listIssues(projectId),
+      progress: store.projectProgress(projectId),
+      dependencies: store.projectDependencies(projectId)
+    };
+  });
+
   app.get('/api/issues/:id', async (req: FastifyRequest<{ Params: IssueParams }>, reply) => {
     const issue = store.getIssue(req.params.id);
     if (!issue) return reply.code(404).send({ error: `issue not found: ${req.params.id}` });
