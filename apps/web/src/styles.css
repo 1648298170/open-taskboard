@@ -372,6 +372,7 @@ input[type="date"] { font-size: 11.5px; padding: 3px 6px; }
 }
 @keyframes drawer-in { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }
 .drawer-head { display: flex; justify-content: space-between; align-items: center; }
+.drawer-head-id { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .issue-id { color: var(--accent); font-size: 12px; }
 .drawer h2 { font-size: 17px; margin: 8px 0; outline: none; }
 .drawer h2:focus { border-bottom: 1px dashed var(--accent-dim); }

@@ -5,7 +5,7 @@ import { Markdown } from '../markdown';
 import { confirmDialog, promptDialog } from './dialogs';
 import { fmtHMLocal, fmtWhenLocal } from '../logic/time';
 import { applyMentionAt, detectMentionAt, mentionCandidatesFor, MentionCandidate, nextHi } from '../logic/mention';
-import { Pencil, Plus, Sparkles, UserRound, X } from 'lucide-react';
+import { Copy, Pencil, Plus, Sparkles, UserRound, X } from 'lucide-react';
 import { WAKE_PREFIX } from '@taskboard/core/types';
 
 const fmtWhen = fmtWhenLocal;
@@ -99,6 +99,16 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
   // T6-36: 最近提交预览。null = 加载中/不可用。
   const [commits, setCommits] = useState<Commit[] | null>(null);
 
+  // 一键复制任务 ID（粘贴到 CLI / MCP 时直接用原始 id）。
+  const copyIssueId = async (id: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(id);
+      onToast(`已复制任务 ID：${id}`);
+    } catch {
+      onToast('✗ 复制失败，请手动选择复制');
+    }
+  };
+
   const load = async (): Promise<void> => {
     try {
       setDetail(await api_.showIssue(issueId));
@@ -128,7 +138,11 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
   // React 复用元素不重挂，杜绝 drawer-in 动画重播造成的闪烁。
   const head = (
     <div className="drawer-head">
-      <span className="issue-id">#{issueId}{detail ? ` · v${detail.version}` : ' · 加载中'}</span>
+      <div className="drawer-head-id">
+        <span className="issue-id">#{issueId}{detail ? ` · v${detail.version}` : ' · 加载中'}</span>
+        <button className="icon-btn" title="复制任务 ID" aria-label="复制任务 ID"
+          onClick={() => void copyIssueId(issueId)}><Copy size={13} /></button>
+      </div>
       <button className="icon-btn" onClick={onClose}><X size={16} /></button>
     </div>
   );
@@ -170,7 +184,11 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
       <div className="drawer-backdrop" onClick={onClose} />
       <aside className="drawer">
       <div className="drawer-head">
-        <span className="issue-id">#{detail.id} · v{detail.version}</span>
+        <div className="drawer-head-id">
+          <span className="issue-id">#{detail.id} · v{detail.version}</span>
+          <button className="icon-btn" title="复制任务 ID" aria-label="复制任务 ID"
+            onClick={() => void copyIssueId(detail.id)}><Copy size={13} /></button>
+        </div>
         <button className="icon-btn" onClick={onClose}><X size={16} /></button>
       </div>
 
