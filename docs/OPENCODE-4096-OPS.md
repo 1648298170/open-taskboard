@@ -485,3 +485,17 @@ ps -o pid,ppid,lstart,command -p "$(lsof -t -iTCP:4096 -sTCP:LISTEN)"
 清：  PID 死了端口还在 → 清孤儿进程树 → 复查 → 仍不行才重启机器
 别杀：没有 serve 参数的 opencode.exe（那是你的 TUI）
 ```
+
+---
+
+## 9. Windows：禁止强杀 opencode（幽灵端口）
+
+**结论：不要用 `taskkill /F` / `Stop-Process -Force` 杀 opencode。** 强杀会在内核里留下 LISTENING 幽灵句柄（属主 PID 已死、端口无法重新绑定、健康检查 000），只有重启 Windows 才能清除。上游已报：https://github.com/anomalyco/opencode/issues/57723
+
+需要重启 opencode 时：
+
+1. 优先解除自启 → **重启电脑**（Startup 会以 `serve --hostname 0.0.0.0 --port <N>` 自动拉起，且清掉任何幽灵）
+2. 若已出现 `ServeError` + `netstat` 显示死 PID 占着端口：直接重启电脑，不要在旧端口上反复尝试
+3. 不要用「换端口」绕开——会引入 PUBLIC_URL / compose / 自启模板的多处配置漂移
+
+**判断幽灵的方法**：`netstat -ano | findstr :4096` 显示 LISTENING，但 `Get-Process -Id <pid>` 查无此进程；`/global/health` 返回 000。
