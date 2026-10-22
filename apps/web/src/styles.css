@@ -2557,3 +2557,26 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 
 /* 聊天式评论：头行元信息（时间/ID）弱化展示 */
 .comment-head .when, .comment-head .cid { color: var(--ink-dim); font-size: 11px; }
+
+/* 唤醒队列中心面板（v10 Q4） */
+.wake-queue-panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 100vw); z-index: 18; background: var(--bg-panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; box-shadow: -14px 0 36px rgb(0 0 0 / 38%); }
+.wake-queue-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.wake-queue-title { font-weight: 600; }
+.wake-queue-counts { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 16px; font-size: 12px; color: var(--ink-dim); border-bottom: 1px solid var(--line); }
+.wake-queue-count strong { color: var(--ink); }
+.wake-queue-tabs { display: flex; gap: 4px; padding: 8px 16px; border-bottom: 1px solid var(--line); align-items: center; }
+.wake-queue-tab { padding: 4px 10px; font-size: 12px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--ink-dim); cursor: pointer; }
+.wake-queue-tab.on { color: var(--ink); border-color: var(--ink-dim); }
+.wake-queue-refresh { margin-left: auto; }
+.wake-queue-error { color: var(--danger, #e5484d); padding: 8px 16px; font-size: 12px; }
+.wake-queue-list { flex: 1; overflow-y: auto; list-style: none; padding: 8px 16px; }
+.wake-queue-empty { color: var(--ink-dim); font-size: 13px; }
+.wake-queue-item { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
+.wake-queue-item-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.wake-queue-pri { font-size: 10px; padding: 1px 4px; border-radius: 3px; background: var(--danger, #e5484d); color: #fff; }
+.wake-queue-issue-link { background: none; border: none; color: var(--ink); cursor: pointer; font-size: 13px; padding: 0; text-align: left; }
+.wake-queue-body { font-size: 12px; color: var(--ink-dim); margin: 4px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wake-queue-meta { display: flex; gap: 8px; font-size: 11px; color: var(--ink-dim); margin: 4px 0; }
+.wake-queue-err { color: var(--danger, #e5484d); }
+.wake-queue-btn { position: relative; }
+.wake-queue-badge { position: absolute; top: -4px; right: -4px; font-size: 9px; min-width: 14px; height: 14px; line-height: 14px; text-align: center; border-radius: 7px; background: var(--danger, #e5484d); color: #fff; }

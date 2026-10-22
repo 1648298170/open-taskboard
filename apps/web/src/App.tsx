@@ -6,8 +6,9 @@ import { moveWithRetry, pickMovableChildren } from './logic/groupMove';
 import { shouldSkipRefresh } from './logic/mutationDedupe';
 import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
-import { AppWindow, Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings, LogOut, RefreshCw } from 'lucide-react';
+import { AppWindow, Bell, ChartColumn, GanttChart, Keyboard, Link, ListOrdered, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings, LogOut, RefreshCw } from 'lucide-react';
 import { Drawer } from './components/Drawer';
+import { WakeQueuePanel } from './components/WakeQueuePanel';
 import { SessionPanel } from './components/SessionPanel';
 import { DirectoryPickerDialog } from './components/DirectoryPickerDialog';
 import { ProjectSessionDialog } from './components/ProjectSessionDialog';
@@ -102,6 +103,8 @@ export default function App() {
   const [stats, setStats] = useState<Stats | null>(null);
   // T7-37: 时间线视图开关（打开时替代看板主体渲染）。
   const [timelineOpen, setTimelineOpen] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [queueCount, setQueueCount] = useState<number | null>(null);
   // v0.4: 项目管理（新建对话框浮层；删除走 prompt 输入 id 确认）。
   const [projCreateOpen, setProjCreateOpen] = useState(false);
   const [projName, setProjName] = useState('');
@@ -834,6 +837,12 @@ export default function App() {
               {/* 会话面板开关（OpenCode 内嵌窗口）。 */}
               <button className={`icon-btn${sessionPanel ? ' on' : ''}`} aria-label="会话窗口" title="OpenCode 会话窗口"
                 onClick={() => void toggleSessionPanel()}><AppWindow size={16} /></button>
+    {/* 唤醒队列入口（v10 Q4） */}
+    <button className={`icon-btn wake-queue-btn${queueOpen ? ' on' : ''}`} aria-label="唤醒队列" title="唤醒队列中心"
+    onClick={() => setQueueOpen(o => !o)}>
+      <ListOrdered size={16} />
+      {queueCount !== null && queueCount > 0 && <span className="wake-queue-badge">{queueCount > 99 ? '99+' : queueCount}</span>}
+    </button>
               {/* v0.4: 快捷键帮助（? 键同效）。 */}
               <button className={`icon-btn${helpOpen ? ' on' : ''}`} aria-label="快捷键帮助" title="快捷键帮助（?）"
                 onClick={() => setHelpOpen(o => !o)}><Keyboard size={16} /></button>
@@ -968,6 +977,10 @@ export default function App() {
         </div>
       </div>
 
+      {queueOpen && (
+        <WakeQueuePanel open={queueOpen} onClose={() => setQueueOpen(false)}
+          onOpenIssue={(id: string) => { setOpenId(id); }} />
+      )}
       {openId && (
         <Drawer issueId={openId} projectId={projectId} refreshKey={detailRefreshKey}
           commentAuthor={currentUsername ?? 'web'}
