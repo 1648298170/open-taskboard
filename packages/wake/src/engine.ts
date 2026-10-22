@@ -28,7 +28,7 @@ import {
 /** The Store slice the engine depends on (the facade itself satisfies it). */
 export type WakeStore = Pick<
   Store,
-  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listPendingWakeComments' | 'recordExecutionEvent' | 'subscribe'
+  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listQueueBatch' | 'queueMeta' | 'requeueWake' | 'recordExecutionEvent' | 'subscribe'
 >;
 
 /** Narrow child-process surface so tests can inject a deterministic spawn. */
@@ -509,7 +509,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     if (!running) return;
     let found = 0;
     try {
-      for (const comment of store.listPendingWakeComments()) {
+      for (const comment of store.listQueueBatch(new Date().toISOString())) {
         if (!isWakeComment(comment.body, config.prefix)) continue;
         if (isIgnoredAuthor(comment.author, config.ignoreAuthors)) continue;
         if (!wantsProject(config.projectFilter, comment.projectId)) continue;

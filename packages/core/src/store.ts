@@ -778,6 +778,29 @@ export class Store {
     return this.comments.listPending();
   }
 
+  /**
+   * 队列批次（v22）：pending 且已到 not_before 的评论，FIFO（queued_at → created_at
+   * → rowid）。引擎的启动/轮询 sweep 用这个而不是全量 pending：退避中的评论
+   * 不会被提前重投，队列顺序由 queued_at 决定。
+   */
+  listQueueBatch(nowIso: string): PendingWakeComment[] {
+    return this.comments.listQueueBatch(nowIso);
+  }
+
+  /** 队列元数据：attempts / last_error / not_before / queued_at（不存在返回 null）。 */
+  queueMeta(commentId: string): { attempts: number; lastError: string; notBefore: string | null; queuedAt: string | null } | null {
+    return this.comments.queueMeta(commentId);
+  }
+
+  /**
+   * 投递失败的退避回收：CAS（processing + 认领令牌）→ pending，attempts+1 并记录
+   * 错误与下次可投时间。令牌失效说明别的尝试已接管，返回 false。
+   */
+  requeueWake(commentId: string, claimToken: string, error: string, notBeforeIso: string): boolean {
+    if (!claimToken) return false;
+    return this.comments.requeue(commentId, claimToken, error, notBeforeIso);
+  }
+
   // ---- activities: latest first, capped by the repo (default 50) ----
   listActivities(issueId: string): Activity[] {
     return this.activities.listByIssue(issueId);

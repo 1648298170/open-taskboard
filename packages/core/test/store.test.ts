@@ -1842,3 +1842,43 @@ describe('agent identity auto-fill (assignee/startDate)', () => {
     assert.equal(moved.assignee, '', 'assignee stays agent-owned');
   });
 });
+
+describe('wake queue primitives (v22)', () => {
+  it('lists pending wake comments FIFO by queued_at and defers not_before items', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new Store('.unused', db);
+    const project = store.createProject({ id: 'p1', name: 'P' });
+    const issueId = store.createIssue({ projectId: project.id, title: 'T' }).id;
+    const first = store.addComment(issueId, { author: 'web', body: '@agent first' }).id;
+    const second = store.addComment(issueId, { author: 'web', body: '@agent second' }).id;
+    // 控制 FIFO：second 的 queued_at 早于 first
+    db.prepare("UPDATE comments SET queued_at = '2026-01-01T00:00:00.000Z' WHERE id = ?").run(second);
+    db.prepare("UPDATE comments SET queued_at = '2026-01-02T00:00:00.000Z' WHERE id = ?").run(first);
+    const now = '2026-06-01T00:00:00.000Z';
+    assert.deepEqual(store.listQueueBatch(now).map(c => c.id), [second, first]);
+    // 退避中的评论不进入批次，到期后回到批次
+    db.prepare("UPDATE comments SET not_before = '2099-01-01T00:00:00.000Z' WHERE id = ?").run(second);
+    assert.deepEqual(store.listQueueBatch(now).map(c => c.id), [first]);
+    db.prepare("UPDATE comments SET not_before = '2026-05-01T00:00:00.000Z' WHERE id = ?").run(second);
+    assert.deepEqual(store.listQueueBatch(now).map(c => c.id), [second, first]);
+  });
+
+  it('requeueWake is CAS-guarded, bumps attempts and records the error', () => {
+    const { store } = fresh();
+    const project = store.createProject({ id: 'p1', name: 'P' });
+    const issueId = store.createIssue({ projectId: project.id, title: 'T' }).id;
+    const commentId = store.addComment(issueId, { author: 'web', body: '@agent x' }).id;
+    const token = store.claimWake(commentId, 'watch');
+    assert.ok(token, 'claim must succeed for a pending comment');
+    // 错误令牌不能改状态（ABA 防护）。
+    assert.equal(store.requeueWake(commentId, 'watch:stale', 'boom', '2099-01-01T00:00:00.000Z'), false);
+    assert.equal(store.getComment(commentId)!.status, 'processing');
+    // 正确令牌：回退 pending + attempts+1 + 记录错误与下次可投时间。
+    assert.equal(store.requeueWake(commentId, token, 'boom', '2099-01-01T00:00:00.000Z'), true);
+    const meta = store.queueMeta(commentId)!;
+    assert.equal(meta.attempts, 1);
+    assert.equal(meta.lastError, 'boom');
+    assert.equal(meta.notBefore, '2099-01-01T00:00:00.000Z');
+    assert.equal(store.getComment(commentId)!.status, 'pending');
+  });
+});

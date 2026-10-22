@@ -369,6 +369,24 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       db.exec("ALTER TABLE comments ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''");
       db.exec('UPDATE comments SET updated_at = created_at');
     }
+  },
+  // v22: wake queue bookkeeping — FIFO order (queued_at), retry backoff
+  // (attempts/last_error/not_before) and crash recovery (stale processing
+  // reclaim by claim owner). queued_at backfills from created_at.
+  (db: DatabaseSync) => {
+    if (!hasColumn(db, 'comments', 'attempts')) {
+      db.exec('ALTER TABLE comments ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!hasColumn(db, 'comments', 'last_error')) {
+      db.exec("ALTER TABLE comments ADD COLUMN last_error TEXT NOT NULL DEFAULT ''");
+    }
+    if (!hasColumn(db, 'comments', 'not_before')) {
+      db.exec('ALTER TABLE comments ADD COLUMN not_before TEXT');
+    }
+    if (!hasColumn(db, 'comments', 'queued_at')) {
+      db.exec('ALTER TABLE comments ADD COLUMN queued_at TEXT');
+      db.exec('UPDATE comments SET queued_at = created_at WHERE queued_at IS NULL');
+    }
   }
 ];
 

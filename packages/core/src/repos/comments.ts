@@ -23,7 +23,7 @@ export class CommentRepo {
   }
 
   get(id: string): Comment | null {
-    // node:sqlite returns undefined for a missing row — normalize to the
+    // node:sqlite returns undefined for a missing row 鈥?normalize to the
     // declared null so callers can rely on the contract.
     return (this.db.prepare(`SELECT ${COMMENT_COLS} FROM comments WHERE id = ?`).get(id) ?? null) as unknown as Comment | null;
   }
@@ -50,7 +50,7 @@ export class CommentRepo {
   }
 
   /**
-   * Atomic pending → processing claim. Returns a fresh per-attempt token, or
+   * Atomic pending 鈫?processing claim. Returns a fresh per-attempt token, or
    * null when the row was not pending. The token is stored in claimed_by: that
    * column is the CAS guard for release(), so a stale attempt can never revert
    * a newer claim (ABA-safe).
@@ -94,11 +94,40 @@ export class CommentRepo {
     return this.db.prepare(`SELECT ${COMMENT_COLS} FROM comments WHERE issue_id = ? ORDER BY created_at, rowid`).all(issueId) as unknown as Comment[];
   }
 
-  // Deletes one comment and touches the parent issue's updated_at — the exact
+  // Deletes one comment and touches the parent issue's updated_at 鈥?the exact
   // mirror of add(). Caller wraps this in a transaction and owns FTS cleanup,
   // activity and events.
   delete(id: string, issueId: string): void {
     this.db.prepare('DELETE FROM comments WHERE id = ?').run(id);
     this.db.prepare('UPDATE issues SET updated_at = ? WHERE id = ?').run(now(), issueId);
+  }
+
+  /** 闃熷垪鎵规锛歱ending 涓斿凡鍒?not_before 鐨勫敜閱掕瘎璁猴紝FIFO锛坬ueued_at 鈫?created_at 鈫?rowid锛夈€?*/
+  listQueueBatch(nowIso: string): PendingWakeComment[] {
+    return this.db.prepare(
+      `SELECT c.id, c.issue_id AS issueId, i.project_id AS projectId, i.title AS issueTitle,
+              c.author, c.body, c.status, c.created_at AS createdAt
+       FROM comments c JOIN issues i ON i.id = c.issue_id
+       WHERE c.status = 'pending' AND (c.not_before IS NULL OR c.not_before <= ?)
+       ORDER BY COALESCE(c.queued_at, c.created_at), c.rowid`
+    ).all(nowIso) as unknown as PendingWakeComment[];
+  }
+
+  /** 闃熷垪鍏冩暟鎹紙attempts / last_error / not_before / queued_at锛夈€?*/
+  queueMeta(id: string): { attempts: number; lastError: string; notBefore: string | null; queuedAt: string | null } | null {
+    return this.db.prepare(
+      'SELECT attempts, last_error AS lastError, not_before AS notBefore, queued_at AS queuedAt FROM comments WHERE id = ?'
+    ).get(id) as { attempts: number; lastError: string; notBefore: string | null; queuedAt: string | null } | null;
+  }
+
+  /** 鎶曢€掑け璐ョ殑閫€閬垮洖鏀讹細CAS锛坧rocessing + 璁ら浠ょ墝锛夆啋 pending锛宎ttempts+1 骞惰褰曢敊璇笌涓嬫鍙姇鏃堕棿銆?*/
+  requeue(id: string, claimToken: string, error: string, notBeforeIso: string): boolean {
+    const result = this.db.prepare(
+      `UPDATE comments
+       SET status = 'pending', attempts = attempts + 1, last_error = ?,
+           not_before = ?, claimed_by = '', updated_at = ?
+       WHERE id = ? AND status = 'processing' AND claimed_by = ?`
+    ).run(error, notBeforeIso, now(), id, claimToken);
+    return result.changes > 0;
   }
 }
