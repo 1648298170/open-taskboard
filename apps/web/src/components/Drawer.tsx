@@ -24,7 +24,7 @@ const humanSize = (bytes: number): string =>
 // 规则同源；taskboard watch --on 可改运行时前缀，此处只反映默认值）。
 const MENTION_CANDIDATES: MentionCandidate[] = [{ value: WAKE_PREFIX, label: '唤醒 agent 干活（主进程忙时排队：收尾当前任务后接手 · Enter 选择）' }];
 
-export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onChanged, onToast, onOpenIssue, issues, commentAuthor }: {
+export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onChanged, onToast, onOpenIssue, issues, commentAuthor, onOpenSession }: {
   issueId: string;
   commentAuthor: string;
   /** Incremented by the app-level SSE handler to refresh live execution history. */
@@ -38,6 +38,8 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
   onOpenIssue: (id: string) => void;
   /** 项目全量任务（未过滤），用于依赖行的状态/标题解析 */
   issues: Issue[];
+  /** 打开内嵌会话面板（App 层持有面板状态） */
+  onOpenSession: (url: string, sessionId: string | null, title: string) => void;
 }) {
   const [detail, setDetail] = useState<IssueDetail | null>(null);
   const [desc, setDesc] = useState('');
@@ -284,7 +286,7 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
               }}>归档</button>
             )}
           {detail.sessionUrl && (
-            <a className="btn tiny" href={detail.sessionUrl} target="oc-session" rel="noreferrer">打开会话</a>
+            <button className="btn tiny" onClick={() => onOpenSession(detail.sessionUrl, detail.sessionId, detail.title)}>打开会话</button>
           )}
           {detail.status !== 'done' && (
             <button className="btn tiny detail-wake-action"
@@ -292,13 +294,9 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                 ? `唤醒 agent：继续绑定会话 ${detail.sessionId}`
                 : '唤醒 agent：按项目路由发送或创建新会话'}
               onClick={async () => {
-                // Open the session tab FIRST, inside the user gesture: the named
-                // context 'oc-session' is reused/focused when already open, and
-                // doing it before any await avoids popup-blocker heuristics.
-                let sessionTab: Window | null = null;
+                // 内嵌会话面板由 App 层持有；这里只负责把面板打开（唤醒评论随后入队）。
                 if (detail.sessionUrl) {
-                  sessionTab = window.open(detail.sessionUrl, 'oc-session');
-                  if (!sessionTab) onToast('⚠ 浏览器拦截了会话窗口，请点击「打开会话」');
+                  onOpenSession(detail.sessionUrl, detail.sessionId, detail.title);
                 }
                 try {
                   const created = await api_.addComment(detail.id, `${WAKE_PREFIX} 认领此任务并编排（拆解子任务、排依赖）`);

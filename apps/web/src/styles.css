@@ -2448,3 +2448,52 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   .detail-property-list { grid-template-columns: 1fr; }
   .detail-fact-row { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; }
 }
+
+/* ---- 内嵌 OpenCode 会话面板（替代命名 tab 方案） ---- */
+.session-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 70;
+  width: min(920px, 92vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--line);
+  box-shadow: -14px 0 36px rgb(0 0 0 / 38%);
+  animation: session-panel-in .22s ease both;
+}
+@keyframes session-panel-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.session-panel-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.session-panel-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+}
+.session-panel-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.session-panel-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: var(--bg-deep);
+}
+@media (max-width: 900px) {
+  .session-panel { width: 100vw; }
+}

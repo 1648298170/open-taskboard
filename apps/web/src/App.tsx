@@ -8,6 +8,7 @@ import { confirmDialog, promptDialog } from './components/dialogs';
 import { Select } from './components/Select';
 import { Bell, ChartColumn, GanttChart, Keyboard, Link, Moon, Pencil, Plus, Sun, Trash2, X, Folder, FolderOpen, ChevronDown, ChevronRight, MoreHorizontal, Settings, LogOut, RefreshCw } from 'lucide-react';
 import { Drawer } from './components/Drawer';
+import { SessionPanel } from './components/SessionPanel';
 import { DirectoryPickerDialog } from './components/DirectoryPickerDialog';
 import { ProjectSessionDialog } from './components/ProjectSessionDialog';
 import { NewIssueDialog } from './components/NewIssueDialog';
@@ -123,6 +124,8 @@ export default function App() {
   const openIdRef = useRef<string | null>(openId);
   // 短窗口去重基准：本地变更 refresh 与随后的 SSE 重复刷新合并为一次。
   const lastRefreshRef = useRef<{ at: number; pid: string }>({ at: 0, pid: '' });
+  // 内嵌 OpenCode 会话面板（唤醒/打开会话时弹出，替代命名 tab 方案）。
+  const [sessionPanel, setSessionPanel] = useState<{ url: string; sessionId: string | null; title: string } | null>(null);
 
   const isUnauthorized = (err: unknown): boolean => err instanceof ApiError && err.status === 401;
 
@@ -943,7 +946,12 @@ export default function App() {
           onToast={showToast}
           onOpenIssue={openIssue}
           issues={issues}
+          onOpenSession={(url, sessionId, title) => setSessionPanel({ url, sessionId, title })}
           statuses={STATUSES} />
+      )}
+
+      {sessionPanel && (
+        <SessionPanel url={sessionPanel.url} title={sessionPanel.title || 'OpenCode 会话'} onClose={() => setSessionPanel(null)} />
       )}
 
       <NewIssueDialog open={dialogOpen} projectId={projectId!}
