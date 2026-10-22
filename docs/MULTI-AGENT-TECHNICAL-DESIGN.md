@@ -1066,3 +1066,21 @@ pnpm test
 最终要求：**每一项异步执行都有明确身份、持久化状态、执行历史、取消语义、失败处理和恢复策略；每一种 Agent 能力都有证据支撑；每一阶段都有可重复的验收标准。**
 
 这份文档是实施路线与验收基准，不是要求一次性完成全部功能的指令。执行 AI 必须先完成 Phase 0，按阶段推进，并在进入下一阶段前报告真实验证结果和剩余风险。
+
+## 附录：核心调度器实施批次状态（S1–S4）
+
+> 2026-10-22 实施完成。分支 feat/wake-queue-scheduling（S1–S4 全部提交已推送）。
+> 全仓测试 465/465（core 188 / web 52 / wake 63 / server 109 / mcp 21 / cli 32）；build/typecheck 通过。
+
+| 批次 | 交付内容 | 关键不变量 |
+|---|---|---|
+| S1 数据层 | 迁移 v23/v24（comments 轮次/终态/busy/缺席列 + wake_engines + wake_session_leases）；comments 仓库全量 CAS 重写；busy_timeout=5000 | I0/I1/F1–F5 |
+| S1 comments | claim 四重门禁+轮次生成；deferBusy/Unknown/BusyTimeout/resetBusy；terminalize/completeTerminal；absentScan 两步门禁；编辑门禁；queue terminal 门禁 | 轮次绑定/终态不可自动重投 |
+| S1 leases/engines | acquire（held 过期接管/released 新周期，fence+1）/renew/markDispatching/markSent/releaseHeld/conclude/opsRelease；注册表心跳 | fence 行内单调/墓碑不删行/心跳定生死 |
+| S1 引擎 | run_id+注册表心跳；孤儿扫描（死 run/legacy24h + probe=idle + marker 精确轮次核验四态）；结果超时本 run+inFlight 排除；pre-dispatch 判定（I0）；dispatch 生命周期；POST 三分类（2xx/4xx 墓碑+failDelivery/5xx·超时→sent 核验） | I0 发送前持久化 dispatching |
+| S2 探测/busy | parseSessionStatus 纯函数（缺键=idle/畸形=unknown）；busy 两列状态机（COALESCE 开窗/julianday 关窗/负差 clamp/unknown 暂停/崩溃按 updated_at 关窗）；busy 超时 +24h 纯重排 | claim 不动 busy/episode 语义 |
+| S2 终态 | terminal_at 三门禁（queue/claim/onEvent）；达 K 累计缺席→人工终态；延迟确认完成（轮次绑定 CAS）；编辑门禁（保护租约期仅存正文） | terminal 不可自动重投 |
+| S3 并发 | 活跃 dispatching 纯 defer（SQL 层冻结）；重入续期同轮次；fence 行内单调；墓碑不删行；4xx 墓碑化；接管核验（死 run marker 四态）；运维释放守卫（四元组+fence） | 接管先核验/保护保持 |
+| S4 契约 | Comment 公开 terminalAt（五端）；openapi.json 重建 + 落盘一致性测试；OPS §10 受控恢复文案；终态徽章「已停止 · 需人工」 | 优先级不越门禁 |
+
+遗留（后续项目）：963862e4 队列中心与优先执行（Q1–Q5 已编排，门禁 S4-A 已解除）；T-atomic-claim-vs-priority 双连接竞态（依赖 claimNextWake）；跨通道全局串行协调器（明确不做）。
