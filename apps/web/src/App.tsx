@@ -666,7 +666,7 @@ export default function App() {
 
   return (
     <>
-      <div className="shell">
+      <div className={`shell${sessionPanel ? ' shell-with-session' : ''}`}>
         <aside className="sidebar">
           <div className="brand">
             <span className="glyph">▚</span>

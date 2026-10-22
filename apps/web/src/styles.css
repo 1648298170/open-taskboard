@@ -2497,3 +2497,12 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 @media (max-width: 900px) {
   .session-panel { width: 100vw; }
 }
+
+/* 停靠分栏：会话面板打开时主列让位，看板与会话并排可见（弹窗改停靠）。 */
+.shell-with-session .main-col {
+  margin-right: min(920px, 92vw);
+  transition: margin-right .22s ease;
+}
+@media (max-width: 900px) {
+  .shell-with-session .main-col { margin-right: 100vw; }
+}
