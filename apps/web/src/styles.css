@@ -2547,6 +2547,9 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 /* 描述折叠：超长默认限高，底部渐隐提示可展开 */
 .desc-clamped { max-height: 220px; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent); mask-image: linear-gradient(to bottom, #000 78%, transparent); }
 
+/* 评论人工终态徽章：已停止 · 需人工 */
+.comment-status.terminal { color: var(--danger, #e5484d); border-color: color-mix(in srgb, var(--danger, #e5484d) 55%, var(--line)); background: color-mix(in srgb, var(--danger, #e5484d) 8%, transparent); }
+
 /* 单条评论超 8 行折叠：line-clamp 兜住 Markdown 渲染后的视觉行数 */
 .comment-body-clamped { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
 .drawer-more-inline { margin: 2px 0 0; color: var(--ink-dim); }

@@ -3,7 +3,7 @@
   "info": {
     "title": "open-taskboard API",
     "version": "0.3.0",
-    "description": "Local-first task board REST API (Fastify + node:sqlite). Remote/non-loopback binds require one-time administrator setup and browser login using an HttpOnly, SameSite=Strict session cookie. TASKBOARD_TOKEN remains an optional compatibility credential for machine clients; browser users never need to paste a token. Loopback-only development can run without login. When TASKBOARD_READONLY=1, every mutating request (POST/PATCH/DELETE) is rejected with 403 before the handler runs. Writes may record the acting agent via the x-taskboard-actor header. PATCH /api/issues/{id} uses optimistic locking via version."
+    "description": "Local-first task board REST API (Fastify + node:sqlite). Remote/non-loopback binds require one-time administrator setup and browser login using an HttpOnly, SameSite=Strict session cookie. TASKBOARD_TOKEN remains an optional compatibility credential for machine clients; browser users never need to paste a token. Loopback-only development can run without login. When TASKBOARD_READONLY=1, every mutating request (POST/PATCH/DELETE) is rejected with 403 before the handler runs. Writes may record the acting agent via the `x-taskboard-actor` header. Conventions: optimistic locking — PATCH /api/issues/{id} accepts an optional `version`; the MCP update_issue tool requires it."
   },
   "servers": [
     {
@@ -111,7 +111,7 @@
     "/api/auth/setup": {
       "post": {
         "operationId": "initializeAdmin",
-        "summary": "Create the first administrator exactly once and start a session",
+        "summary": "Create the first administrator exactly once and start a browser session",
         "tags": [
           "auth"
         ],
@@ -146,14 +146,15 @@
         },
         "responses": {
           "201": {
-            "description": "Administrator initialized; an HttpOnly session cookie is set",
+            "description": "Administrator created; session cookie set",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "ok": {
-                      "type": "boolean"
+                      "type": "boolean",
+                      "const": true
                     },
                     "username": {
                       "type": "string"
@@ -172,7 +173,7 @@
             "$ref": "#/components/responses/BadRequest"
           },
           "409": {
-            "description": "Administrator already initialized",
+            "description": "Administrator already initialized, or local no-login mode is enabled",
             "content": {
               "application/json": {
                 "schema": {
@@ -180,14 +181,17 @@
                 }
               }
             }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
     "/api/auth/login": {
       "post": {
-        "operationId": "login",
-        "summary": "Authenticate the administrator and set a browser session cookie",
+        "operationId": "loginAdmin",
+        "summary": "Authenticate the administrator and start a browser session",
         "tags": [
           "auth"
         ],
@@ -200,10 +204,14 @@
                 "type": "object",
                 "properties": {
                   "username": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 64
                   },
                   "password": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
                   }
                 },
                 "required": [
@@ -217,14 +225,15 @@
         },
         "responses": {
           "200": {
-            "description": "Logged in; an HttpOnly session cookie is set",
+            "description": "Authenticated; session cookie set",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "ok": {
-                      "type": "boolean"
+                      "type": "boolean",
+                      "const": true
                     },
                     "username": {
                       "type": "string"
@@ -245,8 +254,8 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
-          "429": {
-            "description": "Too many login attempts",
+          "409": {
+            "description": "Administrator has not been initialized",
             "content": {
               "application/json": {
                 "schema": {
@@ -254,13 +263,26 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Too many login attempts from this IP",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
     "/api/auth/logout": {
       "post": {
-        "operationId": "logout",
+        "operationId": "logoutAdmin",
         "summary": "Invalidate the current browser session",
         "tags": [
           "auth"
@@ -268,14 +290,15 @@
         "security": [],
         "responses": {
           "200": {
-            "description": "Logged out and session cookie cleared",
+            "description": "Session invalidated and cookie cleared",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "ok": {
-                      "type": "boolean"
+                      "type": "boolean",
+                      "const": true
                     }
                   },
                   "required": [
@@ -635,7 +658,7 @@
       ],
       "patch": {
         "operationId": "updateDirectory",
-        "summary": "Update directory settings and optionally synchronize existing projects",
+        "summary": "Update the Directory route inherited by every Project",
         "tags": [
           "directories"
         ],
@@ -722,6 +745,58 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/directories/{directoryId}/opencode-status": {
+      "summary": "Read OpenCode server and Project Session runtime status for a Directory",
+      "parameters": [
+        {
+          "name": "directoryId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getDirectoryOpenCodeStatus",
+        "summary": "Read the configured Server status and live runtime state of each Project default Session",
+        "tags": [
+          "directories"
+        ],
+        "responses": {
+          "200": {
+            "description": "Directory OpenCode status and per-Project Session state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "OpenCode server unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -879,7 +954,7 @@
       },
       "post": {
         "operationId": "createProject",
-        "summary": "Create a project; when a default Session is supplied, its actual directory is validated against workspacePath",
+        "summary": "Create a project under a Directory; its default Session is validated against the Directory workspace and server",
         "tags": [
           "projects"
         ],
@@ -1544,6 +1619,65 @@
         }
       }
     },
+    "/api/projects/{projectId}/board": {
+      "summary": "Board aggregate (issues + progress + dependencies)",
+      "get": {
+        "operationId": "getBoard",
+        "summary": "One snapshot of everything the board view needs",
+        "description": "Issues, progress counters and dependency edges in a single snapshot. The per-issue detail (comments/activities/attachments) is intentionally NOT included.",
+        "tags": [
+          "issues"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Board snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "issues": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Issue"
+                      }
+                    },
+                    "progress": {
+                      "$ref": "#/components/schemas/Progress"
+                    },
+                    "dependencies": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DependencyEdge"
+                      }
+                    }
+                  },
+                  "required": [
+                    "issues",
+                    "progress",
+                    "dependencies"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
     "/api/projects/{projectId}/dependencies": {
       "summary": "Project dependency edge list",
       "get": {
@@ -1720,7 +1854,7 @@
       "patch": {
         "operationId": "updateIssue",
         "summary": "Patch an issue (optimistic lock via optional version)",
-        "description": "Send the `version` from your last read to guard against concurrent overwrites — a mismatch → 409. For every actual status change by an agent, include `statusNote` with reason, verification evidence and unchecked items; status and comment are committed atomically. Web actions may omit the note and receive an explicit automatic audit comment.",
+        "description": "Send the `version` from your last read to guard against concurrent overwrites — a mismatch → 409 with a re-read-and-retry message. REST keeps version optional (the MCP tool requires it).",
         "tags": [
           "issues"
         ],
@@ -2584,6 +2718,52 @@
         }
       }
     },
+    "/api/attachments/{attachmentId}": {
+      "summary": "Delete one attachment",
+      "delete": {
+        "operationId": "deleteAttachment",
+        "summary": "删除一个附件（行+磁盘文件）",
+        "description": "Removes the sqlite metadata row and the on-disk body in one logical delete; the 'attachment-removed' activity is logged and boards refresh via issue.updated. An unknown attachment id → 404; a missing body file never blocks the row delete.",
+        "tags": [
+          "attachments"
+        ],
+        "parameters": [
+          {
+            "name": "attachmentId",
+            "in": "path",
+            "required": true,
+            "description": "Attachment id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ok"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
     "/api/attachments/{attachmentId}/download": {
       "summary": "Download one attachment body",
       "get": {
@@ -2733,238 +2913,6 @@
           }
         }
       }
-    },
-    "/api/issues/{id}/create-worktree": {
-      "summary": "Create and bind an isolated Git worktree for a task",
-      "post": {
-        "tags": [
-          "Issues"
-        ],
-        "summary": "Create task branch and worktree",
-        "description": "Creates a dedicated branch and worktree for the task. Rejects conflicts and active task leases. Clears any prior Session binding because a Session rooted in the project's main checkout must not be reused from the new worktree; create a new Session in the bound worktree.",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "Worktree created and bound",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "issue": {
-                      "$ref": "#/components/schemas/Issue"
-                    },
-                    "branch": {
-                      "type": "string"
-                    },
-                    "worktree": {
-                      "type": "string"
-                    },
-                    "worktreePath": {
-                      "type": "string"
-                    },
-                    "alreadyBound": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "issue",
-                    "branch",
-                    "worktree",
-                    "worktreePath",
-                    "alreadyBound"
-                  ]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Project workspace missing or is not a Git repository"
-          },
-          "404": {
-            "description": "Task or project not found"
-          },
-          "409": {
-            "description": "Branch/path collision or task already has a Git binding"
-          },
-          "500": {
-            "description": "Worktree created but binding persistence failed; response includes the path for recovery"
-          },
-          "502": {
-            "description": "Git failed to create the worktree"
-          }
-        }
-      }
-    },
-    "/api/issues/{id}/agent-events": {
-      "summary": "Record Agent execution outcomes",
-      "post": {
-        "tags": [
-          "Issues"
-        ],
-        "summary": "Append an Agent execution event",
-        "description": "Used by the watch process to persist dispatch, retry, success, and failure events. For bound OpenCode sessions, running/idle are observational session-level states. The watcher correlates a unique marker in the injected user message with a subsequent Assistant reply; only a correlated reply followed by Session idle is reported as succeeded. Idle by itself is never proof of task completion.",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "outcome": {
-                    "type": "string",
-                    "enum": [
-                      "started",
-                      "queued",
-                      "running",
-                      "idle",
-                      "retrying",
-                      "succeeded",
-                      "failed"
-                    ]
-                  },
-                  "detail": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 2000
-                  }
-                },
-                "required": [
-                  "outcome",
-                  "detail"
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Execution event saved",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Activity"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid event payload"
-          },
-          "404": {
-            "description": "Task not found"
-          }
-        }
-      }
-    },
-    "/api/issues/{id}/git-binding": {
-      "summary": "Release task Git binding without deleting local resources",
-      "delete": {
-        "tags": [
-          "Issues"
-        ],
-        "summary": "Unbind branch/worktree metadata",
-        "description": "Clears the task's branch, worktree name and absolute path. Does not delete local Git branches or worktree directories. Rejected while the task has an active claim lease.",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Git binding cleared",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Issue"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Task not found"
-          },
-          "409": {
-            "description": "Task has an active execution lease"
-          }
-        }
-      }
-    },
-    "/api/directories/{directoryId}/opencode-status": {
-      "summary": "Read OpenCode server and Project Session runtime status for a Directory",
-      "parameters": [
-        {
-          "name": "directoryId",
-          "in": "path",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "get": {
-        "operationId": "getDirectoryOpenCodeStatus",
-        "summary": "Read the configured Server status and live runtime state of each Project default Session",
-        "tags": [
-          "directories"
-        ],
-        "responses": {
-          "200": {
-            "description": "Directory OpenCode status and per-Project Session state",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          },
-          "502": {
-            "description": "OpenCode server unavailable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -3023,7 +2971,7 @@
       },
       "WorkspaceDirectory": {
         "type": "object",
-        "description": "Workspace directory grouping for projects",
+        "description": "Single source of truth for filesystem workspace and OpenCode Server URL inherited by every Project in this Directory",
         "properties": {
           "id": {
             "type": "string"
@@ -3034,11 +2982,11 @@
           },
           "workspacePath": {
             "type": "string",
-            "description": "Default filesystem workspace path inherited by new projects"
+            "description": "Filesystem workspace inherited by all Projects in this Directory"
           },
           "serverUrl": {
             "type": "string",
-            "description": "Default OpenCode Server URL inherited by new projects"
+            "description": "OpenCode Server URL inherited by all Projects in this Directory"
           },
           "createdAt": {
             "type": "string",
@@ -3056,7 +3004,7 @@
       },
       "Project": {
         "type": "object",
-        "description": "A board project whose workspacePath and wakeChannel are computed from its owning Directory",
+        "description": "A board project",
         "properties": {
           "id": {
             "type": "string",
@@ -3205,43 +3153,6 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
-          },
-          "worktreePath": {
-            "type": "string",
-            "description": "Absolute path of the bound git worktree; empty string = unresolved/unbound"
-          },
-          "startedAt": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time",
-            "description": "Actual first-start timestamp; generated by task status transitions"
-          },
-          "completedAt": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time",
-            "description": "Actual completion timestamp; cleared when a completed task is reopened"
-          },
-          "acceptanceCriteria": {
-            "type": "string",
-            "description": "Markdown definition of done and acceptance checklist"
-          },
-          "reviewStatus": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "approved",
-              "changes_requested"
-            ],
-            "description": "Human review outcome, independent from workflow status"
-          },
-          "reviewNotes": {
-            "type": "string",
-            "description": "Reviewer notes and acceptance evidence"
           }
         },
         "required": [
@@ -3277,6 +3188,13 @@
           {
             "type": "object",
             "properties": {
+              "sessionUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "浏览器可访问的 OpenCode 会话页地址；未配置 PUBLIC_URL 或未绑定 Session 时为 null"
+              },
               "children": {
                 "type": "array",
                 "items": {
@@ -3319,6 +3237,7 @@
               }
             },
             "required": [
+              "sessionUrl",
               "children",
               "comments",
               "activities",
@@ -3348,6 +3267,28 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "attempts": {
+            "type": "integer",
+            "description": "队列重试计数（人工重新唤醒会清零）"
+          },
+          "lastError": {
+            "type": "string",
+            "description": "最近一次投递失败/超时原因；空字符串表示无错误"
+          },
+          "notBefore": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "退避到期时间；null 表示立即可投"
+          },
+          "terminalAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "人工终态时间；非空 = 已转人工确认，不再自动投递"
           }
         },
         "required": [
@@ -3355,7 +3296,11 @@
           "issueId",
           "author",
           "body",
-          "createdAt"
+          "createdAt",
+          "attempts",
+          "lastError",
+          "notBefore",
+          "terminalAt"
         ],
         "additionalProperties": false
       },
@@ -3716,7 +3661,7 @@
       },
       "PatchDirectoryRequest": {
         "type": "object",
-        "description": "PATCH /api/directories/{directoryId} body (strict); the route updates all Projects in the Directory",
+        "description": "PATCH /api/directories/{directoryId} body (strict)",
         "properties": {
           "name": {
             "type": "string",
@@ -3804,6 +3749,12 @@
             "type": "string",
             "minLength": 1
           },
+          "defaultSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "labels": {
             "type": "string",
             "description": "Comma-separated project labels"
@@ -3811,12 +3762,6 @@
           "sessionId": {
             "type": "string",
             "description": "Compatibility alias for defaultSessionId; empty string clears it"
-          },
-          "defaultSessionId": {
-            "type": [
-              "string",
-              "null"
-            ]
           }
         },
         "additionalProperties": false
@@ -3886,30 +3831,6 @@
           "confirm": {
             "type": "boolean",
             "description": "T7-36 escape hatch: with TASKBOARD_HUMAN_DONE=1, an agent may create an issue directly at done after the user confirmed in conversation"
-          },
-          "worktreePath": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 2000,
-            "description": "Absolute path of the bound git worktree; null clears the binding"
-          },
-          "acceptanceCriteria": {
-            "type": "string",
-            "maxLength": 20000
-          },
-          "reviewStatus": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "approved",
-              "changes_requested"
-            ]
-          },
-          "reviewNotes": {
-            "type": "string",
-            "maxLength": 20000
           }
         },
         "required": [
@@ -3919,7 +3840,7 @@
       },
       "UpdateIssueRequest": {
         "type": "object",
-        "description": "PATCH /api/issues/{id} body — all fields optional, version optional on REST (strict); every actual non-web status transition must include statusNote; the status update and audit comment are committed atomically. Web status changes without a note receive an automatic labelled audit comment.",
+        "description": "PATCH /api/issues/{id} body — all fields optional, version optional on REST (strict)",
         "properties": {
           "title": {
             "type": "string",
@@ -3987,36 +3908,6 @@
           "confirm": {
             "type": "boolean",
             "description": "T7-36 escape hatch: with TASKBOARD_HUMAN_DONE=1, an agent may set done after the user confirmed in conversation"
-          },
-          "statusNote": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 10000,
-            "description": "Required for an actual agent status transition. Explain reason, verification evidence, and unchecked items; saved as a comment in the same transaction as the status update."
-          },
-          "worktreePath": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 2000,
-            "description": "Absolute path of the bound git worktree; null clears the binding"
-          },
-          "acceptanceCriteria": {
-            "type": "string",
-            "maxLength": 20000
-          },
-          "reviewStatus": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "approved",
-              "changes_requested"
-            ]
-          },
-          "reviewNotes": {
-            "type": "string",
-            "maxLength": 20000
           }
         },
         "additionalProperties": false
@@ -4144,7 +4035,7 @@
         }
       },
       "Unauthorized": {
-        "description": "TASKBOARD_TOKEN is set and no valid Bearer header / ?token= was presented",
+        "description": "A valid browser session cookie or configured TASKBOARD_TOKEN was not presented",
         "content": {
           "application/json": {
             "schema": {
@@ -4260,7 +4151,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "TASKBOARD_TOKEN value as `Authorization: Bearer <token>` (only enforced when TASKBOARD_TOKEN is set)"
+        "description": "Optional legacy TASKBOARD_TOKEN for CLI/MCP clients"
       },
       "tokenQuery": {
         "type": "apiKey",

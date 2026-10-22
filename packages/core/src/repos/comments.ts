@@ -5,7 +5,7 @@ import type { Comment, PendingWakeComment } from '../types.js';
 // Public comment projection. claimed_by/claimed_run/updated_at/dispatch_id are
 // wake-engine CAS state and intentionally stay out of the API payload
 // (terminal_at joins the payload only in the S4 contract batch).
-const COMMENT_COLS = 'id, issue_id AS issueId, author, body, status, created_at AS createdAt, attempts, last_error AS lastError, not_before AS notBefore';
+const COMMENT_COLS = 'id, issue_id AS issueId, author, body, status, created_at AS createdAt, attempts, last_error AS lastError, not_before AS notBefore, terminal_at AS terminalAt';
 const now = (): string => new Date().toISOString();
 const shortId = (): string => randomUUID().slice(0, 8);
 

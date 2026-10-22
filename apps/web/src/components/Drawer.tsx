@@ -447,6 +447,10 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                     onClick={() => void copyComment(c.body)}><Copy size={12} /></button>
                   {(() => {
                     // 评论队列态徽章：排队中 / 唤醒中 / 已处理 / 失败·超时
+// 人工终态：不再自动投递，需受控人工恢复（OPS §10 受控恢复流程）
+                    if (c.terminalAt) {
+                      return <span className="comment-status terminal" title={c.lastError || '人工确认后重新唤醒'}>已停止 · 需人工</span>;
+                    }
                     if (c.status === 'processing') {
                       return <span className="comment-status processing">唤醒中</span>;
                     }

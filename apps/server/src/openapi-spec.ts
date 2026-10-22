@@ -1479,9 +1479,10 @@ export const openApiSpec: OpenApiDocument = {
             createdAt: { type: 'string', format: 'date-time' },
             attempts: { type: 'integer', description: '队列重试计数（人工重新唤醒会清零）' },
             lastError: { type: 'string', description: '最近一次投递失败/超时原因；空字符串表示无错误' },
-            notBefore: { type: ['string', 'null'], description: '退避到期时间；null 表示立即可投' }
+            notBefore: { type: ['string', 'null'], description: '退避到期时间；null 表示立即可投' },
+            terminalAt: { type: ['string', 'null'], description: '人工终态时间；非空 = 已转人工确认，不再自动投递' }
           },
-          required: ['id', 'issueId', 'author', 'body', 'createdAt', 'attempts', 'lastError', 'notBefore'],
+          required: ['id', 'issueId', 'author', 'body', 'createdAt', 'attempts', 'lastError', 'notBefore', 'terminalAt'],
         additionalProperties: false
       },
       Activity: {
