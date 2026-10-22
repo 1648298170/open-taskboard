@@ -2456,7 +2456,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   right: 0;
   bottom: 0;
   z-index: 15; /* 低于任务抽屉(20)：抽屉打开时面板让位隐藏，关闭即恢复 */
-  width: min(920px, 92vw);
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
@@ -2501,9 +2500,38 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 
 /* 停靠分栏：会话面板打开时主列让位，看板与会话并排可见（弹窗改停靠）。 */
 .shell-with-session .main-col {
-  margin-right: min(920px, 92vw);
+  margin-right: var(--session-panel-w, min(920px, 92vw));
   transition: margin-right .22s ease;
 }
 @media (max-width: 900px) {
   .shell-with-session .main-col { margin-right: 100vw; }
 }
+
+/* 会话面板宽度走 CSS 变量（拖拽可调，主列 margin 同步该变量）。 */
+.session-panel {
+  width: var(--session-panel-w, 25vw);
+  min-width: 280px;
+}
+.session-resize-handle {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 2;
+}
+.session-panel-error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--ink-dim);
+  text-align: center;
+}
+.session-panel-error svg { color: var(--danger, #e5484d); }
+.session-panel-error strong { color: var(--ink); }
+.session-panel-error-actions { display: flex; gap: 8px; margin-top: 6px; }
