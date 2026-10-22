@@ -284,7 +284,7 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
               }}>归档</button>
             )}
           {detail.sessionUrl && (
-            <a className="btn tiny" href={detail.sessionUrl} target={`oc-session-${detail.sessionId}`} rel="noreferrer">打开会话</a>
+            <a className="btn tiny" href={detail.sessionUrl} target="oc-session" rel="noreferrer">打开会话</a>
           )}
           {detail.status !== 'done' && (
             <button className="btn tiny detail-wake-action"
@@ -292,11 +292,16 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                 ? `唤醒 agent：继续绑定会话 ${detail.sessionId}`
                 : '唤醒 agent：按项目路由发送或创建新会话'}
               onClick={async () => {
+                // Open the session tab FIRST, inside the user gesture: the named
+                // context 'oc-session' is reused/focused when already open, and
+                // doing it before any await avoids popup-blocker heuristics.
+                let sessionTab: Window | null = null;
+                if (detail.sessionUrl) {
+                  sessionTab = window.open(detail.sessionUrl, 'oc-session');
+                  if (!sessionTab) onToast('⚠ 浏览器拦截了会话窗口，请点击「打开会话」');
+                }
                 try {
                   const created = await api_.addComment(detail.id, `${WAKE_PREFIX} 认领此任务并编排（拆解子任务、排依赖）`);
-                  // Land in the bound Session while the agent starts; the named
-                  // target focuses an already-open tab for the same Session.
-                  if (detail.sessionUrl) window.open(detail.sessionUrl, `oc-session-${detail.sessionId}`);
                   onToast(detail.sessionId
                     ? `已入队——watch 将投递到绑定会话 ${detail.sessionId}`
                     : '已入队——watch 将按项目路由送达或新建 headless 会话');
