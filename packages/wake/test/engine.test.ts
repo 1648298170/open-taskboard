@@ -395,6 +395,33 @@ describe('wake engine: channel watchdog', () => {
   });
 });
 
+describe('wake engine: long instruction', () => {
+  it('delivers the FULL comment body even though the event payload truncates to 200 chars', async () => {
+    const tail = 'END-MARKER-请保留这段超过两百字符的尾部指令';
+    const longBody = `@agent ${'很长的指令内容。'.repeat(30)}${tail}`;
+    assert.ok(longBody.length > 200, 'test body must exceed the 200-char event slice');
+    let lastPromptBody = '';
+    const { store, issueId, engine, fetchCalls } = fixture({
+      sessionId: 'ses_x',
+      fetchImpl: (_url, init) => {
+        if (init?.body) lastPromptBody = String(init.body);
+        return okResponse();
+      },
+    });
+    const promptDeliveries = (): number => fetchCalls.filter(u => u.includes('/prompt_async')).length;
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: longBody }).id;
+      await waitFor(() => promptDeliveries() >= 1);
+      await waitFor(() => store.getComment(commentId)!.status === 'processing');
+      // 事件载荷只有 200 字符；投递出的 prompt 必须包含尾部标记 = 用了全量 body。
+      assert.ok(lastPromptBody.includes(tail), 'prompt must contain the full instruction tail');
+    } finally {
+      await engine.stop();
+    }
+  });
+});
+
 describe('wake engine: re-wake', () => {
   it('a pending status patch re-delivers an already processed wake comment', async () => {
     const { store, issueId, engine, fetchCalls } = fixture({

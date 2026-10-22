@@ -28,7 +28,7 @@ import {
 /** The Store slice the engine depends on (the facade itself satisfies it). */
 export type WakeStore = Pick<
   Store,
-  'claimWake' | 'releaseWake' | 'getIssue' | 'listPendingWakeComments' | 'recordExecutionEvent' | 'subscribe'
+  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listPendingWakeComments' | 'recordExecutionEvent' | 'subscribe'
 >;
 
 /** Narrow child-process surface so tests can inject a deterministic spawn. */
@@ -559,7 +559,10 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       }
       seen.add(key);
       const issueTitle = String(payload.issueTitle ?? '');
-      const instruction = String(payload.body ?? '').trimStart().slice(config.prefix.length).trim();
+      // The event payload truncates body to 200 chars (store.addComment) —
+      // read the full comment from the Store so long instructions survive.
+      const fullBody = store.getComment(commentId)?.body ?? String(payload.body ?? '');
+      const instruction = fullBody.trimStart().slice(config.prefix.length).trim();
       const by = author ? ` (${author})` : '';
       log(`watch: wake${by}: ${instruction}`);
       enqueue({ issueId, commentId, issueTitle, instruction, author, key, source: 'event' });
