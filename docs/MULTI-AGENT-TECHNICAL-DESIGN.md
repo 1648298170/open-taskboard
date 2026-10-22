@@ -1,289 +1,441 @@
 # 多 Agent 统一调度技术方案
 
-> 文档状态：方案设计（待评审，尚不代表功能已实现）  
+> 文档状态：实施方案（按阶段落地；每阶段须完成验证后再进入下一阶段）  
 > 适用项目：Open Taskboard  
-> 目标 Agent：OpenCode、OpenAI Codex App、DeepSeek Harness App（DSH）  
-> 建议实施方式：在现有架构上增量演进，优先打通 OpenCode API、Codex App 和 DSH App 的任务交互，再按能力补齐原生运行时控制与多 Agent 工作流。
+> 接入目标：OpenCode、OpenAI Codex App、DeepSeek Harness App（DSH）  
+> 明确不接入：Claude Code  
+> 当前优先环境：Windows 本机开发环境；部署和路径方案须兼容现有 Docker / Server 拓扑  
+> 关键端口基线：Taskboard Server 默认 47824；OpenCode Server 默认 4096  
+> 原则：本文件描述目标方案和实施顺序，不代表文中所有能力当前已经实现。
 
-## 1. 背景与目标
+---
 
-当前 Taskboard 已有 OpenCode 相关集成能力。为避免看板长期绑定单一 Agent，需要建立统一的 Agent 接入层，使用户能够在一个面板中选择不同的编程 Agent、启动任务、查看执行状态与日志，并在后续扩展会话恢复、Review 和自动化工作流。
+## 0. 给执行本方案的 AI 的实施约定
 
-### 1.1 目标
+本章优先级最高。执行后续章节时必须遵守，避免一次性修改过多模块、反复推翻方案或在能力未知时假定成功。
 
-- 在同一任务看板中接入 OpenCode、Codex App、DeepSeek Harness App（DSH）。
-- 支持与用户已打开的 Codex App、DSH App 进行交互；优先使用受支持的桌面集成、插件、Skill/Tool 与本地 Taskboard API，不默认假设桌面 App 提供完整的外部会话控制 API。
-- 统一启动、状态查询、日志事件、取消和结果记录等通用操作。
-- 每次执行都绑定明确的项目、工作目录和可追踪的执行记录。
-- 支持 Git Worktree 隔离，降低并行 Agent 修改同一工作区的风险。
-- 通过适配器隔离各 Agent 的 HTTP API、桌面集成、Skill/Tool、SDK/ACP、会话协议和版本差异。
-- 为后续增加其他 Agent、远程 Runner、多 Agent 协作预留扩展点。
-- 保留 Agent 原始事件与错误信息，便于排障和审计。
+### 0.1 一次只实施一个可验收切片
 
-### 1.2 非目标（第一阶段不做）
+1. **先盘点、后修改。** 每阶段开始时检查根目录 AGENTS.md、相关源码、测试、迁移和当前分支；识别已实现能力并复用，不按文档盲目重写。
+2. **先验证协议、再设计适配器。** 不把桌面 UI 自动化、私有 IPC、未文档化接口或猜测出的事件字段当作稳定 API。
+3. **按阶段推进，不一次性实现全方案。** 先完成当前阶段的所有退出条件，再进入下一阶段。遇到未验证的外部能力，先用最小实验验证，并记录结果。
+4. **优先纵向交付。** 一个切片尽量贯通领域类型、数据持久化、服务端接口、事件、界面和测试，而不是连续添加没有调用链的空接口。
+5. **不重复造轮子。** 先查现有 Store、repositories、事务、事件总线、SSE、OpenCode 集成、会话绑定和 Worktree 代码；仅在现有实现不足时扩展。
+6. **不伪造能力或状态。** 只有发出了取消请求时，状态应是 **cancel_requested**，不能假报 **cancelled**；只有 Agent 确认完成或有可靠证据时，才允许进入最终状态。
+7. **每个切片都要有验收。** 新增领域逻辑必须增加测试；修改 API / schema 时按仓库约定同步所有相关调用端、OpenAPI 文档和测试。
+8. **不引入无必要基础设施。** 当前优先实现单机、单调度器、SQLite 持久化的可靠闭环；只有需求和证据支持时才引入消息队列、分布式锁或多机器 Runner。
+9. **保持改动可审查。** 控制文件范围，避免顺手重构无关代码。完成后报告文件清单、行为变化、执行的验证、未完成项与风险。
+10. **不得声称未执行的验证已经通过。** 若真实桌面 App、登录态或模型服务不可用，使用 Fake Agent / Mock 验证确定性逻辑，并明确真实环境验收仍未完成。
 
-- 不在第一阶段实现复杂的自主 Agent 编排或无限递归的 Agent-to-Agent 调用。
-- 不要求三个接入目标的会话、工具调用和权限机制完全一致。
-- 不自动批准高风险命令，不绕过 Agent 自身的权限确认。
-- 不把用户认证凭据明文存储到任务表、日志或前端。
-- 不要求立即实现跨机器分布式调度。
+### 0.2 仓库现有约束
 
-## 2. 核心设计原则
+- 先阅读根目录 AGENTS.md，按现有 pnpm monorepo 结构开发。
+- 领域规则优先放在 packages/core；Server 负责路由，CLI / MCP 负责命令或工具封装，Web 负责展示。
+- 数据库结构变更只能追加到 packages/core/src/db.ts 的现有迁移机制，并同步 types、schema、查询列、测试和数据兼容处理。
+- 多语句写操作使用现有事务封装；活动记录按现有方式留痕；领域事件应在事务提交后发布。
+- 按仓库当前规范检查 API 变更的关联面：core types/schema → Server 路由 → CLI → MCP → Web → apps/server/openapi.json。某个入口经评估确实不适用时，要在实现说明中写明原因，不能无声遗漏。
+- 优先复用既有 Store、repositories、events、transactions、OpenCode 路由与 SSE 模式，避免引入第二套相互竞争的领域层。
 
-1. **统一任务，不统一所有底层细节。** 对外暴露稳定的通用接口；Agent 独有能力通过能力声明和适配器扩展。
-2. **任务与执行分离。** 一个看板任务可以有多次执行记录，也可以先后使用不同 Agent。
-3. **执行环境明确。** 每次执行都记录 Runner、工作目录、Git 分支/Worktree、Agent 类型及版本。
-4. **优先隔离。** 默认每个执行任务使用独立 Worktree；复用已有目录需要明确选择。
-5. **事件驱动、状态持久化。** UI 不依赖单个长 HTTP 请求；服务重启后应能恢复或准确标记执行状态。
-6. **最小权限。** Runner 与 Agent 进程使用受控权限、超时、并发限制和网络访问策略。
-7. **渐进式交付。** 先打通任务派发、会话关联与状态回写，再验证原生事件/取消/恢复能力，最后实现编排与 Review 闭环。
-8. **区分 App 集成与 Runtime 集成。** 能打开桌面 App 或向对话注入任务，不代表能直接读取全部内部事件或可靠取消执行；每项能力都必须经协议验证并通过能力协商暴露。
+### 0.3 每个阶段的固定执行流程
 
-## 3. 总体架构
+每个阶段严格按以下顺序执行：
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                         Taskboard Web                       │
-│ Agent 选择 / 启动任务 / 运行详情 / 日志 / 取消 / Review       │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ REST API + SSE
-┌──────────────────────────────▼──────────────────────────────┐
-│                    Taskboard Server                         │
-│ API Routes / Auth / Task Scheduler / Run State Machine      │
-│ Job Queue / Event Persistence / Retry & Cancellation        │
-└──────────────────────────────┬──────────────────────────────┘
+1. **盘点：** 列出涉及的源码、类型、数据库表、API、UI 与测试；标注已实现、缺失、待验证。
+2. **决策：** 只解决当前切片需要的设计问题；把未决问题和选择原因记录下来。
+3. **实现：** 完成最小闭环，不留无调用方的空壳接口。
+4. **测试：** 先运行相关测试，再按改动范围运行 pnpm build、pnpm typecheck、pnpm test。
+5. **复核：** 检查状态流转、异常分支、权限、数据迁移、重复请求与旧数据兼容。
+6. **汇报：** 列出已完成内容、测试结果、未实现能力、风险和下一阶段的入口。
+
+当测试失败时，先区分本次改动引入的失败与既有失败；不得通过删除测试、放宽断言或隐藏错误来制造通过结果。
+
+### 0.4 文档一致性与决策管理
+
+- 本文件是多 Agent 统一调度的唯一正式实施方案；其他讨论、检查表或 AI 生成的任务说明均不得形成第二套互相竞争的实施规则。
+- 每次修改实现范围、状态语义、API、领域模型或阶段顺序时，必须同步更新本文件的相应章节、验收条件和状态登记表。
+- 新的架构决策应记录问题、选择、备选方案、原因、影响范围和重新评估条件；禁止在多个章节重复维护互相矛盾的配置或状态定义。
+- 代码中已经存在且通过测试的能力应标记为“已实现并验证”，不是因为文档有描述就再次开发；文档和代码不一致时，先核对证据，再决定修改代码或更新文档。
+- 方案中的接口、实体和目录均为设计候选。除非 Phase 0 证明其必要且缺失，否则不要求机械新增同名文件、表或 API。
+- 不适用或明确延期的能力要记录原因和重新评估条件，不能保留为无主的 TODO。
+
+---
+
+## 1. 背景、目标与范围
+
+### 1.1 建设目标
+
+Open Taskboard 需要在同一任务面板中管理不同 Agent 的执行，同时保留每个 Agent 自身的运行方式与能力差异。
+
+- 接入 OpenCode、OpenAI Codex App、DeepSeek Harness App（DSH）。
+- 允许与用户已打开的 Codex App / DSH App 交互；在协议验证通过后，才考虑使用 App Server、SDK 或 ACP 建立独立 Runtime。
+- 统一任务执行记录、状态快照、事件时间线、错误信息、取消请求和执行结果。
+- 建立可扩展的 Adapter / Capability 契约，防止某个 Agent 的私有协议渗透到核心业务。
+- 明确项目、工作目录、Git 分支 / Worktree、Agent 会话和每次执行记录的关联。
+- 对断线、重复事件、服务重启、执行失败、取消超时等情况提供可靠处理。
+- 先在当前单机和 SQLite 架构下实现可靠闭环，为未来多 Runner / 工作流留下明确扩展点。
+
+### 1.2 本期明确范围
+
+**本期目标：** 能力探测、执行创建、会话关联、持久化执行记录、事件和日志、真实状态展示、能力允许范围内的取消、故障标记与恢复、工作目录校验和自动化测试。
+
+**明确排除：**
+
+- 不接入 Claude Code；不得为其新增 Provider、Runtime、Adapter、配置项或验收任务。
+- 第一阶段不实现无限递归的 Agent-to-Agent 自主编排。
+- 不假设所有 Agent 都支持读取完整内部历史、暂停、取消或恢复。
+- 不自动批准高风险命令，也不绕过 Agent 自身的权限确认。
+- 不在普通字段、日志、任务提示词或前端状态中保存明文密钥。
+- 不要求第一阶段实现跨机器分布式调度。
+- 不把复杂 DAG、自动合并和自动发布作为基础执行闭环的前置依赖。
+- 不因接入新 Agent 重写现有看板任务状态机。
+
+### 1.3 成功标准
+
+不是仅仅在 UI 出现三个 Agent 选项，而是每个适配器都能在其**已经验证并明确声明的能力范围内**完成任务关联、状态记录、错误反馈和历史查询；不支持的能力必须明确显示为不支持。
+
+---
+
+## 2. 当前架构边界与设计原则
+
+### 2.1 总体架构
+
+~~~text
+┌────────────────────────────────────────────────────────────┐
+│ Taskboard Web                                               │
+│ Provider / Runtime 选择 · Run 详情 · 日志 · 状态 · 操作提示  │
+└──────────────────────────────┬─────────────────────────────┘
+                               │ REST + SSE
+┌──────────────────────────────▼─────────────────────────────┐
+│ Taskboard Server                                            │
+│ Auth · Routes · Scheduler · Run State Machine · Recovery    │
+└──────────────────────────────┬─────────────────────────────┘
                                │
-┌──────────────────────────────▼──────────────────────────────┐
-│                    Agent Adapter Layer                      │
-│ OpenCodeAdapter | CodexAppAdapter | DshAppAdapter             │
-│ 能力检测 / 任务交互 / 协议转换 / 事件标准化 / 错误映射        │
-└──────────────────────────────┬──────────────────────────────┘
+┌──────────────────────────────▼─────────────────────────────┐
+│ Domain / Persistence                                        │
+│ Core Types & Schemas · Store / Repositories · SQLite        │
+│ AgentRun · AgentEvent · Session binding · Activity          │
+└──────────────────────────────┬─────────────────────────────┘
                                │
-┌──────────────────────────────▼──────────────────────────────┐
-│                       Runner Layer                          │
-│ 进程生命周期 / stdout-stderr / timeout / cancel / recovery  │
-│ 工作目录校验 / 环境变量白名单 / 资源与并发限制                 │
-└──────────────────────────────┬──────────────────────────────┘
+┌──────────────────────────────▼─────────────────────────────┐
+│ Agent Adapter Registry                                      │
+│ Capability detection · Protocol mapping · Error mapping     │
+└──────────────────────────────┬─────────────────────────────┘
                                │
-             ┌─────────────────┼──────────────────┐
-             ▼                 ▼                  ▼
-         OpenCode API      Codex App          DSH App
-         HTTP / Session    CDP + Skill +       Plugin + Tools
-                           taskctl; optional   + Taskboard API
-                           App Server          (native session
-                                               control TBD)
-             └─────────────────┼──────────────────┘
-                               ▼
-                 Git Worktree / Repository / Tests
-```
+┌──────────────────────────────▼─────────────────────────────┐
+│ Runtime / Bridge                                            │
+│ OpenCode API · Codex desktop bridge · DSH plugin bridge     │
+│ Optional validated App Server / SDK / ACP Runtime           │
+└──────────────────────────────┬─────────────────────────────┘
+                               │
+                    Agent session / process / workspace
+~~~
 
-### 3.1 对现有项目的建议映射
+### 2.2 现有项目模块映射
 
-在现有仓库结构上增量增加模块，避免重写已有业务：
+以下为建议边界，不代表文件均已创建；实施前必须检查仓库实际结构。
 
-- `apps/server/src/opencode.ts`：继续保留，作为 OpenCode 集成的基础；后续将适合通用化的类型和能力提取到适配器接口。
-- `apps/server/src/agents/codex-app/`：建议承载 Codex App 交互适配（CDP/Skill/taskctl），App Server 作为经过验证后可选的原生 Runtime。
-- `apps/server/src/agents/dsh-app/`：建议承载 DSH App 插件桥接、Taskboard Tool 和会话/事件能力探测；不将未公开的内部 IPC 当作稳定接口。
-- `apps/server/src/routes/`：增加 Agent provider、runtime、run 等 API 路由。
-- `packages/core/src/types.ts`、`schemas.ts`：增加通用 Agent 类型、运行状态和输入校验 schema。
-- `packages/core/src/db.ts`、`store.ts`、`transactions.ts`：按当前数据库迁移机制增加执行记录、事件记录等持久化结构。
-- `apps/cli/`：如有必要，增加 Runner 诊断、Agent 检测或执行器管理命令。
-- `apps/web/src/`：增加 Agent 选择、运行详情、实时日志、权限提示等界面。
-- 建议新增 `apps/server/src/agents/`（或与项目现有目录规范一致的路径）存放接口、注册表和适配器；新增 `runner/` 模块管理进程生命周期。
+- packages/core/src/types.ts、schemas.ts：共享领域类型、枚举和输入校验。
+- packages/core/src/db.ts、store.ts、repos/、transactions.ts：迁移、查询、事务与持久化。
+- apps/server/src/：Provider / Runtime / Run API、鉴权、调度和恢复入口。
+- apps/server/src/opencode.ts 或当前实际 OpenCode 模块：复用已存在的 OpenCode API 和会话逻辑，避免平行实现。
+- apps/server/src/agents/：建议作为 Adapter 接口、注册表及 Provider 适配器的归属位置；路径最终遵循现有代码规范。
+- apps/server/src/runner/：如当前实现需要统一管理本地进程，再建立 Runner 模块。
+- apps/web/src/：Agent 配置、能力提示、运行详情、时间线和操作反馈。
+- apps/cli/、apps/mcp/：按当前项目约定暴露适用的操作；不要在 CLI / MCP 中复制核心领域逻辑。
 
-以上为建议的代码归属，不代表这些模块已创建。实现前应先检查现有路由、存储、事件和进程管理代码，复用既有模式。
+### 2.3 不可破坏的原则
 
-## 4. Agent 接入策略
+1. **任务与执行分离：** Task 表示业务工作项；Run 表示一次尝试。重试不覆盖历史 Run。
+2. **能力声明优先：** 每个 Runtime 的真实能力决定 UI 和 API 可执行的操作。
+3. **数据库是状态恢复的基础：** 实时推送不能代替持久化和状态对账。
+4. **Agent 状态优先核实：** Taskboard 本地状态不能单独证明外部 Agent 仍在运行或已停止。
+5. **操作必须幂等：** 重复点击、重复请求和重复事件不能造成重复执行或状态倒退。
+6. **默认保护用户代码：** Worktree 清理、分支删除和工作区重置不能丢失未提交改动。
+7. **权限不得被桥接绕过：** 桌面桥接和 Runner 均遵守用户授权和 Agent 自身的安全策略。
+8. **原生能力不强求一致：** 使用统一外层契约表达能力差异，不把 Provider 独有机制硬塞进通用模型。
+9. **先单机可靠、再扩展分布式：** 不为未来假想场景提前引入不必要的复杂组件。
 
-### 4.1 OpenCode
+---
 
-第一阶段复用现有 OpenCode Server 集成：
+## 3. 术语与领域模型
 
-- 通过配置的服务地址访问官方支持的 API。
-- 支持发现会话、选择工作目录和发起任务。
-- 明确区分创建新会话、向已有会话发送指令、查询会话状态。
-- 对超时、断连、HTTP 错误和服务不可用统一映射为可读错误。
-- 后续补齐事件订阅、取消、恢复等能力。
+### 3.1 核心概念
 
-现有的 OpenCode 文件浏览和会话发现能力应尽量保留，避免重复实现。启动任务时必须确认会话实际目录与所选工作目录一致。
+| 概念 | 含义 | 约束 |
+|---|---|---|
+| Task / Issue | 看板中的业务任务 | 使用当前看板既有状态机 |
+| Provider | Agent 产品类型 | 本期仅 OpenCode、Codex App、DSH |
+| Runtime | 可连接或启动的具体实例 | 例如一个 OpenCode Server、桌面桥接或独立 Runtime |
+| Run / Attempt | 针对一个 Task 的一次执行尝试 | 每次重试创建新记录 |
+| Session | Agent 自己的会话 | Provider 的原生 ID 不等于 Taskboard 内部 ID |
+| Workspace | 本次执行的实际工作目录 | 必须校验目录和授权范围 |
+| Worktree | 与 Git 仓库关联的隔离工作区 | 与 Task / Run 建立显式关系 |
+| Event | 某次 Run 的可追踪事件 | 有唯一 ID；需要补拉时支持顺序游标 |
+| Activity | 看板业务活动 / 审计记录 | 不等同于高频 stdout/stderr |
+| Comment | 用户或 Agent 可见的评论 | 不用它承载大量原始运行日志 |
 
-### 4.2 OpenAI Codex App
+### 3.2 领域实体建议
 
-本项目目标优先是与用户已经打开的 Codex App 交互，而不是默认用 CLI 启动一个独立 Agent。
+按当前 SQLite 和迁移约定增量演进，只有在盘点确认缺少相应能力时才新增表。
 
-**第一阶段：借鉴桌面交互 + Skill + Taskboard API 的模式。**
+**AgentProvider**
 
-- 通过经过验证的桌面集成方式，将任务上下文打开到 Codex 原生对话；CDP 等 UI 自动化方式需封装在独立模块中，并针对 Codex 版本变化做检测。
-- 通过项目 Skill 指导 Codex 使用 Taskboard CLI（例如 `taskctl`）或受控工具读取任务、回写状态、评论和执行结果。
-- 由 Taskboard API 保存任务与 Codex Thread/会话 ID 的关联；只有在可靠取得 ID 时才记录，不猜测或伪造会话标识。
-- 明确区分“打开/预填对话”“用户提交消息”“Agent 开始执行”“执行事件回写”四个阶段。
-- UI 自动化只能作为交互桥接，不能被当作完整的运行时控制 API。
+- id、type、name、enabled
+- configJson 仅保存非敏感配置
+- createdAt、updatedAt
 
-**第二阶段：评估 Codex App Server。**
+**AgentRuntime**
 
-- 验证 App Server 初始化、账号认证、thread/turn、事件流、审批请求、会话恢复和取消能力。
-- 默认优先评估官方支持的 stdio 通信方式；不把实验性或不稳定的远程传输作为默认生产方案。
-- App Server 作为可选的原生 Runtime，和已打开桌面 App 的 CDP/Skill 交互模式分开建模，不能假设两者共享同一个会话。
+- id、providerId、name、kind
+- 可选 endpoint、hostId、version
+- healthStatus、lastHealthCheckAt
+- createdAt、updatedAt
 
-CLI 可用于诊断、版本检查或兼容执行，但不作为与已打开 Codex App 交互的唯一方案。Codex 认证与额度沿用其官方支持的账号/API 机制，不在 Taskboard 中实现绕过认证的逻辑。
+**AgentRun**
 
-### 4.3 DeepSeek Harness App（DSH）
+- id、taskId/issueId、attemptNo
+- providerId、runtimeId
+- providerSessionId，可为空
+- status、输入快照或必要的任务上下文
+- workspacePath、worktreePath、branchName
+- processId 仅作为诊断字段，不作为唯一恢复凭证
+- idempotencyKey 或等价防重复标识
+- startedAt、finishedAt、exitCode
+- resultSummary、errorCode、可脱敏的 errorMessage
+- createdAt、updatedAt
 
-本项目目标优先是与用户已打开的 DSH 桌面 App 交互。DSH 的桌面插件集成、独立 SDK Profile 和 ACP Profile 是不同入口，不能混为一谈。
+**AgentEvent**
 
-**第一阶段：官方插件桥接 + Taskboard Tool/API。**
+- id、runId、eventId、sequence
+- type、payloadJson、createdAt
+- 重复的 eventId 不应重复生效；同一 Run 的事件序列应可用于历史补拉。
+- 大体积 stdout/stderr 使用分块、文件或受限存储策略；数据库保留索引、必要摘要和访问控制。
 
-- 研究并实现 DSH 官方支持的插件扩展，在 DSH App 内提供 Taskboard 工具或入口。
-- Agent 通过 Taskboard Tool/CLI 调用 Taskboard HTTP API，领取任务、读取上下文、回写状态、评论和结果。
-- 若插件 API 允许访问当前活动 Session，可记录 DSH Session ID，并在权限允许的范围内关联任务。
-- 对会话消息发送、历史会话查询、事件订阅、审批和取消逐项做协议验证；只有确认公开 API 能力后，才在 Adapter 中声明支持。
-- 不依赖未经文档支持的内部 IPC/RPC，不假设插件事件总线就是面向第三方的稳定控制接口。
+**AgentSession**
 
-**第二阶段：DSH SDK / ACP 作为可选 Runtime。**
+- id、providerId、runtimeId
+- providerSessionId、workspacePath
+- createdAt、lastUsedAt
 
-- 若桌面 App 插件无法控制已有会话，可由 Taskboard 单独启动 DSH SDK Profile 或 ACP Profile，形成独立执行实例。
-- SDK 与 ACP 的会话、事件、恢复、取消和审批能力需分别验证；一个 Profile 支持的能力不能推断另一个 Profile 也支持。
-- 在 UI 中明确区分“连接已有 DSH App”和“启动独立 DSH Runtime”。
+**Workspace / Worktree 关联**
 
-CLI 可用于安装检查、诊断、健康检查或兼容执行，不作为与已打开 DSH App 交互的默认通信协议。
+- 记录项目、授权根目录、实际工作目录、Worktree 和 Run 的关系。
+- 不以当前目录列表作为历史会话与 Run 数据存在与否的判断依据。
 
-### 4.4 事件订阅、取消与恢复
+### 3.3 数据建模要求
 
-事件、取消和恢复不是所有 Agent 都天然支持的同一种能力。Adapter 必须按实际验证结果声明能力，不允许仅因能打开桌面 App 就显示“可取消”或“可恢复”。
+- 一个 Task 可以关联多次 Run；历史失败 Run 不得被覆盖。
+- 一个 Run 只能有一个明确的 Provider 和 Runtime，除非后续工作流模型显式支持多步骤。
+- 区分 Taskboard 内部 ID 与 Provider 原生 Session ID。
+- 关键关联需要合适的索引、唯一约束及外键 / 等价完整性保护。
+- 时间在服务端统一保存为 UTC，Web 按用户环境展示。
+- 定义软删除、归档、历史保留和级联行为；删除项目 / 目录不能隐式清除仍需追溯的执行记录。
+- 所有结构变化通过现有数据库迁移；旧库升级与新库初始化都必须测试。
 
-#### OpenCode（第一阶段可实现）
+---
 
-- **事件订阅**：Taskboard Server 代理 OpenCode 的 `GET /event` SSE 流，并按任务绑定的 `sessionId` 过滤。Web 端通过 `GET /api/issues/:id/opencode-events` 订阅；只转发能明确关联到该 Session 的事件。
-- **状态恢复**：`GET /api/issues/:id/opencode-state` 查询 OpenCode 的 Session 详情和 `/session/status`，作为 Taskboard 重启、浏览器断线后的权威状态快照。浏览器 EventSource 自动重连，每次收到 `ready` 后重新拉取快照。
-- **取消执行**：`POST /api/issues/:id/opencode-abort` 调用 OpenCode 的 `POST /session/:id/abort`。成功只记录 `cancel_requested`，表示取消请求已发送，不将其冒充为 Agent 已确认停止。
-- **恢复边界**：任务的 `sessionId` 已持久化，可重新附着监听并读取当前运行状态；这不等于回放断线期间的全部内部事件，也不等于自动恢复一个已退出的 OpenCode 进程。若会话已空闲而任务仍为 `in_progress`，提示用户检查状态或再次唤醒。
-- **工作目录校验**：查询、事件和取消必须使用任务实际执行目录（绑定 Worktree 优先），并验证返回的 Session 目录与任务目录一致。
+## 4. 状态机与执行生命周期
 
-#### Codex App（桌面交互模式）
+### 4.1 不混淆 Task 状态和 Run 状态
 
-- Skill / `taskctl` 可以主动把 `queued/running/succeeded/failed` 等任务事件回写 Taskboard；Taskboard 自己的 `GET /api/events` SSE 负责将持久化任务变化通知给 Web UI。
-- CDP + Skill + CLI 回写并不提供可靠的 Codex 内部事件订阅，也不等于可以取消正在运行的 Codex turn。不得通过单纯修改任务状态来伪造取消。
-- 要获得原生 turn 事件、取消和会话恢复，后续需单独验证 Codex App Server 的支持能力；App Server 管理的独立 Runtime 与桌面 App 已有会话必须分开标识。
+Taskboard 现有看板状态继续按仓库既有契约使用，例如 todo → in_progress → in_review → done；归档是独立维度。不得为了 Agent 运行状态而破坏现有任务状态、父子任务、租约、乐观锁或人工验收规则。
 
-#### DeepSeek Harness App（DSH 桌面插件模式）
+建议 Run 单独使用以下状态：
 
-- DSH 插件桥接应将官方插件 API 明确暴露的会话事件转发给 Taskboard；Agent Tool / `taskctl` 继续负责任务状态和结果回写。
-- 只有当官方插件接口明确支持时，才允许对已有 DSH Session 声明“发送消息”“订阅事件”“取消”或“恢复”。不能把 Cordis 内部事件总线或未文档化 IPC 当作稳定外部协议。
-- 如果桌面插件不能控制已有 Session，可使用 DSH SDK / ACP 启动独立 Runtime，但 UI 必须明确标记运行模式，不能声称已接管桌面 App 中的会话。
+- queued：已创建，等待调度。
+- starting：正在验证 Runtime、工作区或启动流程。
+- running：Agent 正在执行，有可靠证据支持。
+- awaiting_input：等待用户补充输入。
+- awaiting_approval：等待用户或 Provider 授权。
+- cancel_requested：已发出取消请求，尚未确认结束。
+- succeeded：执行成功，有可靠完成证据。
+- failed：执行失败，已确认终止。
+- cancelled：已确认取消或已确认进程终止。
+- interrupted：服务或进程异常中断，无法立即确认最终结果。
 
-#### 统一能力与状态语义
+paused 只能在 Provider 确实支持暂停 / 恢复且语义明确时启用；不支持暂停的 Adapter 不得伪造该状态。
 
-Adapter 至少应按实例声明以下能力：`eventSubscription`、`cancel`、`sessionSnapshot`、`resumeExistingSession`、`openNativeConversation`。UI 按能力显示按钮；不支持的能力应禁用并解释原因。
+### 4.2 允许的状态转换
 
-统一执行记录应区分 `cancel_requested` 与最终的 `cancelled`：发送取消请求不代表 Agent 已停止。恢复时优先读取 Agent 权威状态，再对 Taskboard 的本地记录做对账；不得仅凭任务列状态推断 Agent 是否仍在运行。
+- queued → starting → running
+- starting → failed / interrupted / cancelled
+- running → awaiting_input / awaiting_approval / succeeded / failed / cancel_requested / interrupted
+- awaiting_input / awaiting_approval → running / cancel_requested / interrupted
+- cancel_requested → cancelled / running / failed / interrupted，由后续真实结果决定
+- interrupted → running / succeeded / failed / cancelled 仅在对账拿到可靠证据后发生；否则保留待人工处理。
 
-### 4.5 Provider、Runtime、Run 的区别
+实际实现可按 Provider 能力细化，但必须禁止非法转换与终态被迟到事件覆盖。状态转换规则应集中实现并有单元测试，不能散落在多个路由或 UI 回调中。
 
-- **Provider**：Agent 产品类型，例如 `opencode`、`codex-app`、`dsh-app`。
-- **Runtime**：实际可执行实例，例如本机已打开的 Codex App、已安装 DSH 插件的桌面 App，或一个 OpenCode Server 地址。
-- **Run**：针对某个 Task 发起的一次具体执行。
+### 4.3 一次 Run 的标准流程
 
-一个 Provider 可以对应多个 Runtime；一个 Task 可以对应多次 Run。不能将三者混为一个配置对象。
+1. 验证用户、Task、Provider、Runtime、目录和操作权限。
+2. 探测 Runtime 可用性及当前支持的能力。
+3. 原子检查重复请求、并发限制、工作区占用与任务状态。
+4. 按策略建立或验证 Workspace / Worktree。
+5. 创建并持久化 Run，初始状态为 queued / starting。
+6. 启动 Agent 或通过已验证桥接发送任务。
+7. 持久化标准化事件；提交成功后再向订阅者广播。
+8. 根据 Agent 真实状态、退出码和结果完成 Run 状态迁移。
+9. 写入任务活动 / 评论中的必要摘要，并更新适用的 Task 状态。
+10. 释放租约、停止心跳、清理允许清理的临时资源。
+11. 保留执行历史、错误与必要的 Worktree 诊断信息。
 
-## 5. 统一领域模型
+执行结束不自动代表业务任务可以进入 done。必须继续遵循当前 Taskboard 的人工验收与状态审计规则。
 
-以下是逻辑模型，具体列类型、ID 格式、索引及迁移方式需遵循项目当前数据库约定。
+---
 
-### 5.1 AgentProvider
+## 5. 调度器、并发、幂等与故障恢复
 
-建议字段：
+### 5.1 最小可靠调度器
 
-- `id`
-- `type`：`opencode | codex-app | dsh-app`
-- `name`
-- `enabled`
-- `configJson`：非敏感配置
-- `createdAt`、`updatedAt`
+当前优先使用 SQLite 事务和原子状态更新建立单调度器闭环，不预先引入分布式队列。
 
-### 5.2 AgentRuntime
+- 任务领取必须原子化；同一 Run 不允许因多个调度循环而启动两次。
+- 创建 Run / 发起执行必须支持幂等键或等价重复保护。
+- 数据库记录作为恢复基线；内存队列只承担唤醒和调度加速，不作为唯一任务来源。
+- 明确全局、Runtime 级、项目级和工作目录级并发上限。
+- 统一任务锁 / 租约、过期判断、心跳和释放时机。
+- 如果沿用现有 Task 租约机制，应明确 Run 级执行锁与 Task 级协作租约的关系，避免双重锁死或锁释放不一致。
+- 调度器关闭时停止接收新 Run，按策略等待当前执行或记录中断，并清理自身资源。
 
-建议字段：
+### 5.2 重试机制
 
-- `id`
-- `providerId`
-- `name`
-- `kind`：`http-server | desktop-bridge | plugin-bridge | app-server | sdk | acp | local-cli`
-- `endpoint`：仅适用于服务类 Runtime
-- `hostId`：为未来多机器 Runner 预留
-- `healthStatus`、`lastHealthCheckAt`
-- `version`
-- `createdAt`、`updatedAt`
+- 每次重试创建新的 Run，增加 attemptNo 并关联上一次失败 Run。
+- 区分可重试错误和不可重试错误。
+- 明确最大重试次数、重试间隔、指数退避和人工介入条件。
+- 默认不自动重试需要用户输入、授权或有潜在副作用的操作。
+- 同一幂等键的重复请求不得产生新的执行尝试。
+- 重试工作区策略必须明确：复用原 Worktree 还是创建新的 Worktree；不能静默清空旧工作区。
 
-不要把 token、API Key 或完整环境变量保存在普通配置 JSON 中。敏感凭据应使用受控的本机凭据存储或部署环境 Secret。
+### 5.3 取消与恢复
 
-### 5.3 AgentRun
+- 取消请求与确认终止是两个不同阶段。
+- 发出取消请求后进入 cancel_requested；得到 Agent / Runner 的可靠停止证据后才能进入 cancelled。
+- 超过取消宽限期仍未停止时，显示可诊断的超时状态并提供人工处理入口。
+- 用户取消后，排队中的 Run 不得再启动。
+- Agent 不支持原生取消时只能说明限制；若由本地 Runner 管理进程，可以终止自己启动且有权管理的进程树。
+- “继续向既有 Session 发送消息”“恢复原 Run”和“创建新 Run”是不同操作，API / UI 不得混用。
+- Server 重启后扫描非终态 Run：查询真实进程 / Agent 状态；能确认则对账，无法确认时标记 interrupted 并允许用户处理。
+- 禁止只凭 PID 判断进程存活，需结合 Run ID、启动时间、进程信息和 Agent 状态验证，避免 PID 重用误判。
 
-建议字段：
+### 5.4 公平性、任务依赖与工作流边界
 
-- `id`
-- `issueId`
-- `providerId`、`runtimeId`
-- `agentSessionId`：外部会话 ID，可为空
-- `status`
-- `prompt` 或任务输入快照
-- `workspacePath`
-- `worktreePath`、`branchName`
-- `processId`：仅作为诊断信息，不能单独作为可靠的进程恢复机制
-- `startedAt`、`finishedAt`
-- `exitCode`
-- `resultSummary`
-- `errorCode`、`errorMessage`
-- `createdAt`、`updatedAt`
+- 明确优先级规则和防止低优先级任务饥饿的策略；优先级不能绕过并发上限、依赖约束或人工审批。
+- 第一阶段不实现复杂 DAG。若现有任务依赖功能可复用，应沿用现有依赖模型，不建立重复的第二套依赖系统。
+- 对依赖任务明确“等待依赖 / 阻塞”语义：只有所有必要前置任务达到满足条件的状态后，下游任务才可进入可调度队列。
+- 依赖失败时不得静默跳过；按策略标记阻塞并展示失败的上游任务，提供重试上游、解除依赖或人工放行的明确操作。
+- 创建依赖时校验循环依赖，防止形成永远无法执行的环。
+- 区分任务依赖与 Run 的执行顺序：一个 Task 的新 Run 不应自动触发所有相关任务，除非明确配置了工作流。
+- 若后续增加串行 / 并行步骤，每个步骤仍须有可追踪的 Run、输入、输出、失败原因和取消语义；部分步骤成功不能伪装成整个工作流成功。
+- 多实例 / 多机器执行属于后续阶段，需要另行设计 Runner 注册、租约、心跳、隔离和跨机器故障恢复，不应简单复制单机机制。
 
-### 5.4 AgentEvent
+### 5.5 调度器是否使用 Generator / AsyncGenerator
 
-建议字段：
+默认设计选择是**显式状态机 + 持久化 Run + 原子领取 + 事件记录**；Generator / AsyncGenerator 只是可选的流程表达方式，不是可靠性机制。
 
-- `id`
-- `runId`
-- `sequence`：同一次 Run 内的递增序号
-- `type`：`status | stdout | stderr | tool | approval | result | error | heartbeat`
-- `payloadJson`
-- `createdAt`
+- 当执行器需要分阶段产出事件、日志或结果时，可以在 Adapter / Runner 内部使用 AsyncGenerator。
+- 不得依赖生成器的内存执行位置作为任务恢复依据；服务进程退出后，恢复必须以持久化 Run、Agent 快照和可验证的进程状态为准。
+- 生成器不能替代数据库事务、幂等键、并发锁 / 租约、重试策略、事件去重或取消确认。
+- 不为了引入生成器而重写已有稳定的 Promise / AsyncIterable / SSE 模式；应优先复用现有事件链路。
+- 若选择 Generator / AsyncGenerator，必须说明它解决的具体问题，并增加暂停消费、异常退出、资源关闭和取消传播测试。
+- 第一阶段不要求调度器必须采用生成器；实现简单且可测试的异步状态机即可。
 
-对大体积日志可采用分块或文件存储，数据库保留索引与必要摘要。日志需设置保留期限、敏感信息脱敏策略和访问控制。
+## 6. Agent 接入矩阵与 Adapter 契约
 
-### 5.5 AgentSession
+### 6.1 统一接入矩阵
 
-建议字段：
+| Provider / 模式 | 当前策略 | 可承诺的基础能力 | 必须单独验证的能力 |
+|---|---|---|---|
+| OpenCode Server | 优先复用现有 API 集成 | 会话查询、已验证的任务投递、状态查询与取消接口 | 事件补拉、目录一致性、实际取消与状态对账 |
+| Codex App 桌面模式 | 桌面桥接 + Skill / Tool + Taskboard API | 打开原生对话、由 Skill / Tool 回写任务信息（以实测为准） | 原生 Thread 事件、内部日志订阅、取消、恢复 |
+| DSH App 桌面插件模式 | 官方插件 API + Taskboard Tool / API | 插件明确公开并验证通过的交互和回写能力 | Session 识别、消息投递、事件订阅、取消、恢复 |
+| Codex App Server / DSH SDK / ACP | 作为独立 Runtime 候选 | 只承诺已完成协议实验的能力 | 初始化、认证、事件、审批、取消、恢复和版本兼容 |
 
-- `id`
-- `providerId`、`runtimeId`
-- `providerSessionId`
-- `workspacePath`
-- `createdAt`、`lastUsedAt`
+桌面 App 模式与独立 Runtime 模式必须分别标识。独立 Runtime 不能被 UI 描述为已经接管桌面 App 中现有的对话。
 
-外部会话 ID 不能作为跨 Agent 的统一 ID；应使用 Taskboard 自己的 ID 关联，并保留 provider 原始标识。
+### 6.2 OpenCode
 
-## 6. 适配器接口
+- 复用当前 OpenCode Server API 与会话发现逻辑。
+- 明确区分创建新 Session、向现有 Session 发送指令、查询 Session 状态。
+- 订阅事件时，只处理能够可靠关联到本次 Session / Run 的事件。
+- 任务绑定 Session 时，查询、事件和取消必须使用任务实际执行目录，Worktree 优先；验证返回 Session 路径与执行目录一致。
+- 通过状态查询 / 快照确认当前执行状态；浏览器重连后重新获取快照。
+- 取消操作调用已验证的 OpenCode abort API；请求成功仅代表取消请求已发出，不得直接认定 Agent 已停止。
+- 若 Session 已空闲但 Task 仍为 in_progress，提示用户检查状态或再次唤醒，不能无限自动重试。
+- 不把事件订阅误认为可以回放断线期间所有内部事件；实际补拉范围必须由接口验证结果决定。
 
-以下为设计示意，应结合当前 TypeScript 版本和代码规范落地：
+### 6.3 OpenAI Codex App
 
-```ts
+本项目优先目标是与用户已打开的 Codex App 交互，不默认改为独立 CLI Agent。
+
+- 使用经过验证的桌面交互桥接方式打开任务上下文；CDP / UI 自动化必须独立封装，检测 App 版本并考虑失效。
+- 使用项目 Skill / Tool 或 CLI（如当前项目定义的 taskctl）读取任务、提交评论 / 状态与执行结果。
+- 在 Taskboard 中关联 Thread / Session ID 时，必须使用可靠取得的原生标识；不猜测或伪造 ID。
+- CDP + Skill + 状态回写不能被描述为可靠的 Codex 内部事件订阅，也不代表能取消正在执行的 turn。
+- 原生事件、取消与恢复需要单独验证 Codex App Server 或其他明确支持的桥接接口。
+- App Server 管理的独立 Runtime 与桌面 App 现有对话必须分开存储和展示。
+
+### 6.4 DeepSeek Harness App（DSH）
+
+- 优先使用官方插件接口与文档化扩展点。
+- 插件将明确公开、并已验证的 Session / 事件能力桥接到 Taskboard；Taskboard Tool / API 负责业务任务状态回写。
+- 不把 Cordis 内部事件总线或未文档化 IPC 当作稳定外部协议。
+- 只有验证通过后，才允许声明可读取当前 Session、发消息、订阅事件、取消或恢复。
+- 若插件无法控制已有 Session，可评估 SDK / ACP 或其他已验证的独立 Runtime，并在 UI 中明确标记。
+- SDK / ACP 的能力、认证、事件、恢复和审批都需单独做协议实验，不可默认等价于桌面 App 能力。
+
+### 6.5 能力声明
+
+建议由 Adapter 返回 Runtime 级能力集合，至少覆盖：
+
+- startRun
+- openNativeConversation
+- sendMessage
+- eventSubscription
+- eventReplay
+- sessionSnapshot
+- cancel
+- resumeExistingSession
+- approvalEvents
+- structuredOutput
+
+实际能力命名遵循代码现状，但要保证语义明确。
+
+- UI 只显示当前 Runtime 真正支持的操作。
+- 不支持的操作应禁用或隐藏，并说明原因。
+- “已配置”“连接可用”“Session 存在”“当前正在执行”必须分开表达。
+- 每项能力标记验证状态：已实现并测试、部分支持、仅预留、当前不支持。
+- 新增 Provider 前先完成能力矩阵、协议验证、Fake Adapter 测试和接入验收。
+
+### 6.6 Adapter 接口示意
+
+以下为设计方向，不要求照抄；实现前须与现有类型、异步约定和错误处理统一。
+
+~~~ts
 type AgentProviderType = 'opencode' | 'codex-app' | 'dsh-app';
 
-type AgentCapability =
-  | 'start-run'
-  | 'stream-events'
-  | 'cancel-run'
-  | 'send-message'
-  | 'resume-session'
-  | 'approval-events'
-  | 'structured-output'
-  | 'open-native-conversation'
-  | 'inject-task-context'
-  | 'subscribe-session-events'
-  | 'read-session-history';
+type AgentRunStatus =
+  | 'queued' | 'starting' | 'running'
+  | 'awaiting_input' | 'awaiting_approval'
+  | 'cancel_requested' | 'cancelled'
+  | 'succeeded' | 'failed' | 'interrupted';
+
+interface AgentCapabilitySet {
+  startRun: boolean;
+  openNativeConversation: boolean;
+  sendMessage: boolean;
+  eventSubscription: boolean;
+  eventReplay: boolean;
+  sessionSnapshot: boolean;
+  cancel: boolean;
+  resumeExistingSession: boolean;
+  approvalEvents: boolean;
+}
 
 interface AgentHealth {
   available: boolean;
   version?: string;
-  capabilities: AgentCapability[];
+  capabilities: AgentCapabilitySet;
   reason?: string;
 }
 
@@ -291,10 +443,9 @@ interface AgentRunInput {
   runId: string;
   prompt: string;
   workspacePath: string;
-  sessionId?: string;
-  interactionMode?: 'existing-app' | 'managed-runtime';
+  providerSessionId?: string;
+  interactionMode: 'existing-app' | 'managed-runtime';
   timeoutMs?: number;
-  approvalPolicy: 'require-approval' | 'provider-default';
 }
 
 interface AgentRunHandle {
@@ -305,308 +456,613 @@ interface AgentRunHandle {
 }
 
 interface AgentEvent {
+  eventId: string;
   runId: string;
   sequence?: number;
-  type: 'status' | 'stdout' | 'stderr' | 'tool' | 'approval'
-    | 'result' | 'error' | 'heartbeat';
+  type: string;
   timestamp: string;
   payload: unknown;
 }
 
 interface AgentAdapter {
   readonly provider: AgentProviderType;
-
   detect(runtimeId: string): Promise<AgentHealth>;
-
   start(input: AgentRunInput): Promise<AgentRunHandle>;
-
-  stream(runId: string): AsyncIterable<AgentEvent>;
-
   getStatus(runId: string): Promise<{
-    status: string;
+    status: AgentRunStatus | string;
     exitCode?: number;
   }>;
-
-  cancel(runId: string): Promise<void>;
-
+  cancel(runId: string): Promise<{
+    requested: boolean;
+    confirmedStopped: boolean;
+    reason?: string;
+  }>;
+  stream?(runId: string): AsyncIterable<AgentEvent>;
+  getSnapshot?(runId: string): Promise<unknown>;
+  replayEvents?(runId: string, afterSequence?: number): Promise<AgentEvent[]>;
   sendMessage?(sessionId: string, message: string): Promise<void>;
-
   resumeSession?(sessionId: string): Promise<AgentRunHandle>;
 }
-```
+~~~
 
-### 6.1 能力协商
+接口里的可选方法必须和能力声明一致；不能因为有一个 TypeScript 方法签名，就代表某个 Provider 已经支持该功能。
 
-适配器必须返回实际支持的能力。UI 根据能力显示按钮：
+---
 
-- 不支持 `send-message`：不显示“向当前会话发送消息”。
-- 不支持 `resume-session`：不显示“恢复会话”。
-- 不支持 `approval-events`：展示该 Agent 自身的权限/审批提示，不伪造 Taskboard 审批闭环。
-- 不支持 `open-native-conversation`：不显示跳转原生对话入口。
-- 不支持 `subscribe-session-events`：只展示 Taskboard Tool/API 回写的状态，不声称能实时观察 Agent 内部事件。
-- 不支持可靠取消：必须说明取消限制，并尽可能通过 Runner 管理进程退出。
+## 7. 事件持久化、SSE 与状态对账
 
-通用接口负责稳定性，Provider 扩展字段负责表达产品差异。
+### 7.1 事件模型
 
-## 7. 执行生命周期与状态机
+- 为事件定义唯一 eventId、所属 runId、类型、时间和必要的序列标识。
+- 重复 eventId 不得重复产生副作用。
+- 事件处理须防止乱序或迟到事件把状态改回旧状态。
+- 仅在提交成功后广播已持久化的业务事件；广播失败后可通过查询补拉。
+- 分开存储业务状态变更、Agent 结构化事件与高频原始日志。
+- 事件载荷必须有 schema / 版本策略，不能把底层任意 payload 当成可信领域对象。
 
-建议的标准状态：
+### 7.2 断线与恢复
 
-- `queued`：等待执行。
-- `starting`：正在检查环境、准备工作目录或启动进程。
-- `running`：执行中。
-- `awaiting_approval`：等待用户或 Provider 授权。
-- `succeeded`：成功完成。
-- `failed`：执行失败。
-- `cancelled`：已取消。
-- `interrupted`：进程或 Runner 意外中断，状态尚待恢复/确认。
+- Web 使用 SSE 或仓库现有实时机制时，断线重连后应先获取当前 Run 快照，再根据事件游标补拉可用历史。
+- 如果 Provider 无法回放原始事件，必须明确只保证最新状态快照或 Taskboard 已接收事件，不声称完整回放。
+- 查询历史事件与实时流应共享一致的顺序和去重语义。
+- 状态对账任务按合理频率运行，避免每次刷新都请求所有 Agent 的完整状态。
+- 若事件历史已超过保留期限，应返回明确的游标过期结果，并引导客户端刷新快照。
+- SSE 中断不等于 Agent 执行中断；Agent 断连也不等于 Run 已失败。
 
-主要流程：
+### 7.3 任务评论和活动记录
 
-1. 验证任务、Provider、Runtime 和用户权限。
-2. 检查 Agent 是否安装、可用及已完成认证。
-3. 验证项目路径；按策略创建或校验 Worktree。
-4. 创建 `AgentRun` 并持久化 `queued/starting` 状态。
-5. 启动 Agent，并记录运行句柄与外部会话 ID。
-6. 标准化并持久化事件，推送到前端。
-7. 处理退出码、最终结果和状态迁移。
-8. 更新 Taskboard 任务状态；必要时触发测试或人工 Review。
-9. 清理临时资源，但默认保留失败任务的 Worktree 供排障。
+- 普通用户评论、Agent 进度、系统通知、状态审计和原始运行日志要区分。
+- 评论只保存用户和 Agent 需要看到的摘要，不保存无限增长的 stdout/stderr。
+- 评论发送失败、重试成功、状态变化及等待人工操作应有明确 UI 反馈。
+- 评论作者应使用当前登录用户 / 已认证 Actor 身份，不依赖匿名 Web 用户名。
+- 若评论用于唤醒 Agent，保留现有 pending → processing → processed 生命周期，并与 Run 状态分开显示；只有指令已可靠投递后才进入 processing，投递失败应保留可重试状态。
+- 对 TUI 注入等无法可靠观测完成时机的通道，必须由受支持的收尾流程明确完成评论状态；不得仅因 Run / Task 进入终态就推断唤醒评论已处理。
+- 唤醒评论的编辑权、处理状态更新和人工验收权必须遵守仓库现有权限契约，不得为了统一多 Agent 接口扩大权限。
+- 继续遵守现有评论编辑权限、任务版本号、租约与状态变更审计规则。
 
-状态迁移必须校验合法性，并防止重复提交导致同一个 Run 被启动多次。任务创建 API 应支持幂等键或其他防重复机制。
+---
 
-## 8. Runner 与工作目录隔离
+## 8. Workspace、Session、Git 与目录保护
 
-### 8.1 MVP Runner
+### 8.1 Task / Session / Workspace 绑定
 
-第一阶段建议 Runner 与 Taskboard Server 部署在同一台开发机上，优先适配当前 Windows 开发环境。后续再抽象 Runner 注册协议。
+- Taskboard 内部 Session 记录与 Provider 原生 Session ID 分开。
+- 创建执行时明确使用已有 Session 还是创建新 Session。
+- 项目、逻辑目录、文件系统 Workspace 和 Agent Session 是不同概念，不能混成一个字段。
+- 改变项目默认 Session 只影响后续新建任务；不追溯修改已有 Task / Run 的绑定。
+- 切换当前工作目录不能隐藏、重置或删除旧的历史 Run 和 Session 关联。
+- 目录被移动、重命名、删除或暂时不可访问时，保留历史关联并显示不可访问原因。
+- Session 存在与 Session 仍可被原生 App 打开是两个不同状态。
+- 路径规范化需正确处理 Windows 盘符、空格、中文字符、大小写与分隔符。
 
-Runner 负责：
+### 8.2 Git Worktree 策略
 
-- 启动和监督子进程。
-- 受控传递参数与环境变量。
-- 收集 stdout、stderr、结构化事件。
-- 管理超时、取消、退出码和子进程清理。
-- 校验工作目录必须位于用户授权的项目根目录内。
-- 记录运行元数据，处理 Server 重启后的恢复或中断标记。
+- 对写代码的独立 Run，默认优先采用独立 Worktree 与专属分支；复用已有目录需显式选择。
+- 同一 Worktree 不允许多个写入型 Agent 并发执行，除非用户显式确认风险。
+- 任务重试时明确复用或新建 Worktree，不自动清空上次的改动。
+- 保存 Task / Run / Worktree / branch 之间的关系，以便查看 diff 与排错。
+- Worktree 创建失败、分支冲突或仓库状态异常时停止执行并返回原因。
+- 删除 Worktree、分支或任务时必须分别处理，不能将它们绑定为一个不可逆操作。
+- 清理前检查未提交改动、未跟踪文件及用户数据；存在未提交改动时默认保留并要求显式决策。
+- 默认保留失败 Run 的 Worktree 供诊断；成功后的清理策略应可配置且安全。
 
-不要依赖仅保存 PID 来恢复任务：进程可能已退出、PID 可能被重用。需要为每个执行实例保存可验证的进程信息，并在启动时使用唯一 Run ID 关联日志和状态。
+---
 
-### 8.2 Worktree 策略
+## 9. API 契约与错误语义
 
-- 默认每次 Run 使用独立 Git Worktree 和专属分支。
-- 任务重试时，明确选择新建 Worktree 或复用原 Worktree。
-- 同一 Worktree 不允许多个 Agent 并发写入，除非用户显式选择并理解风险。
-- 保留任务与 Worktree 的绑定关系，支持完成后查看 diff。
-- 自动删除 Worktree 前检查未提交改动，避免数据丢失。
-- 将目录路径规范化，并处理 Windows 路径大小写、盘符和分隔符差异。
+最终路由要服从当前 API 命名和 OpenAPI 规范；以下为建议能力集合，实施前检查是否已有等价接口。
 
-## 9. API 设计建议
-
-实际路径应服从现有 API 命名规范。建议提供以下接口：
-
-| 方法 | 路径 | 用途 |
+| 方法 | 建议路径 | 用途 |
 |---|---|---|
-| GET | `/api/agent-providers` | 查询可用 Provider 与能力 |
-| GET | `/api/agent-runtimes` | 查询配置的运行实例 |
-| POST | `/api/agent-runtimes/:id/health-check` | 检测安装、版本、认证和服务可用性 |
-| GET | `/api/issues/:id/agent-runs` | 查询任务执行历史 |
-| POST | `/api/issues/:id/agent-runs` | 为任务创建并启动一次执行 |
-| GET | `/api/agent-runs/:runId` | 获取执行详情 |
-| POST | `/api/agent-runs/:runId/cancel` | 取消执行 |
-| GET | `/api/agent-runs/:runId/events` | 查询事件历史 |
-| GET | `/api/agent-runs/:runId/stream` | 通过 SSE 接收实时事件 |
-| POST | `/api/agent-runs/:runId/messages` | 向支持交互的会话发送消息 |
-| POST | `/api/agent-runs/:runId/resume` | 恢复支持恢复的会话 |
+| GET | /api/agent-providers | 查询 Provider 与支持能力 |
+| GET | /api/agent-runtimes | 查询配置的 Runtime |
+| POST | /api/agent-runtimes/:id/health-check | 检测安装、认证、版本与服务可用性 |
+| GET | /api/issues/:id/agent-runs | 查询某任务的执行历史 |
+| POST | /api/issues/:id/agent-runs | 创建并开始一次执行，立即返回 runId |
+| GET | /api/agent-runs/:runId | 查询执行详情和状态 |
+| POST | /api/agent-runs/:runId/cancel | 请求取消 |
+| GET | /api/agent-runs/:runId/events | 查询事件历史 / 游标 |
+| GET | /api/agent-runs/:runId/stream | 订阅实时事件 |
+| POST | /api/agent-runs/:runId/messages | 向支持交互的 Session 发消息 |
+| POST | /api/agent-runs/:runId/resume | 恢复明确支持恢复的执行 / Session |
 
-注意事项：
+### 9.1 API 约束
 
-- 创建执行应返回 `runId`，不应等待整个 Agent 任务执行完毕。
-- SSE 断线后支持按 sequence 或游标补拉事件，不能只依赖内存中的实时广播。
-- 对需要较长时间的任务，采用持久化 Job/Run 模式，不要占用单个 API 请求直到结束。
-- 错误响应采用稳定错误码，避免把底层密钥、环境变量或敏感命令暴露给前端。
-- 写操作必须验证项目访问权限、路径权限和运行权限。
+- 长任务启动 API 只负责确认请求与创建 Run，不等待整项工作执行完毕。
+- 创建执行支持幂等键或等价防重复机制。
+- 所有路径、Runtime、Task、Run 和 Session 关系由服务端校验，不能信任前端提供的关联 ID。
+- 写操作必须校验身份、任务权限、工作目录权限、Runtime 权限和当前合法状态。
+- 使用稳定错误码区分：参数错误、未授权、资源不存在、版本冲突、Runtime 不可用、能力不支持、超时、并发受限、工作区冲突和执行失败。
+- 不向前端返回密钥、完整环境变量、敏感请求头或未经脱敏的命令上下文。
+- 时间字段统一语义，列表提供分页 / 游标；日志输出限制单次返回大小。
+- API、schema、CLI、MCP、Web 和 OpenAPI 的同步遵循第 0.2 节约定。
 
-## 10. Web 交互设计
+---
 
-### 10.1 Agent 管理
+## 10. Web 交互与用户感知
 
-显示每个 Runtime 的：
+### 10.1 Agent / Runtime 管理
 
-- Agent 名称、类型、版本。
-- 连接/安装状态与最近健康检查时间。
-- 工作目录或服务地址。
-- 支持的能力。
-- 配置与认证问题提示。
+展示 Agent 名称、类型、版本、运行模式、健康检查时间、能力、必要的非敏感配置和诊断原因。必须区分：
 
-“已配置”与“当前可用”必须是不同状态。
+- 已配置；
+- 当前可连接；
+- 已检测到 Session；
+- 有执行正在运行；
+- 当前能力不可用 / 未验证。
+
+健康检查失败不自动意味着该 Runtime 所有历史 Run 都失败。
 
 ### 10.2 启动任务
 
-从看板任务详情启动：
-
-1. 选择 Agent Provider。
-2. 选择具体 Runtime（如果存在多个）。
-3. 选择新建会话或使用可用的既有会话（仅对支持的 Agent 显示）。
-4. 确认工作目录及 Worktree 策略。
-5. 输入任务提示词或使用任务描述自动生成初始提示词。
-6. 显示权限策略、超时和并发限制。
-7. 启动后跳转到 Run 详情页。
+1. 选择 Provider 和具体 Runtime。
+2. 选择已有 Session 或新 Session（仅在对应能力支持时展示）。
+3. 确认工作目录和 Worktree 策略。
+4. 检查并展示权限策略、超时、并发限制。
+5. 提交任务后返回 Run 详情，不要求保持单个请求直到执行完毕。
+6. 如果某项能力未验证或不支持，在开始前明确告知用户。
 
 ### 10.3 Run 详情
 
-至少包含：
+至少展示：
 
-- 当前状态、运行时长、Agent 版本和工作目录。
-- 实时 stdout/stderr 与标准化事件时间线。
-- 取消、重试、恢复（仅限支持的 Agent）操作。
-- Git 分支、Worktree 路径、变更文件和 diff 入口。
-- 最终结果摘要、退出码、失败原因。
-- 测试结果、Review 状态及人工审批记录。
+- Task / Run 标识、Provider、Runtime、Session 关联和当前状态。
+- 启动时间、运行时长、结束时间、退出码与结果摘要。
+- 当前工作目录、Worktree、分支和查看 diff 的入口。
+- 结构化事件和连续日志的时间线；长日志分页或分块加载。
+- 取消、重试、恢复、发送消息等操作只在当前状态和 Runtime 能力允许时显示。
+- 失败原因、诊断信息、权限审批和用户操作记录。
+- 数据同步中断时的醒目提示和重新同步入口。
 
-不要把三个接入目标的内部对话格式强行渲染成完全相同的聊天 UI。MVP 以统一时间线和日志为主，后续再为各 Provider 增加专属事件视图。
+### 10.4 状态与评论反馈
 
-## 11. 安全、权限与可靠性
+- 异步按钮提供加载、成功、失败与可重试反馈。
+- 发送评论失败不能丢失用户输入；重试必须避免重复。
+- 不可用操作应解释限制原因，避免只禁用按钮而没有说明。
+- 区分等待输入、等待授权、等待验收、执行失败与 Agent 离线。
+- 前端显示只能基于服务端持久化状态 / 已接收事件，不能自行推断成功或停止。
+- 实时进度只显示真实可获得的数据；未知进度显示为未知，不伪造百分比。
 
-### 11.1 命令执行安全
+### 10.5 人工介入、通知与交互边界
 
-- 禁止将用户输入拼接到 Shell 字符串中执行；优先使用固定可执行文件路径和参数数组。
-- 仅允许选择已注册的 Agent Provider/Runtime，不接受任意可执行文件路径作为普通用户输入。
-- 对工作目录做规范化与授权根目录校验，防止路径穿越。
-- 限制环境变量白名单，避免将服务器 Secret 传给 Agent 子进程。
-- 对命令执行、文件修改、网络访问等能力遵守 Provider 的权限策略。
-- 对危险操作使用显式审批，不允许通过 Taskboard 自动绕过 Provider 自身的安全机制。
+- 明确区分等待用户输入、等待权限批准、等待人工验收、人工暂停和人工取消；这些状态应呈现不同的提示及可用操作。
+- 对所有需要人工介入的 Run 展示等待原因、等待对象、待处理操作和最近更新时间，避免任务看似运行中却长期没有进展。
+- 桌面 Agent 自身的权限对话与 Taskboard 统一审批节点不是同一机制；只有 Adapter 能读取并可靠关联审批事件时，才显示统一审批操作。
+- 通知属于辅助能力，不是 Run 状态的事实来源。通知失败不能改变任务执行结果，也不能阻断执行状态持久化。
+- 后续可支持站内通知、浏览器通知或其他可插拔通知渠道；用户应能配置通知范围、静音和去重规则。
+- 对任务完成、失败、等待输入、等待审批、取消超时等事件设置可配置通知；避免每条 stdout、每个心跳或每次状态轮询都触发通知。
+- 通知应有稳定的事件关联 ID，重试发送不得产生大量重复通知；必要时记录送达 / 失败状态。
+- 通知正文须遵循权限边界，不应向无权查看任务的接收者泄露工作目录、日志、提示词或敏感信息。
 
-### 11.2 网络与认证
+---
 
-- OpenCode Server 地址应做 URL 校验、超时控制、重定向策略和 SSRF 防护。
-- 远程访问 Taskboard 时需要认证和授权；不要将无认证的 Runner 控制接口暴露到公网。
-- API Key、OAuth token、CLI 凭据不得写入数据库普通字段、日志、任务提示词或前端状态。
-- 诊断日志应脱敏，避免记录完整环境变量和敏感请求头。
+## 11. 安全、权限与审计
 
-### 11.3 并发与故障处理
+### 11.1 身份与资源授权
 
-- 设置全局、Runtime 级别和项目级并发上限。
-- 设置任务超时、心跳、取消宽限期和资源清理策略。
-- 防止同一个 Run 重复启动；重试创建新 Run，并关联原 Run。
-- Server 重启后扫描未终结记录，验证实际进程状态，不能确认时标记为 `interrupted`。
-- 进程被强制终止时，确保子进程和相关资源能被回收。
-- 日志采用分页或分块读取，并限制单次响应大小。
+- 所有需要保护的 API 在 Server 层验证登录 / Token 与操作权限。
+- 校验用户是否可以查看或操作指定 Task、Run、Runtime、Session 和 Workspace。
+- 不允许仅依靠隐藏按钮实现权限控制。
+- 桌面桥接与 Runner 不能绕过 Taskboard 的用户授权边界。
+- 对敏感状态变化、取消、运行授权、工作区清理等保留必要审计记录。
 
-## 12. 测试策略
+### 11.2 命令执行安全
 
-### 12.1 单元测试
+- 禁止把任务输入直接拼接成 Shell 命令字符串；优先使用固定可执行文件和参数数组。
+- 仅允许使用已注册或受管理的 Provider / Runtime，不把任意可执行路径作为普通用户自由输入。
+- 对工作目录做规范化和授权根目录校验，防止路径穿越与符号链接逃逸。
+- 限制传给 Agent 进程的环境变量白名单，避免泄露 Taskboard Secret。
+- 设置执行超时、日志上限、子进程清理和合理的资源边界。
+- 命令、文件修改、网络访问等授权遵守 Provider 自身安全策略；Taskboard 不自动绕过高风险操作审批。
+- 将任务描述、仓库文件和 Agent 输出都视为不可信输入，不能把其中的指令当作可信的系统授权。
 
-- Provider 注册、能力声明与状态映射。
-- 参数组装、路径规范化、工作目录校验。
-- 标准输出解析、事件转换、错误映射。
-- 状态机合法迁移、重复启动保护、幂等逻辑。
-- 取消、超时、退出码及异常中断处理。
+### 11.3 网络与敏感信息
 
-### 12.2 集成测试
+- OpenCode Server 地址做 URL 校验、超时控制、重定向策略及 SSRF 防护；不允许随意访问云元数据或未授权内网地址。
+- 远程部署需要鉴权，不得向公网暴露未保护的 Runner 控制接口。
+- Token、API Key、OAuth 凭据和完整环境变量不能进入普通配置 JSON、任务提示词、评论或日志。
+- 日志与错误信息必须脱敏；按权限控制执行详情与原始日志访问。
+- 设置历史记录和日志保留期限，提供可预期的清理规则。
 
-- 用假 Agent 可执行程序验证 Runner 启动、流式日志、退出码、取消和超时。
-- 对 OpenCode API 使用 Mock Server 覆盖成功、HTTP 错误、超时和会话目录不匹配。
-- 对 Codex App 与 DSH App Adapter 使用可替换的桥接/协议层，不要求每次 CI 都依赖真实账号、桌面 App 或在线模型；SDK/ACP Runtime 的进程执行层单独测试。
-- 数据库迁移测试覆盖旧数据库升级和新库初始化。
-- SSE 断连重连后可以补齐事件，不重复或遗漏关键状态。
+---
 
-### 12.3 端到端验收
+## 12. 可靠性、迁移、日志与运维
 
-对每个 Agent 分别验证：
+### 12.1 服务生命周期
 
-1. Agent 缺失或未认证时能显示明确错误。
-2. 能在独立 Worktree 启动一个简单任务。
-3. UI 能收到运行状态和连续日志。
-4. 成功、失败、取消、超时均能正确结束。
-5. 刷新页面后仍能看到执行记录。
-6. Server 重启后能恢复状态或准确标记中断。
-7. 能查看本次执行的 Git diff。
-8. 一个 Agent 的异常不会破坏其他 Provider 的执行。
+- 明确 Web、Server、调度器、Runner 和各 Agent Runtime 的启动、健康检查和关闭顺序。
+- Taskboard Server 默认端口是 47824；OpenCode Server 默认端口是 4096。若有环境覆盖，必须以实际配置为准并清楚标明用途。
+- 区分浏览器可访问地址、宿主机地址、容器内部地址和桌面 Agent 地址；不能将 127.0.0.1 一律当作同一台机器。
+- OpenCode 服务 URL 和健康检查配置由统一设置 / 环境配置管理，不在项目和目录重复保存；健康检查入口与运行状态检查放在设置页面，不挂在目录 / 项目管理界面中。
+- 健康检查有超时、失败阈值和诊断信息；检查失败不应直接把所有 Run 改为失败。
+- 关闭时停止领取新任务，按策略处理当前 Run，并清理由自己管理的进程树。
+- 排查并防止子进程继承监听句柄导致父进程退出后端口仍被占用。
+- Docker 环境明确端口映射、卷挂载、文件权限、日志目录和数据持久化。
 
-## 13. 分阶段实施计划
+### 12.2 数据升级与备份
 
-### Phase 0：现状盘点与协议验证
+- 数据库变更仅通过受控迁移完成。
+- 测试新数据库初始化和旧数据库升级两条路径。
+- 对新增字段定义回填、默认值和向后兼容策略。
+- 对升级失败定义恢复和回滚步骤。
+- 对关键数据实施备份策略，并实际验证备份可以恢复。
+- 删除目录、项目、Runtime 或任务时，明确哪些 Run / Session / Event 记录仍须保留。
+- 多条写操作需要事务；事务提交与事件广播的先后顺序符合当前仓库约定。
+- 发布不能覆盖或清空用户数据库、工作区或历史执行记录。
 
-- 检查现有 OpenCode 路由、Session、Run/Task 类型、数据库迁移、事件推送和 Worktree 逻辑。
-- 确认当前运行环境：Windows 本机、服务器或容器；确定 Agent CLI 的安装位置和认证方式。
-- Codex App：验证桌面集成/打开原生对话、Skill 调用 taskctl、任务 ID 与 Thread ID 关联的可行性；单独验证 App Server 初始化、认证、事件、审批、取消和恢复能力。
-- DSH App：检查官方插件 API 与扩展点，验证插件能否识别当前 Session、向会话发送消息、订阅事件、请求取消；记录哪些能力不可用或尚无公开接口。
-- 对 DSH SDK/ACP 分别做最小协议实验，确认创建会话、事件、恢复、取消和审批的实际支持范围。
-- 明确“已有桌面 App 交互”与“Taskboard 独立启动 Runtime”是两种运行模式。
-- 产出接口差异表和具体迁移清单。
+### 12.3 结构化日志与可观测性
 
-**退出条件：** OpenCode API、Codex App 交互链路和 DSH App 插件链路均完成最小实验；各自已确认的能力、认证要求与限制有书面记录。App Server/SDK/ACP 作为备选路径时也需单独记录验证结果。
+- 在任务执行链路贯穿 taskId、runId、sessionId、eventId 等关联标识。
+- 记录调度决策、启动、重试、取消请求、取消确认、对账和最终结束。
+- 区分业务活动、系统诊断日志、Agent 事件和原始 stdout/stderr。
+- 记录队列积压、执行耗时、失败率、重试次数和 Runtime 健康状态等基础指标。
+- 对日志轮转、最大大小、保留周期和敏感信息脱敏给出明确策略。
+- 诊断信息应足以排障，但普通用户看到的错误消息不暴露内部密钥与敏感路径。
 
-### Phase 1：统一执行 MVP
+### 12.4 性能与资源管理
 
-- 新增 Provider/Runtime/Run/Event 类型及数据库迁移。
-- 定义适配器接口与注册表。
-- 复用并适配现有 OpenCode 能力。
-- 新增 Codex App Adapter：桌面交互桥接、Skill/taskctl、会话关联和状态回写。
-- 新增 DSH App Adapter：官方插件桥接、Taskboard Tool/API 与已验证的 Session 能力。
-- 实现 Runner、日志事件、取消、超时和状态持久化。
-- Web 增加 Agent 选择和 Run 详情页。
-- 建立 Mock/假 Agent 测试，避免 CI 依赖真实模型服务。
+- 为全局、Runtime、项目和工作目录分别定义并发上限；默认值集中配置，不能散落在多个路由或 UI 常量中。
+- 对任务队列设置容量 / 积压观测与过载行为；达到上限时明确拒绝、延迟或要求人工处理，不无限制接受任务。
+- 对任务执行设置可配置超时、取消宽限期、输出日志上限和必要的进程资源限制。
+- 长日志、评论、事件和执行历史必须分页、游标加载或分块读取；Web 不应一次性把完整日志加载到内存。
+- 对高频事件采用合理的批量处理、节流或背压；不能因单个慢客户端阻塞 Agent 执行或影响其他订阅者。
+- 核心列表查询建立经实际查询计划验证的索引，避免每次打开看板都扫描全部事件 / Run 或逐项请求 Agent 状态。
+- 健康检查和状态对账应限频、带超时；不能在每次页面刷新时触发昂贵的全量探测。
+- 明确磁盘空间不足、SQLite 锁竞争、文件句柄耗尽、进程残留及 Agent 过载时的错误反馈与恢复方式。
+- 后台清理任务必须受控并可观测；清理策略不得删除仍在使用的日志、运行目录或用户未提交的代码。
+- 引入性能指标前先测量实际瓶颈；当前版本不应为没有证据支持的场景引入分布式缓存或消息队列。
 
-**退出条件：** OpenCode、Codex App、DSH App 均能完成已验证范围内的任务派发、状态回写和任务追踪；不具备公开控制能力的功能明确显示为不支持，不承诺统一的内部事件流或取消能力。
+### 12.5 用量、成本与使用限制（非核心阶段）
 
-### Phase 2：会话与可靠性
+用量统计以 Provider 实际提供且可验证的数据为准。若 Agent 不公开 Token 或成本数据，应显示“不可获取”，不得估算后伪装成精确计费。
 
-- 评估并接入 Codex App Server 的会话/事件控制能力，以及 DSH 插件、SDK、ACP 各自可用的会话恢复与持续通信机制。
-- 增加健康检查、版本检测、认证诊断。
-- 补齐断线重连、Server 重启恢复、幂等启动和清理策略。
-- 增加事件补拉、日志分页和运行历史。
+- 为每次 Run 预留记录耗时、退出结果和可选资源用量的能力。
+- 仅在 Provider 可提供可靠数据时记录模型名、Token 用量或成本；明确统计来源、单位和缺失值语义。
+- 后续可增加按项目 / 用户 / Runtime 的执行次数、执行时长和用量聚合；应先定义数据保留和访问权限。
+- 若未来设置执行次数、成本或并发配额，达到限制时应在调度前给出明确原因，不能在运行中无提示地丢弃任务。
+- 费用或 Token 统计不作为第一阶段接入的阻塞条件，不应迫使所有 Adapter 实现并不存在的统一用量接口。
 
-**退出条件：** 支持的会话可以继续交互；不支持的能力在 UI 中明确禁用，而不是返回模糊错误。
+### 12.6 配置所有权、升级与发布纪律
 
-### Phase 3：协作工作流
+- 每项配置必须有单一权威来源，并写明默认值、环境覆盖规则、作用范围及敏感级别。
+- OpenCode Server 地址与健康检查应集中放在全局设置 / 服务配置中；目录和项目不应重复维护 Server URL，也不应因切换工作目录而丢失会话历史。
+- 端口、公开访问地址、容器内部地址及宿主机地址必须分开命名，禁止一个字段承担不同网络语义。
+- 废弃配置项时要写明迁移或清理步骤；启动时对非法配置提供可定位的错误，而不是静默回退到其他服务地址。
+- 每次发布前核对代码、本文档、环境示例、OpenAPI 文档和测试是否一致。
+- 数据库迁移应评估是否支持回退；如果迁移不可逆，发布步骤必须要求备份并明确恢复路径。
+- 文档中的“已完成”必须由源码位置与测试 / 实测证据支持；不能因为 Phase 计划里写了某项，就把它描述为当前已有能力。
 
-- 一个任务可串行或并行触发多个 Run。
-- 增加 Reviewer Agent、测试阶段和人工审批节点。
-- 统一结果摘要、diff、测试结果和 Review 记录。
-- 为多机器 Runner 设计注册、心跳和调度协议。
+---
 
-**退出条件：** 工作流每一步可追溯、可中断、可恢复，且合并始终受项目策略与人工授权约束。
+## 13. 测试与验收
 
-## 14. 主要风险与决策
+所有测试在不依赖真实模型服务的情况下应尽可能确定、快速、可重复；真实桌面 App 的 E2E 单独运行，不作为每次 CI 必须登录在线账号的前提。
 
-| 风险/决策 | 建议 |
+### 13.1 单元测试
+
+- Provider / Runtime 注册与能力声明。
+- 状态机合法迁移、终态保护、迟到事件和非法事件处理。
+- Run 创建幂等、单次 Run 不重复启动、重试生成新 Run。
+- 并发上限、原子领取、租约过期和锁释放。
+- 事件去重、顺序处理、状态对账与错误映射。
+- 路径规范化、授权目录检查和 Worktree 清理保护。
+- 取消请求与最终取消状态的区别。
+- 数据 schema、迁移与旧数据默认值。
+- 日志脱敏、分页 / 大小限制和错误码。
+- 依赖循环检测、依赖失败后的阻塞与人工放行规则。
+- Generator / AsyncGenerator（如采用）在异常、取消和消费者提前退出时能释放资源；若未采用生成器，不需要为生成器本身新增测试。
+- 并发容量达到上限时的调度决策和用户可见错误。
+- 用量缺失、不可获取或单位不一致时的展示与聚合语义。
+
+### 13.2 集成测试
+
+- 使用 Fake Agent 验证启动、事件流、完成、失败、超时、取消与异常退出。
+- 使用 OpenCode Mock Server 覆盖成功、HTTP 错误、超时、Session 路径不匹配、状态快照与 abort 失败。
+- Codex App / DSH 桥接采用可替换接口测试，不要求常规 CI 依赖真实桌面 App。
+- 事件先持久化再广播；广播失败仍能通过历史查询补拉。
+- SSE 断线重连后能获取快照与补拉可用事件，且不重复应用状态。
+- Server 重启后，未终结 Run 能被核对或被正确标记为 interrupted。
+- 数据库迁移覆盖新库初始化、旧库升级与关键数据保留。
+- 多并发请求不会重复启动同一 Run。
+- 评论和任务状态审计保持同事务 / 当前领域契约。
+
+### 13.3 安全 / 故障验收
+
+- 越权用户不能查看或控制不属于其权限范围的 Runtime / Run。
+- 未授权工作目录和路径穿越输入被拒绝。
+- 敏感凭据不会暴露到日志和前端错误。
+- 端口冲突、Agent 离线、认证失效和协议版本不兼容时能给出明确错误。
+- 取消超时、进程残留、磁盘不足等情况有诊断路径。
+- 已有未提交代码不会被自动删除。
+- 日志、事件和 Run 数量增长时，分页、保留期限和清理任务保持资源可控。
+- 通知失败或重复投递不会改变 Run 状态，也不会无限重复发送。
+- 配置错误、端口冲突和服务地址不可达时，设置页面提供可理解且可复现的诊断信息。
+
+### 13.4 端到端验收
+
+对每个 Provider 的已验证能力分别验收：
+
+1. Runtime 不可用 / 未认证时，显示明确错误且不创建虚假运行成功记录。
+2. 能为任务创建一次 Run，并保持 Task / Session / Workspace 关联。
+3. 运行期间能看到持久化状态和可用的事件 / 日志。
+4. 成功、失败、取消请求、确认取消、超时和中断均有正确状态。
+5. 页面刷新或重新登录后仍能查看执行历史。
+6. Server 重启后能恢复或准确标记状态。
+7. 能查看本次执行使用的分支 / Worktree 与变更摘要（适用于 Git 执行模式）。
+8. 某一个 Adapter 出错不影响其他 Provider。
+9. 不支持的原生事件、取消或恢复能力被明确标记，不能伪装成通过。
+10. 完成业务验证后，Task 状态仍按现有人工验收约定流转。
+
+### 13.5 每个切片的最低验证命令
+
+按仓库实际脚本执行，至少评估：
+
+~~~bash
+pnpm build
+pnpm typecheck
+pnpm test
+~~~
+
+若某条命令无法执行，需记录原因和替代验证，不能把它标记为通过。必要时再运行受影响包的针对性测试，缩短反馈周期。
+
+---
+
+## 14. 分阶段实施计划与退出门禁
+
+阶段必须顺序推进；上一阶段退出条件未满足时，不得直接开始更高复杂度的功能。每个阶段可以拆为多个小 PR / 小提交，但每个切片都应保持可构建、可测试。
+
+### Phase 0：仓库现状盘点与外部协议验证
+
+**工作范围**
+
+- 检查现有 OpenCode API / Session、任务状态、Event / SSE、Store、事务、数据库迁移、租约、目录、会话绑定、评论与 Worktree 逻辑。
+- 对照本文件将能力分类为：已实现且有测试、部分实现、未实现、外部能力待验证。
+- 明确 Windows 本机、Docker 容器和服务部署时的地址、端口与运行进程边界。
+- OpenCode：验证 Session 查询、工作目录绑定、事件订阅、状态快照和取消请求。
+- Codex App：验证桌面交互、原生会话标识获取和 Skill / Tool / CLI 回写链路；另行验证 App Server 原生能力。
+- DSH App：验证官方插件接口；另行记录 SDK / ACP 是否值得作为独立 Runtime 候选。
+- 不在本阶段开发复杂 UI，不因不确定能力先创建空实现。
+
+**产出物**
+
+- 当前实现 / 缺口清单。
+- 三种 Provider 的能力矩阵和实测证据。
+- 本阶段发现的架构冲突与决策记录。
+- 按风险排序的切片列表。
+
+**退出条件**
+
+- 每项第一阶段能力都有明确的可行性结论。
+- 所有不可用、未公开或未验证的原生能力均被标注。
+- 现有代码复用点和数据库迁移影响明确。
+- 不接入 Claude Code 的范围限制已落实到方案和接入检查中。
+
+### Phase 1：领域模型、状态机与 Fake Adapter
+
+**工作范围**
+
+- 在现有项目模型上确定 Provider、Runtime、Run、Event / Session 关联；只新增必要数据结构。
+- 明确 Task 状态与 Run 状态的边界。
+- 实现集中状态迁移、幂等创建、Run 历史与最小能力协商。
+- 加入 Fake Adapter 和契约测试，让状态、错误、事件和取消语义可以脱离真实模型验证。
+- 完成迁移、schema、索引、查询和旧数据兼容测试。
+
+**退出条件**
+
+- Run 可持久化创建并查询，多次尝试有独立记录。
+- 非法状态转换、重复启动和重复事件均受控。
+- 新库初始化和旧库升级测试通过。
+- 不依赖真实 Agent 即能覆盖核心状态与错误路径。
+
+### Phase 2：OpenCode 最小可靠闭环
+
+**工作范围**
+
+- 复用当前 OpenCode 集成，接入统一 Adapter / Run 模型。
+- 验证创建 / 使用 Session、路径匹配、状态查询、事件流和真实取消请求。
+- 将事件持久化、历史查询、SSE 推送与断线后的快照刷新连通。
+- 补齐超时、服务不可用、取消超时、迟到事件和 Server 重启后的状态对账。
+
+**退出条件**
+
+- 能完成一次可追踪的 OpenCode Run。
+- 取消请求和最终停止状态明确区分。
+- 浏览器断线 / 重连不破坏 Run 状态，历史数据可查询。
+- 路径不匹配不会继续执行。
+- 关键逻辑有 Mock / 集成测试。
+
+### Phase 3：Codex App 桌面桥接
+
+**工作范围**
+
+- 在已验证范围内实现桌面交互、Taskboard Skill / Tool / CLI 回写和会话关联。
+- 若某个原生 Session ID 或能力无法可靠取得，明确记录限制，不生成假关联。
+- 将 CDP / UI 自动化封装于隔离模块，增加版本和可用性检测。
+- 不把桌面交互回写描述为原生事件订阅、可靠取消或会话恢复。
+
+**退出条件**
+
+- 桌面桥接能在已验证范围内完成任务上下文传递与状态回写。
+- 页面能明确区分桌面交互模式与独立 Runtime 模式。
+- 无法实现的能力显示为不支持，不会错误改变 Run 状态。
+- CI 不需要真实 Codex 账号即可测试适配器契约。
+
+### Phase 4：DSH App 插件桥接
+
+**工作范围**
+
+- 仅使用已验证的官方插件接口与扩展点。
+- 接入能力检测、必要事件转发和 Taskboard 状态 / 结果回写。
+- 如考虑 DSH SDK / ACP，单独完成独立 Runtime 实验，不与桌面 App 插件模式混为一谈。
+- 明确插件更新、协议不兼容与桥接断连时的降级策略。
+
+**退出条件**
+
+- DSH 桌面插件只公开并实现已验证能力。
+- 事件 / 状态有明确关联标识，失败原因可诊断。
+- 原生能力不可用时可降级为有限回写，但 UI 不会误报全面控制能力。
+- 假桥接测试覆盖正常、断连、无能力和错误响应。
+
+### Phase 5：可靠性、安全与运维加固
+
+**工作范围**
+
+- 补齐并发限制、锁 / 租约、重试策略、优雅关闭和资源清理。
+- 完成目录授权、Shell 参数、环境变量、URL / SSRF、权限及日志脱敏检查。
+- 完成备份 / 恢复、迁移兼容、诊断信息、日志限制与部署文档。
+- 完成关键端到端验收和故障注入测试。
+
+**退出条件**
+
+- 取消、失败、服务重启和事件丢失都有确定的处理路径。
+- 用户代码与敏感信息保护通过验收。
+- 迁移、备份和恢复流程经过实际测试。
+- 测试结果和未覆盖风险书面记录。
+
+### Phase 6：工作流与扩展能力（后续）
+
+仅在前五阶段稳定后再评估：
+
+- 多 Run 串并行和任务依赖。
+- Reviewer Agent、测试阶段及人工审批节点。
+- 定时任务、批量操作、任务模板。
+- 用量统计、通知、任务分析与历史导出。
+- 多机器 Runner 注册、心跳和调度。
+- 复杂 DAG / 工作流可视化。
+- 可验证的用量 / 成本统计、配额策略及使用报表。
+- 可配置站内 / 浏览器通知、去重与送达状态。
+- 任务执行耗时、失败率、队列积压等基础分析。
+- 只有确有需求时才评估分布式消息队列、分布式锁和自动水平扩展。
+
+**退出条件**
+
+- 工作流每一步均有可追溯 Run / Event。
+- 可以中断、恢复或明确标记不可恢复。
+- Review 与 Merge 分离；合并与发布仍受项目策略和授权约束。
+- 引入多实例前已设计跨机器锁、租约、网络安全与故障恢复。
+
+### 当前版本优先级映射
+
+优先级用于安排实现顺序，不意味着所有条目必须在同一个提交中完成。
+
+| 级别 | 内容 | 落地规则 |
+|---|---|---|
+| P0：核心正确性 | 现状盘点、领域模型、Task / Run 状态边界、幂等、并发领取、取消语义、事件持久化、Session / Workspace 关联、Worktree 代码保护、基础鉴权、迁移兼容、核心自动化测试 | 进入真实多 Agent 执行前必须有设计和测试证据；按 Phase 逐项实施。命令执行授权、目录边界、凭据保护和取消语义必须在对应 Adapter / Runner 上线前完成，不得等到 Phase 5 才补最低安全边界 |
+| P1：可运维性 | 结构化日志、诊断信息、性能 / 资源限制、备份恢复、配置统一、通知基础、前端错误反馈、部署回滚 | 核心闭环完成后逐步实施；任何涉及安全、数据丢失或资源耗尽的风险仍须在上线前处理 |
+| P2：扩展能力 | 复杂 DAG、Reviewer 工作流、成本报表、配额、多机器 Runner、复杂可视化、自动扩展 | 当前不阻塞基础版本；只有明确用户需求、边界和验收方式后再创建独立阶段 |
+
+### 实施前必须保留的技术决策
+
+- 调度器核心选用显式状态机和持久化机制；Generator / AsyncGenerator 是否用于事件产出，由具体实现场景决定，不作为强制架构依赖。
+- 第一阶段按单机、单调度器和当前 SQLite 能力设计；分布式队列、多 Runner 与跨机器锁属于后续决策。
+- 站内 / 浏览器通知、成本报表和复杂依赖编排不阻塞最小可靠执行闭环。
+- 对外部 Agent 的每项能力都需要协议或实测证据，不以统一接口定义代替真实支持证明。
+
+---
+
+## 15. AI 落地任务拆分模板
+
+后续让 AI 实施本方案时，任务描述按以下模板生成。每次只安排一个边界清晰的切片。
+
+~~~md
+## 任务：<单一可验收目标>
+
+### 背景
+说明当前行为、关联代码及为什么需要修改。
+
+### 本次范围
+- 要修改的行为。
+- 涉及的模块 / API / 数据。
+- 本次明确不做的内容。
+
+### 开始前检查
+- 阅读 AGENTS.md 和对应设计章节。
+- 检查现有实现、调用方、迁移和相关测试。
+- 列出可复用能力与实际缺口。
+
+### 实施要求
+- 依照现有分层、事务、schema 和 API 规范实现。
+- 覆盖成功、失败、重复请求、超时和权限边界。
+- 对未支持的 Provider 能力明确返回不支持。
+- 不顺手重构无关模块。
+
+### 验收条件
+使用可重复执行的 Given / When / Then 或等价步骤描述成功标准。
+
+### 验证
+执行相关测试，以及本次变更需要的 build / typecheck / test。
+
+### 完成报告
+- 修改文件与关键行为。
+- 通过 / 未通过的验证命令及真实结果。
+- 未完成项、兼容性风险和后续建议。
+~~~
+
+如果某个目标需要跨越多个复杂子系统，应进一步拆成多个纵向切片，而不是让 AI 同一轮同时重写数据模型、调度器、全部 Adapter 和所有页面。
+
+---
+
+## 16. 当前实施状态登记
+
+以下清单用于每个阶段实际执行后更新。初始状态不应默认勾选；需要源码、测试或协议实验作为证据。
+
+| 项目 | 初始状态 | 证据 / 更新要求 |
+|---|---|---|
+| 现有实现与缺口盘点 | 待核对 | 标记源码位置与测试 |
+| Provider / Runtime / Run 模型 | 待核对 | 类型、迁移与状态机测试 |
+| Fake Adapter 与契约测试 | 待核对 | 自动化测试结果 |
+| OpenCode 事件 / 快照 / 取消闭环 | 待核对 | Mock / 集成测试及真实环境验证 |
+| Codex App 桌面桥接 | 待验证 | 记录可复现的交互链路 |
+| DSH App 插件桥接 | 待验证 | 记录官方接口与实测能力 |
+| SSE 重连、事件补拉和去重 | 待核对 | 断线及重复事件测试 |
+| 并发、幂等、重试与恢复 | 待核对 | 故障注入 / 单元测试 |
+| Worktree 与用户改动保护 | 待核对 | 未提交变更保护测试 |
+| 权限、安全与敏感信息脱敏 | 待核对 | 权限测试与代码审查 |
+| 数据迁移、备份、恢复 | 待核对 | 实际升级 / 恢复演练 |
+| UI 状态反馈和错误提示 | 待核对 | 页面验收步骤 |
+| 调度器实现选择与可靠性 | 待核对 | 状态机、幂等、并发、取消和恢复测试；说明是否使用 Generator |
+| 性能与资源限制 | 待核对 | 并发上限、日志限制、过载和清理测试 |
+| 任务依赖与公平调度 | 明确延期 / 待核对 | 记录当前依赖能力；后续实现循环检测、阻塞与人工放行测试 |
+| 用量、成本和通知 | 明确延期 | 先确认 Provider 是否提供可靠数据，再定义 UI / API / 验收 |
+| 配置所有权与文档同步 | 待核对 | 设置归属、端口 / URL 来源及文档一致性检查 |
+| 全量构建、类型检查与测试 | 待执行 | 记录命令、结果与失败原因 |
+
+状态只能更新为以下明确值：**未开始、进行中、待验证、已完成、受阻、明确延期**。只有验收条件与必要证据齐全时才可标记为已完成。
+
+---
+
+## 17. 风险与决策记录
+
+| 风险 / 决策 | 当前处理原则 |
 |---|---|
-| 桌面 App 与独立 Runtime 能力不一致 | 以能力协商为准，不强求完全对称 |
-| CDP、插件 API 和 Agent 协议随版本变化 | 启动时检测版本，适配器有明确的版本兼容策略 |
-| 多 Agent 竞争写代码 | 默认独立 Worktree |
-| 长任务期间服务重启 | Run/Event 持久化，Runner 负责恢复或标记中断 |
-| CI 无法使用真实模型账号 | 用 Fake Agent 和 Mock Server 做确定性测试，真实端到端测试单独执行 |
-| 任务提示词和日志含敏感数据 | 最小化存储、脱敏、权限控制和保留期限 |
-| 远程 Runner 复杂度过高 | 先做本机 Runner，后续再扩展多机器 |
-| 自动 Review 误合并 | Review 与 Merge 分离，默认人工确认 |
+| 桌面 App 和独立 Runtime 能力不同 | 分开建模，按 Runtime 声明能力 |
+| CDP / 插件 API 随版本变化 | 隔离实现并做版本检测 |
+| Provider 不支持真实取消 | 不伪造取消成功，明确显示限制 |
+| 断线期间事件不可回放 | 以状态快照恢复，说明历史缺口 |
+| 任务重复启动或重试覆盖历史 | 幂等键 + 独立 Run 历史 |
+| 多 Agent 修改同一工作区 | 默认独立 Worktree，保护未提交代码 |
+| Taskboard 重启造成运行状态不确定 | 启动时对账，无法确认则标记 interrupted |
+| AI 一轮改动范围过大导致 CI 难排查 | 纵向切片，逐阶段退出门禁 |
+| 真实模型 / 桌面 App 无法参与 CI | Fake Adapter / Mock 做确定性测试，真实 E2E 单独验收 |
+| 为未来场景过早引入复杂基础设施 | 当前单机可靠，证据充分后再扩展 |
+| 任务输入或日志泄露敏感信息 | 最小化存储、脱敏、权限控制与保留周期 |
 
-## 15. 建议的首批交付清单
+新发现的架构决策应记录：日期、问题、选择、备选方案、原因、影响范围和重新评估条件，避免同一问题被重复讨论或不同阶段给出冲突答案。
 
-- [ ] 完成现有架构盘点及 OpenCode API、Codex App、DSH App 的接入协议验证。
-- [ ] 确定 Provider、Runtime、Run、Session、Event 的领域模型。
-- [ ] 增加数据库迁移和核心 schema。
-- [ ] 定义 AgentAdapter 接口、能力模型和错误码。
-- [ ] 实现统一 Runner 与假 Agent 测试程序。
-- [ ] OpenCode：验证事件流过滤、状态快照恢复、真实 abort 请求与目录绑定校验。
-- [ ] 将现有 OpenCode 能力接入统一执行层。
-- [ ] 实现 Codex App 桌面交互适配器与 Skill/taskctl 状态回写链路。
-- [ ] 实现 DSH App 插件桥接与 Taskboard Tool/API 状态回写链路。
-- [ ] 增加 Run 启动、查询、取消和事件接口。
-- [ ] 增加 Web Agent 选择、实时日志与执行详情。
-- [ ] 完成超时、取消请求、SSE 断线重连、Taskboard 重启后的 Session 状态恢复和路径权限测试。
-- [ ] 完成 OpenCode、Codex App、DSH App 的真实环境验收，并记录原生会话控制能力边界。
-- [ ] 将会话恢复能力扩展到 Codex App / DSH App 已验证的原生桥接接口，再启动多 Agent 工作流阶段。
+---
 
-## 16. 结论
+## 18. 最终落地顺序
 
-采用“统一任务管理层 + Agent Adapter + 桌面/插件桥接 + 可选 Runner + Worktree”的架构，可以在一个 Taskboard 面板中接入 OpenCode、Codex App 和 DSH App，同时保留各自原生交互方式。
+严格按以下主路径推进，不并行启动相互依赖的复杂阶段：
 
-实施顺序应为：
+1. **现状盘点与协议验证：** 确认真实代码和外部能力，先解决不确定性。
+2. **领域模型、状态机与 Fake Adapter：** 建立可测试的执行基础。
+3. **OpenCode 最小可靠闭环：** 用已存在的接入能力验证统一架构。
+4. **Codex App 桌面桥接：** 只实现并承诺已验证范围。
+5. **DSH App 插件桥接：** 只实现并承诺已验证范围。
+6. **可靠性、安全和部署验收：** 补齐并发、恢复、迁移和故障处理。
+7. **工作流与多机器扩展：** 等核心闭环稳定后再评估。
 
-1. 先统一启动、日志、状态、取消和结果。
-2. 再分别实现会话恢复与持续交互。
-3. 最后实现多 Agent 编排、自动 Review 和流水线。
+最终要求：**每一项异步执行都有明确身份、持久化状态、执行历史、取消语义、失败处理和恢复策略；每一种 Agent 能力都有证据支撑；每一阶段都有可重复的验收标准。**
 
-当前已补入 OpenCode 的事件订阅、真实取消请求与状态快照恢复链路；Codex App 与 DSH App 的原生事件、取消和会话恢复仍需各自桥接协议验证。第一阶段的成功标准不是 UI 中出现三个 Agent 选项，而是每个接入目标都能完成其已验证范围内的任务交互与状态追踪，对未支持的原生控制能力明确告知。
+这份文档是实施路线与验收基准，不是要求一次性完成全部功能的指令。执行 AI 必须先完成 Phase 0，按阶段推进，并在进入下一阶段前报告真实验证结果和剩余风险。
