@@ -7,7 +7,9 @@ import { inTransaction } from './transactions.js';
 // PRAGMAs, the base schema DDL (the historical "v0" layout) and the ordered
 // migrations layered on top. Idempotent — safe on any db.
 export function configureDatabase(db: DatabaseSync): void {
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  // busy_timeout：唤醒队列引入多进程写（嵌入式引擎 + watch 侧车），
+  // WAL 只解决读写并发，写-写冲突需要等待窗口而不是立刻抛 SQLITE_BUSY。
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   db.exec(`
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -387,6 +389,68 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       db.exec('ALTER TABLE comments ADD COLUMN queued_at TEXT');
       db.exec('UPDATE comments SET queued_at = created_at WHERE queued_at IS NULL');
     }
+  },
+  // v23: wake dispatch rounds and recovery bookkeeping — per-round identity
+  // (dispatch_id), claim ownership (claimed_run), terminal gate (terminal_at),
+  // busy-wait timing (busy_since/busy_accum_ms) and cumulative absent scans.
+  // No backfill: NULL/0 is correct for existing rows.
+  (db: DatabaseSync) => {
+    if (!hasColumn(db, 'comments', 'dispatch_id')) {
+      db.exec('ALTER TABLE comments ADD COLUMN dispatch_id TEXT');
+    }
+    if (!hasColumn(db, 'comments', 'claimed_run')) {
+      db.exec('ALTER TABLE comments ADD COLUMN claimed_run TEXT');
+    }
+    if (!hasColumn(db, 'comments', 'terminal_at')) {
+      db.exec('ALTER TABLE comments ADD COLUMN terminal_at TEXT');
+    }
+    if (!hasColumn(db, 'comments', 'busy_since')) {
+      db.exec('ALTER TABLE comments ADD COLUMN busy_since TEXT');
+    }
+    if (!hasColumn(db, 'comments', 'busy_accum_ms')) {
+      db.exec('ALTER TABLE comments ADD COLUMN busy_accum_ms INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!hasColumn(db, 'comments', 'absent_scans')) {
+      db.exec('ALTER TABLE comments ADD COLUMN absent_scans INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!hasColumn(db, 'comments', 'first_absent_at')) {
+      db.exec('ALTER TABLE comments ADD COLUMN first_absent_at TEXT');
+    }
+    if (!hasColumn(db, 'comments', 'last_absent_at')) {
+      db.exec('ALTER TABLE comments ADD COLUMN last_absent_at TEXT');
+    }
+    db.exec('CREATE INDEX IF NOT EXISTS idx_comments_wake_queue ON comments(status, not_before)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_comments_wake_run ON comments(claimed_run, status)');
+  },
+  // v24: multi-engine coordination — liveness registry (heartbeats decide
+  // reclaim) and per-session injection leases (short tombstone-based
+  // protection around probe→POST; never deleted, only released).
+  (db: DatabaseSync) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS wake_engines (
+      run_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL DEFAULT '',
+      host TEXT NOT NULL DEFAULT '',
+      pid INTEGER,
+      started_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      version TEXT NOT NULL DEFAULT ''
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_wake_engines_seen ON wake_engines(last_seen_at)');
+    db.exec(`CREATE TABLE IF NOT EXISTS wake_session_leases (
+      lease_key TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      server_url TEXT NOT NULL DEFAULT '',
+      holder_run TEXT NOT NULL,
+      comment_id TEXT,
+      dispatch_id TEXT,
+      fence INTEGER NOT NULL DEFAULT 0,
+      state TEXT NOT NULL DEFAULT 'held',
+      acquired_at TEXT NOT NULL,
+      renewed_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      dispatch_started_at TEXT
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_wake_leases_expires ON wake_session_leases(expires_at)');
   }
 ];
 

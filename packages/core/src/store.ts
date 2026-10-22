@@ -13,7 +13,9 @@ import { inTransaction } from './transactions.js';
 import { ProjectRepo } from './repos/projects.js';
 import { DirectoryRepo, type DirectoryCreateInput, type DirectoryPatchInput } from './repos/directories.js';
 import { IssueRepo } from './repos/issues.js';
-import { CommentRepo } from './repos/comments.js';
+import { CommentRepo, type WakeQueueMeta } from './repos/comments.js';
+import { WakeEngineRepo } from './repos/engines.js';
+import { WakeLeaseRepo, type WakeLeaseRow } from './repos/leases.js';
 import { ActivityRepo } from './repos/activities.js';
 import { DependencyRepo } from './repos/dependencies.js';
 import { SearchRepo } from './repos/search.js';
@@ -72,6 +74,8 @@ export class Store {
   private directories: DirectoryRepo;
   private issues: IssueRepo;
   private comments: CommentRepo;
+  private wakeLeases: WakeLeaseRepo;
+  private wakeEngines: WakeEngineRepo;
   private activities: ActivityRepo;
   private deps: DependencyRepo;
   private fts: SearchRepo;
@@ -93,6 +97,8 @@ export class Store {
     this.directories = new DirectoryRepo(this.db);
     this.issues = new IssueRepo(this.db);
     this.comments = new CommentRepo(this.db);
+    this.wakeLeases = new WakeLeaseRepo(this.db);
+    this.wakeEngines = new WakeEngineRepo(this.db);
     this.activities = new ActivityRepo(this.db);
     this.deps = new DependencyRepo(this.db);
     this.fts = new SearchRepo(this.db);
@@ -651,6 +657,16 @@ export class Store {
   updateComment(id: string, patch: { body?: string; status?: string }, actor = '', authenticatedUsername: string | null = null): Comment {
     const cur = this.comments.get(id);
     if (!cur) throw new NotFoundError(`comment not found: ${id}`);
+    // v10 编辑门禁：人工终态且有保护租约的唤醒评论，编辑只保存正文——轮次身份
+    // 与终态保留给受控恢复；无保护时附带 status='pending' 触发完整重置。
+    if (patch.body !== undefined && isWakeComment(cur.body)) {
+      const meta = this.comments.queueMeta(id);
+      if (meta?.terminalAt) {
+        patch = meta.dispatchId && this.wakeLeases.hasProtection(id, meta.dispatchId)
+          ? { body: patch.body }
+          : { body: patch.body, status: 'pending' };
+      }
+    }
     if (patch.body !== undefined && cur.status !== 'pending') {
       throw new ValidationError(`comment ${id} is ${cur.status}; only pending comments can be edited`);
     }
@@ -757,10 +773,13 @@ export class Store {
   // 'pending' transition here would re-trigger the engine's own subscription
   // in a loop, and external delivery state is not a user-facing edit.
 
-  /** Claim a pending wake comment; null when it is no longer pending. */
-  claimWake(commentId: string, claimer: string): string | null {
+  /** Claim a pending wake comment for a run; null when it is not claimable.
+   *  门禁：pending + 无终态 + 退避到期；同一 CAS 内生成新轮次 dispatch_id 并
+   *  清零缺席计数。 */
+  claimWake(commentId: string, claimer: string, runId: string): { token: string; dispatchId: string } | null {
     if (!claimer.trim()) throw new ValidationError('claimer must be non-empty');
-    return this.comments.claim(commentId, claimer.trim());
+    if (!runId.trim()) throw new ValidationError('runId must be non-empty');
+    return this.comments.claim(commentId, claimer.trim(), runId.trim());
   }
 
   /**
@@ -779,56 +798,137 @@ export class Store {
   }
 
   /**
-   * 队列批次（v22）：pending 且已到 not_before 的评论，FIFO（queued_at → created_at
-   * → rowid）。引擎的启动/轮询 sweep 用这个而不是全量 pending：退避中的评论
-   * 不会被提前重投，队列顺序由 queued_at 决定。
+   * 队列批次：pending 且已到 not_before、未终态的评论，FIFO（queued_at →
+   * created_at → rowid）。引擎的启动/轮询 sweep 用这个而不是全量 pending。
    */
   listQueueBatch(nowIso: string): PendingWakeComment[] {
     return this.comments.listQueueBatch(nowIso);
   }
 
-  /** 队列元数据：attempts / last_error / not_before / queued_at（不存在返回 null）。 */
-  queueMeta(commentId: string): { attempts: number; lastError: string; notBefore: string | null; queuedAt: string | null } | null {
+  /** 队列元数据：含轮次/终态/busy/缺席计数字段（不存在返回 null）。 */
+  queueMeta(commentId: string): WakeQueueMeta | null {
     return this.comments.queueMeta(commentId);
   }
 
-  /**
-   * 投递失败的退避回收：CAS（processing + 认领令牌）→ pending，attempts+1 并记录
-   * 错误与下次可投时间。令牌失效说明别的尝试已接管，返回 false。
-   */
-  requeueWake(commentId: string, claimToken: string, error: string, notBeforeIso: string): boolean {
-    if (!claimToken) return false;
-    return this.comments.requeue(commentId, claimToken, error, notBeforeIso);
+  dispatchIdOf(commentId: string): string | null {
+    return this.comments.dispatchId(commentId);
   }
 
   /**
-   * 执行通道互斥的延后（会话 busy）：回队列 + not_before，不增加 attempts
-   * （不是失败，只是等空闲）。令牌失效返回 false。
+   * 投递失败的退避回收：CAS（processing + 认领令牌 + 轮次）→ pending，
+   * attempts+1 + 退避 + busy 清零；terminal=true 时同语句写 terminal_at
+   * （人工门禁，达 WAKE_MAX_ATTEMPTS 由引擎判定）。
    */
-  deferWake(commentId: string, claimToken: string, notBeforeIso: string): boolean {
-    if (!claimToken) return false;
-    return this.comments.defer(commentId, claimToken, notBeforeIso);
+  requeueWake(commentId: string, claimToken: string, dispatchId: string, error: string, notBeforeIso: string, terminal = false): boolean {
+    if (!claimToken || !dispatchId) return false;
+    return this.comments.requeue(commentId, claimToken, dispatchId, error, notBeforeIso, terminal);
   }
 
-  /** 结果核对：processing 超时未更新的评论（含认领令牌），引擎据此判断是否超时回收。 */
-  listStaleProcessing(cutoffIso: string, claimerPrefix = 'watch'): { id: string; issueId: string; claimToken: string }[] {
-    return this.comments.listStaleProcessing(cutoffIso, claimerPrefix);
+  /** busy defer（确认会话忙）：回队列 + 退避 + 打开 busy 窗口，不耗 attempts。 */
+  deferWakeBusy(commentId: string, claimToken: string, dispatchId: string, notBeforeIso: string): boolean {
+    if (!claimToken || !dispatchId) return false;
+    return this.comments.deferBusy(commentId, claimToken, dispatchId, notBeforeIso);
   }
 
-  /**
-   * 崩溃恢复：启动时把本实例前缀且超过 cutoff 的 processing 认领回退为 pending
-   * （attempts 保留，人工重新唤醒才清零）。只释放令牌仍匹配的行（CAS），
-   * 不会影响并发运行的其他实例的新鲜认领。
-   */
-  resetStaleClaims(cutoffIso: string, claimerPrefix = 'watch'): { id: string; issueId: string }[] {
-    return inTransaction(this.db, () => {
-      const rows = this.comments.listStaleProcessing(cutoffIso, claimerPrefix);
-      const released: { id: string; issueId: string }[] = [];
-      for (const row of rows) {
-        if (this.comments.release(row.id, row.claimToken, 'pending')) released.push({ id: row.id, issueId: row.issueId });
-      }
-      return released;
-    });
+  /** unknown defer（探测失败）：关窗累计（暂停 busy 计时），不耗 attempts。 */
+  deferWakeUnknown(commentId: string, claimToken: string, dispatchId: string, notBeforeIso: string): boolean {
+    if (!claimToken || !dispatchId) return false;
+    return this.comments.deferUnknown(commentId, claimToken, dispatchId, notBeforeIso);
+  }
+
+  /** busy 等待超时：+24h 纯重排（不耗 attempts），关窗累计，错误留痕。 */
+  deferBusyTimeout(commentId: string, claimToken: string, dispatchId: string, error: string, notBeforeIso: string): boolean {
+    if (!claimToken || !dispatchId) return false;
+    return this.comments.deferBusyTimeout(commentId, claimToken, dispatchId, error, notBeforeIso);
+  }
+
+  /** busy episode 结束（发送前 idle / 成功 / 真实失败），双字段清零。 */
+  resetBusy(commentId: string, claimToken: string, dispatchId: string): boolean {
+    if (!claimToken || !dispatchId) return false;
+    return this.comments.resetBusy(commentId, claimToken, dispatchId);
+  }
+
+  /** 人工终态（转人工门禁）：pending + terminal_at + last_error，绝不自动重投。 */
+  terminalizeWake(commentId: string, claimToken: string, dispatchId: string, error: string): boolean {
+    if (!claimToken || !dispatchId) return false;
+    return this.comments.terminalize(commentId, claimToken, dispatchId, error);
+  }
+
+  /** 延迟确认完成（v10）：终态评论在本轮租约上观察到完成 → processed + 解除终态。 */
+  completeTerminalWake(commentId: string, dispatchId: string): boolean {
+    if (!dispatchId) return false;
+    return this.comments.completeTerminal(commentId, dispatchId);
+  }
+
+  /** 缺席计数（两步门禁 CAS）：评论轮次/终态守卫 + 租约实时子查询。 */
+  absentScan(commentId: string, claimToken: string, dispatchId: string, nowIso: string,
+             leaseKey: string | null, leaseFence: number | null, staleCutoffIso: string): boolean {
+    if (!claimToken || !dispatchId) return false;
+    return this.comments.absentScan(commentId, claimToken, dispatchId, nowIso, leaseKey, leaseFence, staleCutoffIso);
+  }
+
+  /** 结果核对（本 run 专属）：超时未更新的本 run 认领（inFlight 排除在引擎侧）。 */
+  listStaleProcessing(cutoffIso: string, runId: string): { id: string; issueId: string; claimToken: string; dispatchId: string | null }[] {
+    return this.comments.listStaleProcessing(cutoffIso, runId);
+  }
+
+  /** 孤儿扫描：死 run（心跳过期）/ legacy（>24h 无 run 身份）的他人认领。 */
+  listOrphanProcessing(graceCutoffIso: string, legacyCutoffIso: string, liveCutoffIso: string, myRun: string):
+    { id: string; issueId: string; claimToken: string; dispatchId: string | null }[] {
+    return this.comments.listOrphanProcessing(graceCutoffIso, legacyCutoffIso, liveCutoffIso, myRun);
+  }
+
+  // ---- wake engine registry (v24) ------------------------------------------
+  registerWakeEngine(runId: string, kind: string, host: string, pid: number | null, startedAtIso: string, lastSeenAtIso: string, version: string): void {
+    this.wakeEngines.register(runId, kind, host, pid, startedAtIso, lastSeenAtIso, version);
+  }
+
+  heartbeatWakeEngine(runId: string, lastSeenAtIso: string): void {
+    this.wakeEngines.heartbeat(runId, lastSeenAtIso);
+  }
+
+  // ---- wake session leases (v24) -------------------------------------------
+  wakeLeaseAcquire(input: { leaseKey: string; sessionId: string; serverUrl: string; holderRun: string; commentId: string; dispatchId: string; nowIso: string; ttlMs: number }): WakeLeaseRow | null {
+    return this.wakeLeases.acquire(input);
+  }
+
+  wakeLeaseRenew(input: { leaseKey: string; holderRun: string; commentId: string; dispatchId: string; nowIso: string; ttlMs: number }): boolean {
+    return this.wakeLeases.renew(input);
+  }
+
+  wakeLeaseMarkDispatching(leaseKey: string, fence: number, dispatchId: string, nowIso: string): boolean {
+    return this.wakeLeases.markDispatching(leaseKey, fence, dispatchId, nowIso);
+  }
+
+  wakeLeaseMarkSent(leaseKey: string, fence: number, dispatchId: string, nowIso: string, ttlMs: number): boolean {
+    return this.wakeLeases.markSent(leaseKey, fence, dispatchId, nowIso, ttlMs);
+  }
+
+  wakeLeaseReleaseHeld(leaseKey: string, fence: number, holderRun: string, commentId: string, dispatchId: string): boolean {
+    return this.wakeLeases.releaseHeld(leaseKey, fence, holderRun, commentId, dispatchId);
+  }
+
+  wakeLeaseConclude(leaseKey: string, fence: number, dispatchId: string, nowIso: string): boolean {
+    return this.wakeLeases.conclude(leaseKey, fence, dispatchId, nowIso);
+  }
+
+  wakeLeaseOpsRelease(leaseKey: string, commentId: string, dispatchId: string, fence: number, nowIso: string): boolean {
+    return this.wakeLeases.opsRelease(leaseKey, commentId, dispatchId, fence, nowIso);
+  }
+
+  wakeLeaseGet(leaseKey: string): WakeLeaseRow | null {
+    return this.wakeLeases.get(leaseKey);
+  }
+
+  /** 按轮次查租约（恢复核验的 conclude 前置）。 */
+  wakeLeaseFindByComment(commentId: string, dispatchId: string): WakeLeaseRow | null {
+    return this.wakeLeases.findByComment(commentId, dispatchId);
+  }
+
+  /** 该评论轮次是否存在未解除的会话保护（编辑门禁/恢复判定）。 */
+  wakeLeaseHasProtection(commentId: string, dispatchId: string | null): boolean {
+    if (!dispatchId) return false;
+    return this.wakeLeases.hasProtection(commentId, dispatchId);
   }
 
   // ---- activities: latest first, capped by the repo (default 50) ----

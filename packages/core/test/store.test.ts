@@ -1868,13 +1868,14 @@ describe('wake queue primitives (v22)', () => {
     const project = store.createProject({ id: 'p1', name: 'P' });
     const issueId = store.createIssue({ projectId: project.id, title: 'T' }).id;
     const commentId = store.addComment(issueId, { author: 'web', body: '@agent x' }).id;
-    const token = store.claimWake(commentId, 'watch');
+    const claim = store.claimWake(commentId, 'watch', 'run-test')!;
+    const token = claim.token;
     assert.ok(token, 'claim must succeed for a pending comment');
-    // 错误令牌不能改状态（ABA 防护）。
-    assert.equal(store.requeueWake(commentId, 'watch:stale', 'boom', '2099-01-01T00:00:00.000Z'), false);
+    // 旧令牌控制不了状态（ABA 防护关键断言）
+    assert.equal(store.requeueWake(commentId, 'watch:stale', claim.dispatchId, 'boom', '2099-01-01T00:00:00.000Z'), false);
     assert.equal(store.getComment(commentId)!.status, 'processing');
-    // 正确令牌：回退 pending + attempts+1 + 记录错误与下次可投时间。
-    assert.equal(store.requeueWake(commentId, token, 'boom', '2099-01-01T00:00:00.000Z'), true);
+    // 正确令牌：转回 pending + attempts+1 + 记录错误与下次可投时间。
+    assert.equal(store.requeueWake(commentId, token, claim.dispatchId, 'boom', '2099-01-01T00:00:00.000Z'), true);
     const meta = store.queueMeta(commentId)!;
     assert.equal(meta.attempts, 1);
     assert.equal(meta.lastError, 'boom');
@@ -1885,17 +1886,21 @@ describe('wake queue primitives (v22)', () => {
 
 describe('wake queue: claim clears stale backoff', () => {
   it('a new claim clears a leftover not_before from an earlier attempt', () => {
-    const { store } = fresh();
+    const db = new DatabaseSync(':memory:');
+    const store = new Store('.unused', db);
     const project = store.createProject({ id: 'p1', name: 'P' });
     const issueId = store.createIssue({ projectId: project.id, title: 'T' }).id;
     const commentId = store.addComment(issueId, { author: 'web', body: '@agent x' }).id;
-    const first = store.claimWake(commentId, 'watch');
+    const first = store.claimWake(commentId, 'watch', 'run-test')!;
     assert.ok(first);
-    // 失败退避留下未来的 not_before
-    assert.equal(store.requeueWake(commentId, first, 'boom', '2099-01-01T00:00:00.000Z'), true);
+    // 失败退避会标记未来 not_before
+    assert.equal(store.requeueWake(commentId, first.token, first.dispatchId, 'boom', '2099-01-01T00:00:00.000Z'), true);
     assert.equal(store.queueMeta(commentId)!.notBefore, '2099-01-01T00:00:00.000Z');
-    // 崩溃恢复 / 重新认领后，旧退避必须被清掉，否则轮询永远跳过
-    const second = store.claimWake(commentId, 'watch');
+    // 退避未到期：任何领取路径都不可绕过（v9 门禁）
+    assert.equal(store.claimWake(commentId, 'watch', 'run-test'), null);
+    // 退避到期（模拟时间流逝）：claim 清空旧退避，轮询才会自动重试
+    db.prepare("UPDATE comments SET not_before = '2020-01-01T00:00:00.000Z' WHERE id = ?").run(commentId);
+    const second = store.claimWake(commentId, 'watch', 'run-test')!.token;
     assert.ok(second);
     assert.equal(store.queueMeta(commentId)!.notBefore, null);
   });

@@ -1,4 +1,4 @@
-﻿// Wake-delivery CAS claim (v21): per-attempt claim tokens, ABA safety and the
+// Wake-delivery CAS claim (v21): per-attempt claim tokens, ABA safety and the
 // comment-level updated_at stamp. Runs against the SOURCE barrel with an
 // in-memory DatabaseSync, matching store.test.ts.
 
@@ -26,7 +26,7 @@ const row = (db: DatabaseSync, id: string): { status: string; claimedBy: string;
 describe('Store.claimWake', () => {
   it('claims a pending comment, returns a token, and stamps processing + claimed_by', () => {
     const { store, db, commentId } = fixture();
-    const token = store.claimWake(commentId, 'watch');
+    const token = store.claimWake(commentId, 'watch', 'run-test')!.token;
     assert.ok(token, 'pending comment must yield a token');
     const current = row(db, commentId);
     assert.equal(current.status, 'processing');
@@ -35,23 +35,23 @@ describe('Store.claimWake', () => {
 
   it('returns null when the comment is already processing or processed', () => {
     const { store, db, commentId } = fixture();
-    const first = store.claimWake(commentId, 'watch');
+    const first = store.claimWake(commentId, 'watch', 'run-test')!.token;
     assert.ok(first);
-    assert.equal(store.claimWake(commentId, 'watch'), null, 'processing is not claimable');
+    assert.equal(store.claimWake(commentId, 'watch', 'run-t'), null, 'processing is not claimable');
     db.prepare("UPDATE comments SET status = 'processed', claimed_by = '' WHERE id = ?").run(commentId);
-    assert.equal(store.claimWake(commentId, 'watch'), null, 'processed is not claimable');
+    assert.equal(store.claimWake(commentId, 'watch', 'run-t'), null, 'processed is not claimable');
   });
 
   it('rejects a blank claimer', () => {
     const { store, commentId } = fixture();
-    assert.throws(() => store.claimWake(commentId, '  '), /claimer must be non-empty/);
+    assert.throws(() => store.claimWake(commentId, '  ', 'run-t'), /claimer must be non-empty/);
   });
 });
 
 describe('Store.releaseWake', () => {
   it('reverts only with the exact claim token', () => {
     const { store, db, commentId } = fixture();
-    const token = store.claimWake(commentId, 'watch');
+    const token = store.claimWake(commentId, 'watch', 'run-test')!.token;
     assert.ok(token);
     assert.equal(store.releaseWake(commentId, 'not-the-token', 'pending'), false);
     assert.equal(row(db, commentId).status, 'processing');
@@ -62,7 +62,7 @@ describe('Store.releaseWake', () => {
 
   it('finalizes a headless success to processed', () => {
     const { store, db, commentId } = fixture();
-    const token = store.claimWake(commentId, 'watch');
+    const token = store.claimWake(commentId, 'watch', 'run-test')!.token;
     assert.ok(token);
     assert.equal(store.releaseWake(commentId, token, 'processed'), true);
     assert.equal(row(db, commentId).status, 'processed');
@@ -70,11 +70,11 @@ describe('Store.releaseWake', () => {
 
   it('is ABA-safe: an old token cannot revert a newer claim', () => {
     const { store, db, commentId } = fixture();
-    const first = store.claimWake(commentId, 'watch');
+    const first = store.claimWake(commentId, 'watch', 'run-test')!.token;
     assert.ok(first);
     // Simulate the row becoming pending again (edit/re-wake) after attempt one.
     db.prepare("UPDATE comments SET status = 'pending', claimed_by = '' WHERE id = ?").run(commentId);
-    const second = store.claimWake(commentId, 'watch');
+    const second = store.claimWake(commentId, 'watch', 'run-test')!.token;
     assert.ok(second);
     assert.notEqual(first, second, 'each attempt carries its own token');
 
@@ -108,7 +108,7 @@ describe('comments.updated_at (v21)', () => {
     // Back to pending = the user re-queued it; the next claim must win again.
     store.updateComment(commentId, { status: 'pending' }, 'watch');
     await sleep(5);
-    const token = store.claimWake(commentId, 'watch');
+    const token = store.claimWake(commentId, 'watch', 'run-test')!.token;
     assert.ok(token);
     const afterClaim = row(db, commentId);
     assert.ok(Date.parse(afterClaim.updatedAt) > Date.parse(afterUpdate.updatedAt), 'claim must bump updated_at');

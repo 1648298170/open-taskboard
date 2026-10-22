@@ -147,9 +147,9 @@ describe('wake engine: claim-before-deliver', () => {
 });
 
 describe('wake engine: delivery failure', () => {
-  it('reverts the claim to pending when prompt delivery is rejected', async () => {
+  it('keeps the claim processing when prompt delivery returns 5xx (result unknown)', async () => {
     let promptAttempted = false;
-    const { store, db, issueId, engine } = fixture({
+    const { store, issueId, engine } = fixture({
       sessionId: 'ses_1',
       fetchImpl: url => {
         const health = healthOk(url);
@@ -164,13 +164,42 @@ describe('wake engine: delivery failure', () => {
     await engine.start();
     try {
       const commentId = store.addComment(issueId, { author: 'web', body: '@agent 处理这个' }).id;
-      // Wait for the whole attempt: the initial row is pending too, so the
-      // predicate must prove delivery already ran and was reverted.
+      await waitFor(() => promptAttempted
+        && store.listActivities(issueId).some(a => a.detail.includes('结果未知')));
+      // 5xx 结果未知：按可能已投递进入核验——保持 processing，不耗 attempts。
+      assert.equal(store.getComment(commentId)!.status, 'processing');
+      assert.equal(store.queueMeta(commentId)!.attempts, 0);
+      assert.equal(store.queueMeta(commentId)!.notBefore, null);
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('reverts the claim to pending when prompt delivery is definitively rejected (4xx)', async () => {
+    let promptAttempted = false;
+    const { store, db, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) {
+          promptAttempted = true;
+          return Promise.resolve(new Response('nope', { status: 400 }));
+        }
+        return okResponse();
+      },
+    });
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 处理这个' }).id;
       await waitFor(() => promptAttempted
         && (db.prepare('SELECT status FROM comments WHERE id = ?').get(commentId) as { status: string }).status === 'pending');
-      const row = db.prepare('SELECT status, claimed_by AS token FROM comments WHERE id = ?').get(commentId) as { status: string; token: string };
+      const row = db.prepare('SELECT status, claimed_by AS token, attempts FROM comments WHERE id = ?').get(commentId) as { status: string; token: string; attempts: number };
       assert.equal(row.status, 'pending');
       assert.equal(row.token, '', 'released claims clear their token');
+      assert.equal(row.attempts, 1, '4xx is a definitive delivery failure and consumes the budget');
+      const lease = store.wakeLeaseFindByComment(commentId, store.dispatchIdOf(commentId)!);
+      assert.equal(lease?.state, 'released', 'the round lease must be tombstoned on definitive rejection');
     } finally {
       await engine.stop();
     }
@@ -262,13 +291,23 @@ describe('wake engine: serialized queue', () => {
     const secondIssue = store.createIssue({ projectId: 'p1', title: 'Second' }).id;
     await engine.start();
     try {
-      store.addComment(issueId, { author: 'web', body: '@agent 第一条' });
-      store.addComment(secondIssue, { author: 'web', body: '@agent 第二条' });
+      const firstComment = store.addComment(issueId, { author: 'web', body: '@agent 第一条' });
+      const secondComment = store.addComment(secondIssue, { author: 'web', body: '@agent 第二条' });
       await waitFor(() => promptCount === 1);
       await sleep(80);
       assert.equal(promptCount, 1, 'the second wake must wait for the first');
 
+      // 第一条 200 后租约进入 sent（ack→busy 窗口保护）：第二条仍不得注入
       firstPrompt.resolve();
+      await sleep(60);
+      assert.equal(promptCount, 1, 'sent/unverified lease must protect the session until resolved');
+
+      // 模拟核验收尾（上一轮确认完成）→ 释放保护 → 第二条投递
+      const lease = store.wakeLeaseFindByComment(firstComment.id, store.dispatchIdOf(firstComment.id)!);
+      assert.ok(lease, 'the settled round must hold a lease');
+      store.wakeLeaseConclude(lease!.leaseKey, lease!.fence, lease!.dispatchId!, new Date().toISOString());
+      // 第二条在保护期内已被 defer 出队；补一次 pending 补丁重新入队
+      store.updateComment(secondComment.id, { status: 'pending' });
       await waitFor(() => promptCount === 2);
     } finally {
       firstPrompt.resolve();
@@ -436,8 +475,12 @@ describe('wake engine: re-wake', () => {
       await waitFor(() => store.getComment(commentId)!.status === 'processing');
       assert.equal(promptDeliveries(), 1);
       // 重新唤醒：pending 状态补丁必须穿透 seen 去重并再次投递。
-      // 注：prompt_async 路径在 stub 下不会到 processed（monitor 无完成信号），
-      // 所以重投递的断言是「prompt 再次发生 + 重新认领为 processing」。
+      // 注：prompt_async 路径在 stub 下不会到 processed（monitor 无完成信号）。
+      // v7 保护：上一轮租约 sent（结果未知）时新轮次必须先等旧轮 resolve——
+      // 这里模拟核验收尾（结论=已完成）释放保护，再重唤醒。
+      const lease = store.wakeLeaseFindByComment(commentId, store.dispatchIdOf(commentId)!);
+      assert.ok(lease, 'the first round must hold a session lease');
+      store.wakeLeaseConclude(lease!.leaseKey, lease!.fence, lease!.dispatchId!, new Date().toISOString());
       store.updateComment(commentId, { status: 'pending' });
       await waitFor(() => promptDeliveries() >= 2);
       await waitFor(() => store.getComment(commentId)!.status === 'processing');
@@ -521,9 +564,10 @@ describe('wake engine: busy review hardening', () => {
     await engine.start();
     try {
       const commentId = store.addComment(issueId, { author: 'web', body: '@agent 卡死测试' }).id;
-      await waitFor(() => store.queueMeta(commentId)!.attempts >= 1);
+      await waitFor(() => store.queueMeta(commentId)!.lastError.includes('超时'), 8000);
       const meta = store.queueMeta(commentId)!;
-      assert.ok(meta.lastError.includes('超时'), 'timeout must be recorded as the failure reason');
+      assert.equal(meta.attempts, 0, 'busy timeout must not consume the retry budget');
+      assert.ok(Date.parse(meta.notBefore || '') > Date.now() + 23 * 60 * 60_000, 'busy timeout must requeue with ~24h');
       assert.equal(store.getComment(commentId)!.status, 'pending');
     } finally {
       await engine.stop();
@@ -540,7 +584,7 @@ describe('wake engine: reliable delivery (s4)', () => {
           return Promise.resolve(new Response(JSON.stringify({ ses_retry: { type: 'idle' } }), { status: 200 }));
         }
         if (url.includes('/prompt_async')) {
-          return Promise.resolve(new Response('boom', { status: 500 }));
+          return Promise.resolve(new Response('boom', { status: 400 }));
         }
         return okResponse();
       },
@@ -562,26 +606,32 @@ describe('wake engine: reliable delivery (s4)', () => {
     }
   });
 
-  it('stops auto-retrying after maxAttempts and surfaces a terminal failure', async () => {
+  it('stops auto-retrying after WAKE_MAX_ATTEMPTS and surfaces a terminal failure', async () => {
+    let promptFailures = 0;
     const { store, issueId, engine } = fixture({
       sessionId: 'ses_retry2',
       fetchImpl: url => {
         if (url.includes('/session/status')) {
           return Promise.resolve(new Response(JSON.stringify({ ses_retry2: { type: 'idle' } }), { status: 200 }));
         }
-        if (url.includes('/prompt_async')) return Promise.resolve(new Response('boom', { status: 500 }));
+        if (url.includes('/prompt_async')) {
+          promptFailures++;
+          return Promise.resolve(new Response('boom', { status: 400 }));
+        }
         return okResponse();
       },
-      engineOptions: { pollMs: 0, maxAttempts: 1, backoffBaseMs: 1_000, backoffMaxMs: 1_000 },
+      engineOptions: { pollMs: 10, backoffBaseMs: 1, backoffMaxMs: 2 },
     });
     await engine.start();
     try {
       const commentId = store.addComment(issueId, { author: 'web', body: '@agent 立即失败' }).id;
-      await waitFor(() => store.queueMeta(commentId)!.attempts >= 1);
+      await waitFor(() => store.queueMeta(commentId)!.terminalAt !== null, 8000);
       const meta = store.queueMeta(commentId)!;
       assert.ok(meta.lastError.includes('停止自动重试'), 'must mark terminal failure: ' + meta.lastError);
-      // 终态失败：长退避（24h），轮询不再重试
-      assert.ok(Date.parse(meta.notBefore || '') > Date.now() + 23 * 60 * 60_000);
+      assert.equal(promptFailures, 5, 'exactly WAKE_MAX_ATTEMPTS deliveries must have been attempted');
+      const stable = promptFailures;
+      await sleep(60);
+      assert.equal(promptFailures, stable, 'terminal rows must never auto-redeliver');
       const failedActivities = store.listActivities(issueId)
         .filter(a => a.action === 'execution' && a.detail.includes('停止自动重试'));
       assert.equal(failedActivities.length, 1, 'terminal failure must be visible in the activity stream');
@@ -590,25 +640,41 @@ describe('wake engine: reliable delivery (s4)', () => {
     }
   });
 
-  it('expires stale processing comments once the session is idle', async () => {
+  it('terminalizes unconfirmed deliveries after repeated absent verification (fail-closed)', async () => {
     const { store, db, issueId, engine } = fixture({
       sessionId: 'ses_timeout',
       fetchImpl: url => {
         if (url.includes('/session/status')) {
           return Promise.resolve(new Response(JSON.stringify({ ses_timeout: { type: 'idle' } }), { status: 200 }));
         }
+        // /message 返回 {}：marker 永不出现（缺席核验路径）
         return okResponse();
       },
-      engineOptions: { pollMs: 20, resultTimeoutMs: 1 },
+      engineOptions: { pollMs: 15, resultTimeoutMs: 1 },
     });
     const commentId = store.addComment(issueId, { author: 'web', body: '@agent 超时样例' }).id;
     // 模拟「投递成功但 agent 未标记 processed」：认领 + 把 updated_at 推到过去
-    store.claimWake(commentId, 'watch');
+    const claim = store.claimWake(commentId, 'watch', 'run-seed');
     db.prepare("UPDATE comments SET updated_at = '2020-01-01T00:00:00.000Z' WHERE id = ?").run(commentId);
+    // 预置 2 次有效缺席观察（5s 门禁由时间差跨越），本次扫描即达 K=3 → 转人工
+    db.prepare('UPDATE comments SET absent_scans = 2, first_absent_at = ?, last_absent_at = ? WHERE id = ?')
+      .run(new Date(Date.now() - 11_000).toISOString(), new Date(Date.now() - 6_000).toISOString(), commentId);
+    // 种一个 sent 保护租约 → post-dispatch 语义（走 marker 核验而非 I0 回收）
+    store.wakeLeaseAcquire({
+      leaseKey: 'http://oc.test|ses_timeout', sessionId: 'ses_timeout', serverUrl: 'http://oc.test',
+      holderRun: 'run-seed', commentId, dispatchId: claim!.dispatchId,
+      nowIso: new Date().toISOString(), ttlMs: 10 * 60_000,
+    });
+    store.wakeLeaseMarkDispatching('http://oc.test|ses_timeout', 1, claim!.dispatchId, new Date().toISOString());
+    store.wakeLeaseMarkSent('http://oc.test|ses_timeout', 1, claim!.dispatchId, new Date().toISOString(), 10 * 60_000);
     await engine.start();
     try {
-      await waitFor(() => store.queueMeta(commentId)!.lastError.includes('未确认结果'));
+      // 缺席核验累计 3 次（5s 门禁）→ 转人工终态，绝不自动重投
+      await waitFor(() => store.queueMeta(commentId)!.terminalAt !== null, 12_000);
       assert.equal(store.getComment(commentId)!.status, 'pending');
+      assert.equal(store.queueMeta(commentId)!.attempts, 0, 'unconfirmed must not consume the retry budget');
+      const lease = store.wakeLeaseFindByComment(commentId, claim!.dispatchId);
+      assert.equal(lease?.state, 'sent', 'protection must persist for unconfirmed deliveries');
     } finally {
       await engine.stop();
     }
@@ -623,7 +689,7 @@ describe('wake engine: delivery failure activity dedupe', () => {
         if (url.includes('/session/status')) {
           return Promise.resolve(new Response(JSON.stringify({ ses_onefail: { type: 'idle' } }), { status: 200 }));
         }
-        if (url.includes('/prompt_async')) return Promise.resolve(new Response('nope', { status: 500 }));
+        if (url.includes('/prompt_async')) return Promise.resolve(new Response('nope', { status: 400 }));
         return okResponse();
       },
       engineOptions: { pollMs: 0, maxAttempts: 5, backoffBaseMs: 60_000 },
@@ -667,17 +733,17 @@ describe('wake engine: startup reconciliation (crash recovery)', () => {
       sessionId: null,
       fetchImpl: () => okResponse(),
       config: { execParts: undefined },
-      engineOptions: { pollMs: 0, startupResetMs: 1_000 },
+      engineOptions: { pollMs: 0 },
     });
     const commentId = store.addComment(issueId, { author: 'web', body: '@agent 崩溃前在飞' }).id;
     // 模拟上一进程认领后死掉：processing + 旧 updated_at
-    store.claimWake(commentId, 'watch');
+    store.claimWake(commentId, 'watch', 'run-dead');
     db.prepare("UPDATE comments SET updated_at = '2020-01-01T00:00:00.000Z' WHERE id = ?").run(commentId);
     await engine.start();
     try {
       await waitFor(() => store.getComment(commentId)!.status === 'pending');
       const interrupted = store.listActivities(issueId)
-        .filter(a => a.action === 'execution' && a.detail.includes('进程重启'));
+        .filter(a => a.action === 'execution' && a.detail.includes('发送前中断'));
       assert.equal(interrupted.length, 1, 'recovery must be visible in the activity stream');
       assert.equal(store.queueMeta(commentId)!.attempts, 0, 'recovery must preserve the retry budget');
     } finally {
@@ -689,10 +755,12 @@ describe('wake engine: startup reconciliation (crash recovery)', () => {
     const { store, issueId, engine } = fixture({
       sessionId: 'ses_fresh',
       fetchImpl: () => okResponse(),
-      engineOptions: { pollMs: 0, startupResetMs: 60_000 },
+      engineOptions: { pollMs: 0 },
     });
     const commentId = store.addComment(issueId, { author: 'web', body: '@agent 别人正在投' }).id;
-    store.claimWake(commentId, 'watch'); // 刚认领，updated_at 是现在
+    store.claimWake(commentId, 'watch', 'run-live'); // 刚认领，updated_at 是现在
+    // 心跳新鲜 → 活引擎 → 孤儿扫描必须跳过
+    store.registerWakeEngine('run-live', 'sidecar', '', 424242, new Date().toISOString(), new Date().toISOString(), '');
     await engine.start();
     try {
       await new Promise(r => setTimeout(r, 40));

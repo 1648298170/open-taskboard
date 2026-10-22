@@ -28,10 +28,13 @@ import {
 /** The Store slice the engine depends on (the facade itself satisfies it). */
 export type WakeStore = Pick<
   Store,
-  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listQueueBatch' | 'queueMeta' | 'requeueWake' | 'deferWake' | 'listStaleProcessing' | 'resetStaleClaims' | 'recordExecutionEvent' | 'subscribe'
+  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listQueueBatch' | 'queueMeta' | 'requeueWake' | 'deferWakeBusy' | 'deferWakeUnknown' | 'deferBusyTimeout' | 'resetBusy' | 'terminalizeWake' | 'completeTerminalWake' | 'absentScan' | 'listStaleProcessing' | 'listOrphanProcessing' | 'recordExecutionEvent' | 'subscribe' | 'registerWakeEngine' | 'heartbeatWakeEngine' | 'wakeLeaseAcquire' | 'wakeLeaseRenew' | 'wakeLeaseMarkDispatching' | 'wakeLeaseMarkSent' | 'wakeLeaseReleaseHeld' | 'wakeLeaseConclude' | 'wakeLeaseGet' | 'wakeLeaseFindByComment' | 'wakeLeaseHasProtection'
 >;
 
 /** Narrow child-process surface so tests can inject a deterministic spawn. */
+/** 共享常量：唤醒投递的最大自动重试次数（含首次）。达上限转人工终态。 */
+export const WAKE_MAX_ATTEMPTS = 5;
+
 export interface WakeChildProcess {
   on(event: 'exit', listener: (code: number | null) => void): unknown;
   on(event: 'error', listener: (error: Error) => void): unknown;
@@ -95,19 +98,21 @@ export interface WakeEngineOptions {
    */
   busyDeferMs?: number;
   /**
-   * busy 等待上限（毫秒）：超过后按失败回收（attempts+1 + 10 分钟退避），
-   * 避免会话长期占用时评论无限排队。默认 2 小时。
+   * busy 等待上限（毫秒）：从首次确认 busy 起累计（busy_since/busy_accum_ms），
+   * 超过后 +24h 纯重排（不耗 attempts）。默认 2 小时。
    */
   busyMaxWaitMs?: number;
-  /** 投递失败的最大自动重试次数（含首次），达到后停止自动重试。默认 5。 */
-  maxAttempts?: number;
-  /** 指数退避的基数与上限（毫秒）。默认 30s 起、10min 封顶。 */
+  /** 指数退避的基数与上限（毫秒）。默 30s 起 10min 封顶。 */
   backoffBaseMs?: number;
   backoffMaxMs?: number;
-  /** 结果核对超时（毫秒）：投递成功后超过该时间未被 agent 标记 processed 视为超时。默认 10min。 */
+  /** 结果核对超时（毫秒）。默认 10min。 */
   resultTimeoutMs?: number;
-  /** 启动对账阈值（毫秒）：启动时回收超过该时长未更新的 processing 认领。默认 5min。 */
-  startupResetMs?: number;
+  /** 引擎心跳间隔（毫秒）：注册表 liveness 的依据。默认 30s，timer unref。 */
+  heartbeatMs?: number;
+  /** dispatching 态停滞阈值（毫秒）：超过后其他引擎才可对其核验。默认 90s。 */
+  dispatchStaleMs?: number;
+  /** 注册表里的引擎种类（embedded / sidecar），仅诊断用。 */
+  kind?: string;
 }
 
 export interface WakeEngine {
@@ -141,13 +146,15 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   const modelRef = modelRest.length > 0
     ? { providerID: modelProvider!, modelID: modelRest.join('/') }
     : undefined;
-  // A per-process nonce keeps correlation markers unique across restarts.
-  const engineId = deps.randomUUID();
+  // Run identity: registry heartbeats and claim ownership are keyed by this.
+  const runId = deps.randomUUID();
 
   let running = false;
   let unsubscribe: (() => void) | null = null;
   let releaseLock: (() => void) | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let orphanTimer: ReturnType<typeof setInterval> | null = null;
   // Channel-level watchdog state: one WARN while OpenCode is unreachable, one
   // RECOVERED line when it returns. Pending comments are retried by the sweep
   // either way; these lines are the operator's early signal.
@@ -162,6 +169,8 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   // Comments this engine can never deliver (no binding, no unbound channel).
   // They stay pending for an external sidecar; log once instead of every poll.
   const parked = new Set<string>();
+  // 本次投递动作在途的评论：结果超时扫描必须跳过，防止误回收活动任务。
+  const inFlight = new Set<string>();
 
   const request = (input: string | URL, init: RequestInit = {}, timeoutMs = deps.requestTimeoutMs): Promise<Response> =>
     fetchWithTimeout(input, init, timeoutMs, deps.fetchImpl);
@@ -199,71 +208,136 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   };
 
   /**
-   * GET /session/status 判断目标会话是否正在执行（busy/running/retry）。
-   * 探测失败按「空闲」处理（fail-open）：探测抖动不应无限推迟投递。
+   * GET /session/status → 三态。type missing 视为 idle（活跃会话才出现在映射里），
+   * 无法识别的非空 type / HTTP 错误 / 非法载荷 / 异常一律 unknown（fail-closed：
+   * 调用方 defer，不投递也不回收）。
    */
-  const sessionBusy = async (base: string, sessionId: string, directory: string): Promise<boolean> => {
+  const sessionState = async (base: string, sessionId: string, directory: string): Promise<'busy' | 'idle' | 'unknown'> => {
     try {
       const url = new URL(`${base}/session/status`);
       if (directory) url.searchParams.set('directory', directory);
       const response = await request(url.toString(), { headers: { accept: 'application/json' } }, 3_000);
       if (!response.ok) {
-        error(`watch: WARN session status probe returned HTTP ${response.status}; treating session as idle`);
-        return false;
+        error(`watch: WARN session status probe returned HTTP ${response.status}; treating as unknown`);
+        return 'unknown';
       }
       const payload = await response.json() as unknown;
-      if (typeof payload !== 'object' || payload === null) {
-        error('watch: WARN session status probe returned an unexpected payload; treating session as idle');
-        return false;
-      }
+      if (typeof payload !== 'object' || payload === null) return 'unknown';
       const raw = (payload as Record<string, unknown>)[sessionId];
       const type = raw && typeof raw === 'object' && typeof (raw as { type?: unknown }).type === 'string'
         ? (raw as { type: string }).type
         : '';
-      return type === 'busy' || type === 'running' || type === 'retry';
+      if (type === 'busy' || type === 'running' || type === 'retry') return 'busy';
+      if (type === 'idle' || type === '') return 'idle';
+      return 'unknown';
     } catch (err) {
-      error(`watch: WARN session status probe failed (${(err as Error).message}); treating session as idle`);
-      return false;
+      error(`watch: WARN session status probe failed (${(err as Error).message}); treating as unknown`);
+      return 'unknown';
     }
   };
 
   /**
-   * 结果核对（§7.3）：投递成功（processing）后若长期没有完成信号，说明 agent
-   * 没回写 processed（或根本没接活）。会话仍 busy 时视为正常执行中，跳过；
-   * 会话空闲仍 processing 且超过 resultTimeoutMs → 超时回收（不自动重投，
-   * 长退避 + failed 活动，人工确认后可重新唤醒）。
+   * 结果核对单行处理（结果超时 + 孤儿扫描共用）：
+   *  pre-dispatch（无 dispatching/sent/unverified_sent 租约）→ I0 自动回收；
+   *  post-dispatch → probe=idle 前置 + 精确轮次 marker 核验四态。
    */
+  const resolveStaleRow = async (issueId: string, commentId: string, claimToken: string,
+    dispatchId: string | null, timeoutMs: number): Promise<void> => {
+    const postDispatch = dispatchId != null && store.wakeLeaseHasProtection(commentId, dispatchId);
+    if (!postDispatch) {
+      // I0：发送前中断——回收为 pending（attempts 保留），无证据租约由 TTL 惰性失效。
+      if (store.releaseWake(commentId, claimToken, 'pending')) {
+        await reportExecution(issueId, 'queued', '发送前中断，已自动恢复（不消耗重试预算）');
+      }
+      return;
+    }
+    const issue = store.getIssue(issueId);
+    const base = config.opencodeBase?.trim();
+    if (issue?.sessionId) {
+      if (!base) return;
+      const st = await sessionState(base, issue.sessionId, issue.worktreePath);
+      if (st !== 'idle') return;
+      const marker = makeWakeCorrelationMarker(commentId, dispatchId);
+      const hist = await request(`${base}/session/${encodeURIComponent(issue.sessionId)}/message?limit=50`);
+      if (!hist.ok) return;
+      const correlation = findCorrelatedAssistant(await hist.json(), marker);
+      if (correlation.assistant) {
+        const err = correlation.assistant.info?.error;
+        if (store.releaseWake(commentId, claimToken, 'processed')) {
+          const lease = dispatchId ? store.wakeLeaseFindByComment(commentId, dispatchId) : null;
+          if (lease) store.wakeLeaseConclude(lease.leaseKey, lease.fence, dispatchId, nowIso());
+          await reportExecution(issueId, err ? 'failed' : 'succeeded',
+            err ? `恢复核验：Agent 返回错误：${String(err).slice(0, 500)}`
+                : '恢复核验：已确认完成（marker + assistant 回复 + idle）');
+        }
+        return;
+      }
+      if (correlation.matchedPrompt) {
+        if (store.terminalizeWake(commentId, claimToken, dispatchId ?? '', '已送达但未确认完成（无 assistant 回复）；人工确认后重新唤醒')) {
+          await reportExecution(issueId, 'failed', '已送达但未确认完成，转人工确认');
+        }
+        return;
+      }
+      // 缺席：累计有效观察（达 K → 人工终态）
+      const counted = store.absentScan(commentId, claimToken, dispatchId ?? '', nowIso(), null, null, new Date(Date.now() - timeoutMs).toISOString());
+      if (counted) {
+        const meta = store.queueMeta(commentId);
+        if ((meta?.absentScans ?? 0) >= 3) {
+          if (store.terminalizeWake(commentId, claimToken, dispatchId ?? '', `投递结果无法确认（累计有效缺席 ${meta?.absentScans} 次）；人工确认后重新唤醒`)) {
+            await reportExecution(issueId, 'failed', '投递结果无法确认（缺席核验达上限），转人工确认');
+          }
+        }
+      }
+      return;
+    }
+    // 无 Session（headless/TUI）且已 post-dispatch：不可核验 → 人工终态
+    if (store.terminalizeWake(commentId, claimToken, dispatchId ?? '', 'headless 执行无法核验（引擎中断）；人工确认后重新唤醒')) {
+      await reportExecution(issueId, 'failed', 'headless 执行无法核验（引擎中断），转人工确认');
+    }
+  };
+
   const sweepStaleProcessing = async (): Promise<void> => {
     if (!running) return;
     const timeoutMs = options.resultTimeoutMs ?? 10 * 60_000;
-    const cutoff = new Date(Date.now() - timeoutMs).toISOString();
-    let stale: { id: string; issueId: string; claimToken: string }[] = [];
+    const cutoffIso = new Date(Date.now() - timeoutMs).toISOString();
+    let stale: { id: string; issueId: string; claimToken: string; dispatchId: string | null }[] = [];
     try {
-      stale = store.listStaleProcessing(cutoff, 'watch');
+      stale = store.listStaleProcessing(cutoffIso, runId);
     } catch (err) {
       error(`watch: stale processing scan failed (${(err as Error).message})`);
       return;
     }
     for (const row of stale) {
       if (!running) return;
+      if (inFlight.has(row.id)) continue;
       try {
-        const issue = store.getIssue(row.issueId);
-        const base = config.opencodeBase?.trim();
-        if (issue?.sessionId) {
-          // 无法探测会话状态（未配 opencodeBase）时保守跳过：宁可晚判超时，
-          // 也不能把正在执行的长任务误判为超时回收。
-          if (!base) continue;
-          const busy = await sessionBusy(base, issue.sessionId, issue.worktreePath);
-          if (busy) continue;
-        }
-        const reason = `投递后 ${Math.round(timeoutMs / 60_000)} 分钟未确认结果（agent 未标记 processed）`;
-        const notBefore = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
-        if (store.requeueWake(row.id, row.claimToken, reason, notBefore)) {
-          seen.delete(wakeKey(row.issueId, row.id));
-          await reportExecution(row.issueId, 'failed', reason);
-        }
+        await resolveStaleRow(row.issueId, row.id, row.claimToken, row.dispatchId, timeoutMs);
       } catch (err) {
         error(`watch: stale processing recovery failed for comment ${row.id} (${(err as Error).message})`);
+      }
+    }
+  };
+
+  /** 孤儿扫描（启动 + 每 5 分钟）：死 run / legacy；本 run 永不在此列。 */
+  const sweepOrphans = async (): Promise<void> => {
+    if (!running) return;
+    const hb = options.heartbeatMs ?? 30_000;
+    const liveCutoff = new Date(Date.now() - Math.max(3 * hb, 180_000)).toISOString();
+    const graceCutoff = new Date(Date.now() - 60_000).toISOString();
+    const legacyCutoff = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+    let rows: { id: string; issueId: string; claimToken: string; dispatchId: string | null }[] = [];
+    try {
+      rows = store.listOrphanProcessing(graceCutoff, legacyCutoff, liveCutoff, runId);
+    } catch (err) {
+      error(`watch: orphan scan failed (${(err as Error).message})`);
+      return;
+    }
+    for (const row of rows) {
+      if (!running) return;
+      try {
+        await resolveStaleRow(row.issueId, row.id, row.claimToken, row.dispatchId, options.resultTimeoutMs ?? 10 * 60_000);
+      } catch (err) {
+        error(`watch: orphan recovery failed for comment ${row.id} (${(err as Error).message})`);
       }
     }
   };
@@ -279,8 +353,15 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   // OpenCode prompt_async acknowledges only queueing. A unique marker lets us
   // find the exact user message in the Session history; success requires a
   // later assistant response AND the Session returning to idle.
-  const makeWakeCorrelationMarker = (commentId: string, issuedAt = Date.now()): string =>
-    `taskboard-wake:${commentId || 'unknown'}:${issuedAt}:${engineId.slice(0, 8)}`;
+  const nowIso = (): string => new Date().toISOString();
+  const LEASE_TTL_MS = 120_000;
+  const LEASE_VERIFY_TTL_MS = 10 * 60_000;
+  const normalizeLeaseBase = (base: string): string => {
+    try { const u = new URL(base); return `${u.protocol}//${u.host.toLowerCase()}${u.pathname.replace(/\/+$/, '')}`; }
+    catch { return base.trim().replace(/\/+$/, ''); }
+  };
+  const makeWakeCorrelationMarker = (commentId: string, dispatchId: string | null): string =>
+    `taskboard-wake:${commentId || 'unknown'}:${dispatchId || 'none'}`;
 
   const monitorOpenCodeSession = async (
     issueId: string, sessionId: string, serverUrl: string, marker: string,
@@ -351,20 +432,19 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
    * 可靠投递的失败回收（§5/§7.3）：显式状态写回 pending + 指数退避 + 失败计数，
    * 达到上限后不再自动重试（长退避 + failed 活动，需人工重新唤醒）。
    */
-  const failDelivery = async (item: WakeItem, claimToken: string, reason: string): Promise<void> => {
+  const failDelivery = async (item: WakeItem, claimToken: string, dispatchId: string, reason: string): Promise<void> => {
     const meta = store.queueMeta(item.commentId);
     const attempts = (meta?.attempts ?? 0) + 1;
-    const maxAttempts = options.maxAttempts ?? 5;
+    const finalFailure = attempts >= WAKE_MAX_ATTEMPTS;
     const base = options.backoffBaseMs ?? 30_000;
     const cap = options.backoffMaxMs ?? 10 * 60_000;
     const backoff = Math.min(base * 2 ** (attempts - 1), cap);
-    const finalFailure = attempts >= maxAttempts;
-    // 终态失败用长退避（24h）让轮询不再重试，同时保留人工重新唤醒的入口。
+    // 终态失败（达上限）：同语句写 terminal_at（人工门禁，无自动重投）。
     const notBefore = new Date(Date.now() + (finalFailure ? 24 * 60 * 60_000 : backoff)).toISOString();
     const detail = finalFailure
       ? `已重试 ${attempts} 次仍失败，停止自动重试：${reason}`
-      : `投递失败（第 ${attempts}/${maxAttempts} 次），${Math.round(backoff / 1000)}s 后重试：${reason}`;
-    if (!store.requeueWake(item.commentId, claimToken, detail, notBefore)) {
+      : `投递失败（第 ${attempts}/${WAKE_MAX_ATTEMPTS} 次），${Math.round(backoff / 1000)}s 后重试：${reason}`;
+    if (!store.requeueWake(item.commentId, claimToken, dispatchId, detail, notBefore, finalFailure)) {
       error(`watch: could not requeue wake for comment ${item.commentId}; a newer attempt owns it`);
       return;
     }
@@ -417,11 +497,13 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     // CAS claim AFTER routing is known: the comment is already 'processing'
     // before any HTTP side effect, so a crash cannot leave two attempts
     // believing they own it.
-    const claimToken = store.claimWake(item.commentId, 'watch');
-    if (!claimToken) {
+    const claim = store.claimWake(item.commentId, 'watch', runId);
+    if (!claim) {
       error(`watch: wake skipped for comment ${item.commentId}; it is no longer pending`);
       return true;
     }
+    const { token: claimToken, dispatchId } = claim;
+    inFlight.add(item.commentId);
 
     await reportExecution(item.issueId, 'started', '收到唤醒请求，开始解析任务路由');
 
@@ -436,46 +518,66 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       if (decideWake(issue.sessionId, sessionBase) !== 'prompt') {
         const reason = `任务绑定 Session ${issue.sessionId}，但没有可用的 OpenCode 服务；拒绝回退到其他会话`;
         error(`watch: task ${item.issueId} is bound to ${issue.sessionId}, but no healthy OpenCode server is reachable (checked: ${sessionCandidates.join(', ') || 'none'}); refusing to start a new session`);
-        await failDelivery(item, claimToken, reason);
+        await failDelivery(item, claimToken, dispatchId, reason);
         return false;
       }
       const sessionId = issue.sessionId;
       const healthyBase = sessionBase!;
+      // 会话保护租约：先于 probe 获取，覆盖 probe→POST→ack 临界区。
+      const leaseKey = `${normalizeLeaseBase(healthyBase)}|${sessionId}`;
+      let lease = store.wakeLeaseRenew({ leaseKey, holderRun: runId, commentId: item.commentId, dispatchId, nowIso: nowIso(), ttlMs: LEASE_TTL_MS })
+        ? store.wakeLeaseGet(leaseKey)
+        : store.wakeLeaseAcquire({ leaseKey, sessionId, serverUrl: healthyBase, holderRun: runId, commentId: item.commentId, dispatchId, nowIso: nowIso(), ttlMs: LEASE_TTL_MS });
+      if (!lease) {
+        seen.delete(item.key);
+        await reportExecution(item.issueId, 'queued', '目标会话被其他投递租约占用，本轮延后');
+        return true;
+      }
       // 执行通道互斥（§5.1）：会话正忙（agent 在跑）时不注入新 prompt——会打断
       // 当前轮次。放回队列 + not_before 退避，等空闲后由轮询重投；探测失败按空闲
       // 处理（fail-open，不能因为探测抖动卡住投递）。
-      const busy = await sessionBusy(healthyBase, sessionId, issue.worktreePath);
-      if (busy) {
+      const st = await sessionState(healthyBase, sessionId, issue.worktreePath);
+      if (st !== 'idle') {
         const deferMs = options.busyDeferMs ?? 30_000;
         const maxWaitMs = options.busyMaxWaitMs ?? 2 * 60 * 60 * 1000;
-        // 等待上限：会话长期占用（agent 卡死/状态残留 busy）不能无限排队——
-        // 超时按失败回收（attempts+1 + 错误记录），让面板可见且不再无休止等待。
         const meta = store.queueMeta(item.commentId);
-        const waitedFrom = Date.parse(meta?.queuedAt ?? '') || Date.parse(meta?.notBefore ?? '') || Date.now();
-        if (Date.now() - waitedFrom > maxWaitMs) {
+        const waitedMs = (meta?.busyAccumMs ?? 0) + (meta?.busySince ? Date.now() - Date.parse(meta.busySince) : 0);
+        if (st === 'busy' && waitedMs > maxWaitMs) {
           const reason = `目标会话持续占用超过 ${Math.round(maxWaitMs / 60000)} 分钟，唤醒等待超时`;
-          const retryAt = new Date(Date.now() + 10 * 60_000).toISOString();
-          if (store.requeueWake(item.commentId, claimToken, reason, retryAt)) {
+          const retryAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+          if (store.deferBusyTimeout(item.commentId, claimToken, dispatchId, reason, retryAt)) {
+            store.wakeLeaseReleaseHeld(leaseKey, lease.fence, runId, item.commentId, dispatchId);
             seen.delete(item.key);
-            error(`watch: wake #${item.issueId} timed out waiting for a busy session; requeued with 10m backoff`);
+            error(`watch: wake #${item.issueId} timed out waiting for a busy session; requeued with 24h backoff`);
             return true;
           }
         }
         const deferUntil = new Date(Date.now() + deferMs).toISOString();
-        if (!store.deferWake(item.commentId, claimToken, deferUntil)) {
-          error(`watch: session ${sessionId} is busy and comment ${item.commentId} is no longer owned by this attempt`);
+        const deferred = st === 'busy'
+          ? store.deferWakeBusy(item.commentId, claimToken, dispatchId, deferUntil)
+          : store.deferWakeUnknown(item.commentId, claimToken, dispatchId, deferUntil);
+        if (!deferred) {
+          error(`watch: session ${sessionId} is ${st} and comment ${item.commentId} is no longer owned by this attempt`);
           return true;
         }
-        // 延后不是投递完成：清掉 seen，让轮询在 not_before 到期后重新入队。
+        store.wakeLeaseReleaseHeld(leaseKey, lease.fence, runId, item.commentId, dispatchId);
         seen.delete(item.key);
-        log(`watch: session ${sessionId} busy; deferred wake #${item.issueId} until ${deferUntil}`);
-        // 活动流只记一次（同一条评论 10 分钟内不重复刷）——否则每 30s 一条活动
-        // 会持续触发 SSE 全图刷新。
+        log(`watch: session ${sessionId} ${st}; deferred wake #${item.issueId} until ${deferUntil}`);
         const lastReport = busyDeferReportedAt.get(item.key) ?? 0;
         if (Date.now() - lastReport > 10 * 60_000) {
           busyDeferReportedAt.set(item.key, Date.now());
-          await reportExecution(item.issueId, 'queued', `目标会话执行中，唤醒已排队（每 ${Math.round(deferMs / 1000)}s 重试）`);
+          await reportExecution(item.issueId, 'queued', st === 'busy'
+            ? `目标会话执行中，唤醒已排队（每 ${Math.round(deferMs / 1000)}s 重试）`
+            : '会话状态未知，暂停投递与 busy 计时（不消耗重试预算）');
         }
+        return true;
+      }
+      // probe=idle：busy episode 结束，清零后进入发送临界区。
+      store.resetBusy(item.commentId, claimToken, dispatchId);
+      if (!store.wakeLeaseMarkDispatching(leaseKey, lease.fence, dispatchId, nowIso())) {
+        // 租约在核验间隙丢失（被接管）→ 本轮放弃，下轮重新获取。
+        seen.delete(item.key);
+        await reportExecution(item.issueId, 'queued', '发送租约已被接管，本轮延后');
         return true;
       }
       // A task bound to a worktree must not dispatch into a Session rooted at
@@ -494,18 +596,18 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
           if (!boundSession?.directory || normalizePath(boundSession.directory) !== normalizePath(issue.worktreePath)) {
             const reason = `Session ${sessionId} 不在绑定的 Worktree 目录 ${issue.worktreePath} 中；请在任务详情中创建工作树 Session 后重试`;
             error(`watch: refusing to dispatch task ${item.issueId}; session directory does not match worktree path`);
-            await failDelivery(item, claimToken, reason);
+            await failDelivery(item, claimToken, dispatchId, reason);
             return false;
           }
         } catch (err) {
           const reason = `无法验证 Session ${sessionId} 与 Worktree 目录的对应关系：${(err as Error).message}`;
           error(`watch: ${reason}`);
-          await failDelivery(item, claimToken, reason);
+          await failDelivery(item, claimToken, dispatchId, reason);
           return false;
         }
       }
       try {
-        const correlationMarker = makeWakeCorrelationMarker(item.commentId);
+        const correlationMarker = makeWakeCorrelationMarker(item.commentId, dispatchId);
         const correlatedPrompt = `${prompt}\n\n[Taskboard correlation marker: ${correlationMarker}. Treat this as metadata; do not repeat it in your answer.]`;
         const res = await request(`${healthyBase}/session/${encodeURIComponent(sessionId)}/prompt_async`, {
           method: 'POST',
@@ -515,21 +617,29 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
             ...(modelRef ? { model: modelRef } : {}),
           }),
         });
-        if (!res.ok) {
-          const reason = `绑定 Session ${sessionId} 拒绝了提示词请求（HTTP ${res.status}）；没有创建备用会话`;
+        if (res.ok) {
+          store.wakeLeaseMarkSent(leaseKey, lease.fence, dispatchId, nowIso(), LEASE_VERIFY_TTL_MS);
+          log(`watch: queued prompt in bound session ${sessionId}`);
+          await reportExecution(item.issueId, 'queued', `提示词已提交到绑定的 OpenCode Session ${sessionId}；该状态表示已排队，不代表 Agent 已完成`);
+          void monitorOpenCodeSession(item.issueId, sessionId, healthyBase, correlationMarker);
+          return true;
+        }
+        if (res.status < 500) {
+          const reason = `绑定 Session ${sessionId} 拒绝了提示词请求（HTTP ${res.status}，无副作用）；没有创建备用会话`;
           error(`watch: bound session ${sessionId} rejected prompt (HTTP ${res.status}); no fallback session will be created`);
-          await failDelivery(item, claimToken, reason);
+          store.wakeLeaseConclude(leaseKey, lease.fence, dispatchId, nowIso());
+          await failDelivery(item, claimToken, dispatchId, reason);
           return false;
         }
-        // Accepted: the claim stays 'processing' for the agent to finalize.
-        log(`watch: queued prompt in bound session ${sessionId}`);
-        await reportExecution(item.issueId, 'queued', `提示词已提交到绑定的 OpenCode Session ${sessionId}；该状态表示已排队，不代表 Agent 已完成`);
+        store.wakeLeaseMarkSent(leaseKey, lease.fence, dispatchId, nowIso(), LEASE_VERIFY_TTL_MS);
+        await reportExecution(item.issueId, 'queued', `提示词提交返回 HTTP ${res.status}（结果未知），按可能已投递进入核验`);
         void monitorOpenCodeSession(item.issueId, sessionId, healthyBase, correlationMarker);
         return true;
       } catch (err) {
-        error(`watch: bound session ${sessionId} failed (${(err as Error).message}); no fallback session will be created`);
-        await failDelivery(item, claimToken, `提交到绑定 Session 失败：${(err as Error).message}`);
-        return false;
+        store.wakeLeaseMarkSent(leaseKey, lease.fence, dispatchId, nowIso(), LEASE_VERIFY_TTL_MS);
+        error(`watch: bound session ${sessionId} failed (${(err as Error).message}); 结果未知，按可能已投递进入核验`);
+        await reportExecution(item.issueId, 'queued', '提示词提交结果未知（网络异常），按可能已投递进入核验');
+        return true;
       }
     }
 
@@ -538,7 +648,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     if (issue.worktreePath) {
       const reason = `任务已绑定 Worktree ${issue.worktreePath}，但没有绑定 OpenCode Session；为避免在错误目录执行，请先创建工作树 Session`;
       error(`watch: refusing to dispatch task ${item.issueId} without a Session bound to its worktree`);
-      await failDelivery(item, claimToken, reason);
+      await failDelivery(item, claimToken, dispatchId, reason);
       return false;
     }
 
@@ -574,7 +684,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     for (let i = 0; i < attempts.length; i++) {
       if (attempts[i]! > 0) await sleep(attempts[i]!);
       if (!running) {
-        await failDelivery(item, claimToken, '引擎停止，headless 执行中止');
+        await failDelivery(item, claimToken, dispatchId, '引擎停止，headless 执行中止');
         return false;
       }
       const outcome = await new Promise<'ok' | 'failed' | 'missing'>(resolve => {
@@ -592,7 +702,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       if (outcome === 'missing') {
         error(`watch: exec ${execParts[0]} not found in PATH`);
         await reportExecution(item.issueId, 'failed', `找不到执行命令 ${execParts[0]}，请检查 PATH 配置`);
-        await failDelivery(item, claimToken, `找不到执行命令 ${execParts[0]}`);
+        await failDelivery(item, claimToken, dispatchId, `找不到执行命令 ${execParts[0]}`);
         return false;
       }
       error(`watch: headless run failed (attempt ${i + 1}/${attempts.length})`);
@@ -603,7 +713,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     }
     error('watch: headless run failed after all retries — 结果不可用，请检查 exec 命令与目标 agent CLI 状态');
     await reportExecution(item.issueId, 'failed', 'Headless Agent 所有重试均失败，请检查命令、环境变量和 Agent CLI 日志');
-    await failDelivery(item, claimToken, 'Headless Agent 所有重试均失败');
+    await failDelivery(item, claimToken, dispatchId, 'Headless Agent 所有重试均失败');
     return false;
   };
 
@@ -614,8 +724,10 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         return;
       }
       const delivered = await deliverWake(item);
+      inFlight.delete(item.commentId);
       if (!delivered) seen.delete(item.key);
     }).catch(err => {
+      inFlight.delete(item.commentId);
       seen.delete(item.key);
       if (item.source === 'backfill') error(`watch: 补拉唤醒失败: ${(err as Error).message}`);
       else error(`watch: wake failed: ${(err as Error).message}`);
@@ -711,6 +823,8 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       const issueTitle = String(payload.issueTitle ?? '');
       // The event payload truncates body to 200 chars (store.addComment) —
       // read the full comment from the Store so long instructions survive.
+      const meta = store.queueMeta(commentId);
+      if (meta?.terminalAt) return;
       const fullBody = store.getComment(commentId)?.body ?? String(payload.body ?? '');
       const instruction = fullBody.trimStart().slice(config.prefix.length).trim();
       const by = author ? ` (${author})` : '';
@@ -735,21 +849,8 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     }
     lifecycle = new AbortController();
     running = true;
-    // 启动对账（崩溃恢复）：上一进程死在投递中途会留下 processing 认领。
-    // 超过阈值的按中断处理——回退 pending（attempts 保留）并写活动，随后由
-    // 本次 sweep 重新入队；阈值避免误伤并发实例的新鲜认领。
-    try {
-      const resetCutoff = new Date(Date.now() - (options.startupResetMs ?? 5 * 60_000)).toISOString();
-      const recovered = store.resetStaleClaims(resetCutoff, 'watch');
-      if (recovered.length > 0) {
-        log(`watch: recovered ${recovered.length} interrupted wake(s) left by a previous process`);
-        for (const row of recovered) {
-          await reportExecution(row.issueId, 'failed', '进程重启：上次投递未确认，已重新入队（保留重试计数）');
-        }
-      }
-    } catch (err) {
-      error(`watch: startup reconciliation failed (${(err as Error).message})`);
-    }
+    store.registerWakeEngine(runId, options.kind ?? 'sidecar', '', process.pid, nowIso(), nowIso(), '');
+    void sweepOrphans();
     unsubscribe = store.subscribe(onEvent);
     sweep();
     if (options.pollMs !== undefined && options.pollMs > 0) {
@@ -759,11 +860,12 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         void sweepStaleProcessing();
         sweep();
       }, options.pollMs);
-      // unref: the poll must never be the only thing keeping a test or a
-      // shutting-down process alive; stop() clears it as well.
-      pollTimer.unref?.();
-      void probeChannelHealth();
     }
+    heartbeatTimer = setInterval(() => { store.heartbeatWakeEngine(runId, nowIso()); }, options.heartbeatMs ?? 30_000);
+    heartbeatTimer.unref?.();
+    orphanTimer = setInterval(() => { void sweepOrphans(); }, 5 * 60_000);
+    orphanTimer.unref?.();
+    void sweepOrphans();
   };
 
   const stop = async (): Promise<void> => {
@@ -772,6 +874,8 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       clearInterval(pollTimer);
       pollTimer = null;
     }
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    if (orphanTimer) { clearInterval(orphanTimer); orphanTimer = null; }
     lifecycle.abort();
     if (unsubscribe) {
       unsubscribe();
