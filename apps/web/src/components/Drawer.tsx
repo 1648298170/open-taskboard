@@ -117,8 +117,16 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
       setLoadError((err as Error).message);
     }
   };
-  useEffect(() => { setDetail(null); setDesc(''); setEditingDesc(false); setLoadError(null); void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [issueId]);
-  useEffect(() => { if (refreshKey > 0) void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [refreshKey]);
+  // 只在 refreshKey 真正变化时重取：effect 挂载时也会跑一次，而 refreshKey
+  // 通常已 >0，直接 load 会让每次打开抽屉都请求两次 /api/issues/{id}。
+  const lastRefreshKey = useRef(refreshKey);
+  useEffect(() => { setDetail(null); setDesc(''); setEditingDesc(false); setLoadError(null); lastRefreshKey.current = refreshKey; void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [issueId]);
+  useEffect(() => {
+    if (refreshKey === lastRefreshKey.current) return;
+    lastRefreshKey.current = refreshKey;
+    void load();
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [refreshKey]);
 
   // T6-36: 绑定分支/工作树时预览最近提交（工作树优先——名字会被服务端
   // 解析成该工作树 checkout 的 HEAD）。换任务或换绑定即重取。
