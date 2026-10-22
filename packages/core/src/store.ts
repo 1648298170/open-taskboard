@@ -1,4 +1,4 @@
-﻿import type { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -808,6 +808,11 @@ export class Store {
   deferWake(commentId: string, claimToken: string, notBeforeIso: string): boolean {
     if (!claimToken) return false;
     return this.comments.defer(commentId, claimToken, notBeforeIso);
+  }
+
+  /** 结果核对：processing 超时未更新的评论（含认领令牌），引擎据此判断是否超时回收。 */
+  listStaleProcessing(cutoffIso: string, claimerPrefix = 'watch'): { id: string; issueId: string; claimToken: string }[] {
+    return this.comments.listStaleProcessing(cutoffIso, claimerPrefix);
   }
 
   // ---- activities: latest first, capped by the repo (default 50) ----

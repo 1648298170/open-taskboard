@@ -530,3 +530,87 @@ describe('wake engine: busy review hardening', () => {
     }
   });
 });
+
+describe('wake engine: reliable delivery (s4)', () => {
+  it('fails with exponential backoff and records the retry activity', async () => {
+    const { store, issueId, engine, fetchCalls } = fixture({
+      sessionId: 'ses_retry',
+      fetchImpl: url => {
+        if (url.includes('/session/status')) {
+          return Promise.resolve(new Response(JSON.stringify({ ses_retry: { type: 'idle' } }), { status: 200 }));
+        }
+        if (url.includes('/prompt_async')) {
+          return Promise.resolve(new Response('boom', { status: 500 }));
+        }
+        return okResponse();
+      },
+      engineOptions: { pollMs: 0, maxAttempts: 5, backoffBaseMs: 60_000, backoffMaxMs: 600_000 },
+    });
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 会失败' }).id;
+      await waitFor(() => store.queueMeta(commentId)!.attempts >= 1);
+      const meta = store.queueMeta(commentId)!;
+      assert.equal(store.getComment(commentId)!.status, 'pending');
+      assert.ok(meta.lastError.includes('投递失败'), 'error must describe the failure: ' + meta.lastError);
+      // 30s 退避（restart 后 sweep 不会立刻重试）
+      const notBefore = Date.parse(meta.notBefore || '');
+      assert.ok(notBefore > Date.now() + 20_000, 'first failure must back off ~30s+');
+      assert.ok(fetchCalls.some(u => u.includes('/prompt_async')));
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('stops auto-retrying after maxAttempts and surfaces a terminal failure', async () => {
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_retry2',
+      fetchImpl: url => {
+        if (url.includes('/session/status')) {
+          return Promise.resolve(new Response(JSON.stringify({ ses_retry2: { type: 'idle' } }), { status: 200 }));
+        }
+        if (url.includes('/prompt_async')) return Promise.resolve(new Response('boom', { status: 500 }));
+        return okResponse();
+      },
+      engineOptions: { pollMs: 0, maxAttempts: 1, backoffBaseMs: 1_000, backoffMaxMs: 1_000 },
+    });
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 立即失败' }).id;
+      await waitFor(() => store.queueMeta(commentId)!.attempts >= 1);
+      const meta = store.queueMeta(commentId)!;
+      assert.ok(meta.lastError.includes('停止自动重试'), 'must mark terminal failure: ' + meta.lastError);
+      // 终态失败：长退避（24h），轮询不再重试
+      assert.ok(Date.parse(meta.notBefore || '') > Date.now() + 23 * 60 * 60_000);
+      const failedActivities = store.listActivities(issueId)
+        .filter(a => a.action === 'execution' && a.detail.includes('停止自动重试'));
+      assert.equal(failedActivities.length, 1, 'terminal failure must be visible in the activity stream');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('expires stale processing comments once the session is idle', async () => {
+    const { store, db, issueId, engine } = fixture({
+      sessionId: 'ses_timeout',
+      fetchImpl: url => {
+        if (url.includes('/session/status')) {
+          return Promise.resolve(new Response(JSON.stringify({ ses_timeout: { type: 'idle' } }), { status: 200 }));
+        }
+        return okResponse();
+      },
+      engineOptions: { pollMs: 20, resultTimeoutMs: 1 },
+    });
+    const commentId = store.addComment(issueId, { author: 'web', body: '@agent 超时样例' }).id;
+    // 模拟「投递成功但 agent 未标记 processed」：认领 + 把 updated_at 推到过去
+    store.claimWake(commentId, 'watch');
+    db.prepare("UPDATE comments SET updated_at = '2020-01-01T00:00:00.000Z' WHERE id = ?").run(commentId);
+    await engine.start();
+    try {
+      await waitFor(() => store.queueMeta(commentId)!.lastError.includes('未确认结果'));
+      assert.equal(store.getComment(commentId)!.status, 'pending');
+    } finally {
+      await engine.stop();
+    }
+  });
+});

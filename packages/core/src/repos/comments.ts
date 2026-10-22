@@ -42,6 +42,11 @@ export class CommentRepo {
       sets.push('status = ?'); vals.push(patch.status);
       sets.push("claimed_by = ''");
       sets.push('updated_at = ?'); vals.push(now());
+      // 人工重新入队（status → pending）给一次干净的重试：清空退避与失败计数，
+      // 否则上次的超时 not_before / attempts 上限会让手动重唤醒无声失效。
+      if (patch.status === 'pending') {
+        sets.push('attempts = 0', 'not_before = NULL', "last_error = ''");
+      }
     }
     if (sets.length === 0) return;
     vals.push(id);
@@ -142,5 +147,18 @@ export class CommentRepo {
        WHERE id = ? AND status = 'processing' AND claimed_by = ?`
     ).run(notBeforeIso, now(), id, claimToken);
     return result.changes > 0;
+  }
+
+  /**
+   * 结果核对：列出「processing 且超过超时时间未更新」的评论（含认领令牌），
+   * 由引擎判断会话是否仍 busy 后决定超时回收。
+   */
+  listStaleProcessing(cutoffIso: string, claimerPrefix: string): { id: string; issueId: string; claimToken: string }[] {
+    return this.db.prepare(
+      `SELECT id, issue_id AS issueId, claimed_by AS claimToken
+       FROM comments
+       WHERE status = 'processing' AND updated_at < ? AND claimed_by LIKE ?
+       ORDER BY updated_at`
+    ).all(cutoffIso, `${claimerPrefix}%`) as { id: string; issueId: string; claimToken: string }[];
   }
 }

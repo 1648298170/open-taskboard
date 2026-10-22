@@ -28,7 +28,7 @@ import {
 /** The Store slice the engine depends on (the facade itself satisfies it). */
 export type WakeStore = Pick<
   Store,
-  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listQueueBatch' | 'queueMeta' | 'requeueWake' | 'deferWake' | 'recordExecutionEvent' | 'subscribe'
+  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listQueueBatch' | 'queueMeta' | 'requeueWake' | 'deferWake' | 'listStaleProcessing' | 'recordExecutionEvent' | 'subscribe'
 >;
 
 /** Narrow child-process surface so tests can inject a deterministic spawn. */
@@ -99,6 +99,13 @@ export interface WakeEngineOptions {
    * 避免会话长期占用时评论无限排队。默认 2 小时。
    */
   busyMaxWaitMs?: number;
+  /** 投递失败的最大自动重试次数（含首次），达到后停止自动重试。默认 5。 */
+  maxAttempts?: number;
+  /** 指数退避的基数与上限（毫秒）。默认 30s 起、10min 封顶。 */
+  backoffBaseMs?: number;
+  backoffMaxMs?: number;
+  /** 结果核对超时（毫秒）：投递成功后超过该时间未被 agent 标记 processed 视为超时。默认 10min。 */
+  resultTimeoutMs?: number;
 }
 
 export interface WakeEngine {
@@ -218,6 +225,44 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     }
   };
 
+  /**
+   * 结果核对（§7.3）：投递成功（processing）后若长期没有完成信号，说明 agent
+   * 没回写 processed（或根本没接活）。会话仍 busy 时视为正常执行中，跳过；
+   * 会话空闲仍 processing 且超过 resultTimeoutMs → 超时回收（不自动重投，
+   * 长退避 + failed 活动，人工确认后可重新唤醒）。
+   */
+  const sweepStaleProcessing = async (): Promise<void> => {
+    if (!running) return;
+    const timeoutMs = options.resultTimeoutMs ?? 10 * 60_000;
+    const cutoff = new Date(Date.now() - timeoutMs).toISOString();
+    let stale: { id: string; issueId: string; claimToken: string }[] = [];
+    try {
+      stale = store.listStaleProcessing(cutoff, 'watch');
+    } catch (err) {
+      error(`watch: stale processing scan failed (${(err as Error).message})`);
+      return;
+    }
+    for (const row of stale) {
+      if (!running) return;
+      try {
+        const issue = store.getIssue(row.issueId);
+        const base = config.opencodeBase?.trim();
+        if (issue?.sessionId && base) {
+          const busy = await sessionBusy(base, issue.sessionId, issue.worktreePath);
+          if (busy) continue; // 仍在执行：延长等待，不判超时
+        }
+        const reason = `投递后 ${Math.round(timeoutMs / 60_000)} 分钟未确认结果（agent 未标记 processed）`;
+        const notBefore = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+        if (store.requeueWake(row.id, row.claimToken, reason, notBefore)) {
+          seen.delete(wakeKey(row.issueId, row.id));
+          await reportExecution(row.issueId, 'failed', reason);
+        }
+      } catch (err) {
+        error(`watch: stale processing recovery failed for comment ${row.id} (${(err as Error).message})`);
+      }
+    }
+  };
+
   const reportExecution = async (issueId: string, outcome: ExecutionOutcome, detail: string): Promise<void> => {
     try {
       store.recordExecutionEvent(issueId, outcome, detail, 'watch');
@@ -297,10 +342,29 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     }
   };
 
-  const revertClaim = (item: WakeItem, claimToken: string): void => {
-    if (!store.releaseWake(item.commentId, claimToken, 'pending')) {
-      error(`watch: could not release wake claim for comment ${item.commentId}; a newer attempt owns it`);
+  /**
+   * 可靠投递的失败回收（§5/§7.3）：显式状态写回 pending + 指数退避 + 失败计数，
+   * 达到上限后不再自动重试（长退避 + failed 活动，需人工重新唤醒）。
+   */
+  const failDelivery = async (item: WakeItem, claimToken: string, reason: string): Promise<void> => {
+    const meta = store.queueMeta(item.commentId);
+    const attempts = (meta?.attempts ?? 0) + 1;
+    const maxAttempts = options.maxAttempts ?? 5;
+    const base = options.backoffBaseMs ?? 30_000;
+    const cap = options.backoffMaxMs ?? 10 * 60_000;
+    const backoff = Math.min(base * 2 ** (attempts - 1), cap);
+    const finalFailure = attempts >= maxAttempts;
+    // 终态失败用长退避（24h）让轮询不再重试，同时保留人工重新唤醒的入口。
+    const notBefore = new Date(Date.now() + (finalFailure ? 24 * 60 * 60_000 : backoff)).toISOString();
+    const detail = finalFailure
+      ? `已重试 ${attempts} 次仍失败，停止自动重试：${reason}`
+      : `投递失败（第 ${attempts}/${maxAttempts} 次），${Math.round(backoff / 1000)}s 后重试：${reason}`;
+    if (!store.requeueWake(item.commentId, claimToken, detail, notBefore)) {
+      error(`watch: could not requeue wake for comment ${item.commentId}; a newer attempt owns it`);
+      return;
     }
+    seen.delete(item.key);
+    await reportExecution(item.issueId, finalFailure ? 'failed' : 'retrying', detail);
   };
 
   /**
@@ -356,7 +420,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         const reason = `任务绑定 Session ${issue.sessionId}，但没有可用的 OpenCode 服务；拒绝回退到其他会话`;
         error(`watch: task ${item.issueId} is bound to ${issue.sessionId}, but no healthy OpenCode server is reachable (checked: ${sessionCandidates.join(', ') || 'none'}); refusing to start a new session`);
         await reportExecution(item.issueId, 'failed', reason);
-        revertClaim(item, claimToken);
+        await failDelivery(item, claimToken, reason);
         return false;
       }
       const sessionId = issue.sessionId;
@@ -416,14 +480,14 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
             const reason = `Session ${sessionId} 不在绑定的 Worktree 目录 ${issue.worktreePath} 中；请在任务详情中创建工作树 Session 后重试`;
             error(`watch: refusing to dispatch task ${item.issueId}; session directory does not match worktree path`);
             await reportExecution(item.issueId, 'failed', reason);
-            revertClaim(item, claimToken);
+            await failDelivery(item, claimToken, reason);
             return false;
           }
         } catch (err) {
           const reason = `无法验证 Session ${sessionId} 与 Worktree 目录的对应关系：${(err as Error).message}`;
           await reportExecution(item.issueId, 'failed', reason);
           error(`watch: ${reason}`);
-          revertClaim(item, claimToken);
+          await failDelivery(item, claimToken, reason);
           return false;
         }
       }
@@ -442,7 +506,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
           const reason = `绑定 Session ${sessionId} 拒绝了提示词请求（HTTP ${res.status}）；没有创建备用会话`;
           error(`watch: bound session ${sessionId} rejected prompt (HTTP ${res.status}); no fallback session will be created`);
           await reportExecution(item.issueId, 'failed', reason);
-          revertClaim(item, claimToken);
+          await failDelivery(item, claimToken, reason);
           return false;
         }
         // Accepted: the claim stays 'processing' for the agent to finalize.
@@ -453,7 +517,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       } catch (err) {
         error(`watch: bound session ${sessionId} failed (${(err as Error).message}); no fallback session will be created`);
         await reportExecution(item.issueId, 'failed', `提交到绑定 Session ${sessionId} 失败：${(err as Error).message}`);
-        revertClaim(item, claimToken);
+        await failDelivery(item, claimToken, `提交到绑定 Session 失败：${(err as Error).message}`);
         return false;
       }
     }
@@ -464,7 +528,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       const reason = `任务已绑定 Worktree ${issue.worktreePath}，但没有绑定 OpenCode Session；为避免在错误目录执行，请先创建工作树 Session`;
       await reportExecution(item.issueId, 'failed', reason);
       error(`watch: refusing to dispatch task ${item.issueId} without a Session bound to its worktree`);
-      revertClaim(item, claimToken);
+      await failDelivery(item, claimToken, reason);
       return false;
     }
 
@@ -495,7 +559,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       const reason = '没有可用的 headless 执行命令；嵌入式唤醒只投递绑定会话，评论保持待处理';
       error(`watch: task ${item.issueId} has no bound session and headless delivery is disabled; reverting wake to pending`);
       await reportExecution(item.issueId, 'failed', reason);
-      revertClaim(item, claimToken);
+      await failDelivery(item, claimToken, reason);
       return false;
     }
 
@@ -503,7 +567,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     for (let i = 0; i < attempts.length; i++) {
       if (attempts[i]! > 0) await sleep(attempts[i]!);
       if (!running) {
-        revertClaim(item, claimToken);
+        await failDelivery(item, claimToken, '引擎停止，headless 执行中止');
         return false;
       }
       const outcome = await new Promise<'ok' | 'failed' | 'missing'>(resolve => {
@@ -521,7 +585,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       if (outcome === 'missing') {
         error(`watch: exec ${execParts[0]} not found in PATH`);
         await reportExecution(item.issueId, 'failed', `找不到执行命令 ${execParts[0]}，请检查 PATH 配置`);
-        revertClaim(item, claimToken);
+        await failDelivery(item, claimToken, `找不到执行命令 ${execParts[0]}`);
         return false;
       }
       error(`watch: headless run failed (attempt ${i + 1}/${attempts.length})`);
@@ -532,7 +596,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     }
     error('watch: headless run failed after all retries — 结果不可用，请检查 exec 命令与目标 agent CLI 状态');
     await reportExecution(item.issueId, 'failed', 'Headless Agent 所有重试均失败，请检查命令、环境变量和 Agent CLI 日志');
-    revertClaim(item, claimToken);
+    await failDelivery(item, claimToken, 'Headless Agent 所有重试均失败');
     return false;
   };
 
@@ -670,6 +734,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       // Every tick: health transition check, then drain pending wakes.
       pollTimer = setInterval(() => {
         void probeChannelHealth();
+        void sweepStaleProcessing();
         sweep();
       }, options.pollMs);
       // unref: the poll must never be the only thing keeping a test or a
