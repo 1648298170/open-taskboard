@@ -1228,6 +1228,30 @@ export const openApiSpec: OpenApiDocument = {
         }
       }
     },
+    '/api/attachments/{attachmentId}': {
+      summary: 'Delete one attachment',
+      delete: {
+        operationId: 'deleteAttachment',
+        summary: '删除一个附件（行+磁盘文件）',
+        description:
+          'Removes the sqlite metadata row and the on-disk body in one logical delete; ' +
+          'the \'attachment-removed\' activity is logged and boards refresh via issue.updated. ' +
+          'An unknown attachment id → 404; a missing body file never blocks the row delete.',
+        tags: ['attachments'],
+        parameters: [{
+          name: 'attachmentId',
+          in: 'path',
+          required: true,
+          description: 'Attachment id',
+          schema: { type: 'string' }
+        }],
+        responses: {
+          200: { description: 'Deleted', ...jsonResponse({ $ref: '#/components/schemas/Ok' }) },
+          404: { $ref: '#/components/responses/NotFound' },
+          ...commonResponses(true)
+        }
+      }
+    },
     '/api/attachments/{attachmentId}/download': {
       summary: 'Download one attachment body',
       get: {

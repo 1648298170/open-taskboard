@@ -277,5 +277,16 @@ export const issueCommands: Record<string, Command> = {
       if (!res.ok) { console.error(`error: ${data.error ?? res.status}`); process.exit(1); }
       console.log(`attached ${data.filename} (${data.id}) to #${id}`);
     }
+  },
+  // T7-39: remove one attachment (metadata row + on-disk body).
+  'issue detach': {
+    summary: 'Delete an attachment (metadata row + on-disk file)',
+    usage: 'issue detach ATTACHMENT_ID',
+    async run(ctx) {
+      const { api, rest } = ctx;
+      need(!!rest[0], 'issue detach ATTACHMENT_ID');
+      await api('DELETE', `/api/attachments/${seg(rest[0])}`);
+      console.log(`ok: ${rest[0]} detached`);
+    }
   }
 };

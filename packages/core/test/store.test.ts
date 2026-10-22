@@ -1223,6 +1223,47 @@ describe('Store attachments (T7-39)', () => {
     assert.equal(store.getAttachment(a.id), undefined);
     assert.ok(!existsSync(join(dir, i1)));
   });
+
+  it('deleteAttachment removes row AND body, logs activity, emits issue.updated', () => {
+    const { store, events } = freshDir();
+    const id = seed(store);
+    const a = store.addAttachment(id, 'gone.txt', 4, 'alice');
+    const path = store.attachmentPathFor(id, a.id, 'gone.txt');
+    writeFileSync(path, 'data');
+    assert.ok(existsSync(path));
+    events.length = 0;
+
+    store.deleteAttachment(a.id, 'bob');
+
+    assert.equal(store.getAttachment(a.id), undefined);
+    assert.deepEqual(store.listAttachments(id), []);
+    assert.ok(!existsSync(path), `body should be unlinked: ${path}`);
+    const removed = store.listActivities(id).filter(x => x.action === 'attachment-removed');
+    assert.equal(removed.length, 1);
+    assert.equal(removed[0]!.actor, 'bob');
+    assert.equal(removed[0]!.detail, 'gone.txt');
+    assert.ok(events.some(e => e.type === 'issue.updated' && e.payload.id === id));
+  });
+
+  it('deleteAttachment throws NotFoundError for an unknown id', () => {
+    const { store } = freshDir();
+    seed(store);
+    throwsWith(() => store.deleteAttachment('ghost'), NotFoundError, 'attachment not found: ghost');
+  });
+
+  it('deleteAttachment still succeeds when the body file is already missing', () => {
+    const { store, dir } = freshDir();
+    const id = seed(store);
+    // Metadata-only row: the body was never written (or was removed out-of-band).
+    const a = store.addAttachment(id, 'nofile.txt', 1, 'alice');
+
+    store.deleteAttachment(a.id);
+
+    assert.equal(store.getAttachment(a.id), undefined);
+    assert.deepEqual(store.listAttachments(id), []);
+    // Unlink must not mkdir the per-issue dir just to fail on a missing body.
+    assert.ok(!existsSync(join(dir, id)));
+  });
 });
 
 // --- (p) full-text search (T6-30) ----------------------------------------------------

@@ -79,6 +79,28 @@ describe('attachment endpoints', () => {
     } finally { await close(); }
   });
 
+  it('deletes an attachment: 200 {ok:true}, list/detail drop it, second delete 404', async () => {
+    const { base, close } = await listenApp();
+    try {
+      const issueId = await seedIssue(base);
+      const form = new FormData();
+      form.append('file', new Blob([Buffer.from('to be deleted')]), 'delete-me.txt');
+      const up = await fetch(`${base}/api/issues/${issueId}/attachments`, { method: 'POST', body: form });
+      const meta = await up.json() as { id: string };
+
+      const del = await fetch(`${base}/api/attachments/${meta.id}`, { method: 'DELETE' });
+      assert.equal(del.status, 200);
+      assert.deepEqual(await del.json(), { ok: true });
+
+      const list = await fetch(`${base}/api/issues/${issueId}/attachments`);
+      assert.deepEqual(await list.json(), []);
+      assert.equal((await fetch(`${base}/api/attachments/${meta.id}/download`)).status, 404);
+
+      const again = await fetch(`${base}/api/attachments/${meta.id}`, { method: 'DELETE' });
+      assert.equal(again.status, 404);
+    } finally { await close(); }
+  });
+
   it('rejects uploads for a missing issue with 404', async () => {
     const { base, close } = await listenApp();
     try {

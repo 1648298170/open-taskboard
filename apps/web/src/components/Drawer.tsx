@@ -44,6 +44,7 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
   const [comment, setComment] = useState('');
   // v0.4: 评论删除两步内联确认——✕ 点击后变「确认删除」，3s 不点自动还原（无弹窗）。
   const [confirmingComment, setConfirmingComment] = useState<string | null>(null);
+  const [confirmingAttachment, setConfirmingAttachment] = useState<string | null>(null);
   const [editingComment, setEditingComment] = useState<string | null>(null);
   const [commentDraft, setCommentDraft] = useState('');
   // v0.4: 依赖边移除同款两步内联确认（全局删除必须有二次确认）。
@@ -641,6 +642,25 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                 <span className="att-name">📄 {a.filename}</span>
                 <span className="att-meta">{humanSize(a.size)} · {a.actor || 'anon'} · {fmtWhen(a.createdAt)}</span>
                 <a className="att-dl" href={api_.downloadUrl(a.id)} target="_blank" rel="noreferrer">下载</a>
+                {confirmingAttachment === a.id ? (
+                  <button className="btn tiny danger" title="再次点击确认删除附件"
+                    onClick={async e => {
+                      e.stopPropagation();
+                      setConfirmingAttachment(null);
+                      try {
+                        await api_.deleteAttachment(a.id);
+                        onToast(`已删除附件：${a.filename}`);
+                        onChanged(); void load();
+                      } catch (err) { onToast(`✗ ${(err as Error).message}`); }
+                    }}>确认删除</button>
+                ) : (
+                  <button className="icon-btn dep-remove" title="删除附件"
+                    onClick={e => {
+                      e.stopPropagation();
+                      setConfirmingAttachment(a.id);
+                      setTimeout(() => setConfirmingAttachment(cur => cur === a.id ? null : cur), 3000);
+                    }}><X size={12} /></button>
+                )}
               </li>))
             : <li style={{ color: 'var(--ink-dim)' }}>暂无附件</li>}
         </ul>

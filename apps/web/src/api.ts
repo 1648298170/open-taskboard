@@ -202,6 +202,7 @@ export const api_ = {
     return data as Attachment;
   },
   downloadUrl: (attachmentId: string): string => '/api/attachments/' + attachmentId + '/download',
+  deleteAttachment: (attachmentId: string) => api<{ ok: true }>('DELETE', `/api/attachments/${encodeURIComponent(attachmentId)}`),
   listDependencies: (projectId: string) =>
     api<DependencyEdge[]>('GET', `/api/projects/${projectId}/dependencies`),
   addDependency: (id: string, dependsOnId: string) =>

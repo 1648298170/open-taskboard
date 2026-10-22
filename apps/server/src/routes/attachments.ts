@@ -6,6 +6,7 @@
 //   POST /api/issues/:id/attachments          multipart upload (1 file, ≤10MB)
 //   GET  /api/issues/:id/attachments          metadata rows, oldest first
 //   GET  /api/attachments/:attachmentId/download   body stream (RFC 5987 filename)
+//   DELETE /api/attachments/:attachmentId          metadata row + on-disk body
 //
 // Readonly mode (TASKBOARD_READONLY=1): the global write-method hook in
 // app.ts rejects the POST with 403 before this handler runs — uploads are
@@ -68,6 +69,12 @@ const attachmentsRoutes: FastifyPluginAsync<{ store: Store }> = async (app, { st
     // RFC 5987: filename* with UTF-8 percent-encoding carries non-ASCII names.
     reply.header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(row.filename)}`);
     return reply.send(createReadStream(path));
+  });
+
+  app.delete('/api/attachments/:attachmentId', async (req: FastifyRequest<{ Params: AttachmentParams }>, reply) => {
+    const actor = String(req.headers['x-taskboard-actor'] ?? '');
+    store.deleteAttachment(req.params.attachmentId, actor);
+    return reply.send({ ok: true });
   });
 };
 

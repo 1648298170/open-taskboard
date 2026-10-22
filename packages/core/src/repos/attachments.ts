@@ -29,6 +29,12 @@ export class AttachmentRepo {
     return this.db.prepare(`SELECT ${ATTACHMENT_COLS} FROM attachments WHERE id = ?`).get(id) as unknown as Attachment | null;
   }
 
+  /** Delete one metadata row; returns whether a row actually matched. */
+  delete(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM attachments WHERE id = ?').run(id);
+    return Number(result.changes) > 0;
+  }
+
   // rowid tie-breaker: same-millisecond uploads still come back in insertion order.
   listByIssue(issueId: string): Attachment[] {
     return this.db.prepare(

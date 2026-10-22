@@ -139,6 +139,11 @@ export const issueTools: ToolTable = [
     '列出任务附件（id/文件名/大小/上传者/时间）。附件经 Web 或 CLI (`taskboard issue attach`) 上传，MCP 仅提供列表，不含上传；下载路径为 /api/attachments/<id>/download',
     args => ensureServerOrThrow('GET', `/api/issues/${seg(args.id)}/attachments`),
   )],
+  ['delete_attachment', defineTool(
+    idSchema,
+    '删除一个附件（id 为附件 id，非任务 id；元数据行与磁盘文件一并删除，留活动痕并刷新看板）',
+    args => ensureServerOrThrow('DELETE', `/api/attachments/${seg(args.id)}`),
+  )],
   ['add_issue_dependency', defineTool(
     addDependencySchema.extend({ id: z.string() }),
     '添加依赖：id 任务被 dependsOnId 阻塞（dependsOnId 完成前 id 不算就绪）。禁止自依赖/跨项目/循环依赖',

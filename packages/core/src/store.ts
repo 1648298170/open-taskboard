@@ -76,6 +76,8 @@ export class Store {
   private deps: DependencyRepo;
   private fts: SearchRepo;
   private attachments: AttachmentRepo;
+  /** Root directory for attachment bodies (shared with AttachmentRepo). */
+  private readonly attachmentsDir: string;
   /** Whether issues_fts exists — fixed for this db right after migrations ran. */
   private readonly ftsAvailable: boolean;
 
@@ -95,7 +97,8 @@ export class Store {
     this.deps = new DependencyRepo(this.db);
     this.fts = new SearchRepo(this.db);
     this.ftsAvailable = this.fts.available();
-    this.attachments = new AttachmentRepo(this.db, attachmentsDir ?? join(dataDir, 'attachments'));
+    this.attachmentsDir = attachmentsDir ?? join(dataDir, 'attachments');
+    this.attachments = new AttachmentRepo(this.db, this.attachmentsDir);
   }
 
   /** Run an index-sync helper only when the FTS table exists (no-op otherwise). */
@@ -872,6 +875,28 @@ export class Store {
 
   getAttachment(id: string): Attachment | null {
     return this.attachments.get(id);
+  }
+
+  /**
+   * Delete one attachment row and its on-disk body. The row removal and the
+   * 'attachment-removed' activity commit together; the file unlink runs after
+   * the commit and is best-effort (a missing or locked body must never fail
+   * the delete). Emits 'issue.updated' so boards/SSE refresh. Returns void —
+   * callers only need to know the operation succeeded (unknown ids throw).
+   */
+  deleteAttachment(attachmentId: string, actor = ''): void {
+    const attachment = this.attachments.get(attachmentId);
+    if (!attachment) throw new NotFoundError(`attachment not found: ${attachmentId}`);
+    inTransaction(this.db, () => {
+      this.attachments.delete(attachmentId);
+      this.logActivity(attachment.issueId, actor, 'attachment-removed', attachment.filename);
+    });
+    // Body path deliberately avoids attachmentPathFor()/dirFor(): deletion
+    // must not recreate the per-issue directory just to unlink from it.
+    try {
+      unlinkSync(join(this.attachmentsDir, attachment.issueId, `${attachment.id}__${attachment.filename}`));
+    } catch { /* already gone or locked — the row is authoritative */ }
+    this.emit('issue.updated', { id: attachment.issueId });
   }
 
   /** Per-issue attachment directory on disk, created on demand (server upload path). */
