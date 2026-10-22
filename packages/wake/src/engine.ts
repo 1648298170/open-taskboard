@@ -94,6 +94,11 @@ export interface WakeEngineOptions {
    * not_before，等 agent 当前轮次结束后再投。默认 30s。
    */
   busyDeferMs?: number;
+  /**
+   * busy 等待上限（毫秒）：超过后按失败回收（attempts+1 + 10 分钟退避），
+   * 避免会话长期占用时评论无限排队。默认 2 小时。
+   */
+  busyMaxWaitMs?: number;
 }
 
 export interface WakeEngine {
@@ -143,6 +148,8 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   let lifecycle = new AbortController();
   const seen = new Set<string>();
   const monitoredSessions = new Set<string>();
+  // busy 延后的活动流节流：同一评论 10 分钟内只记一条「已排队」活动。
+  const busyDeferReportedAt = new Map<string, number>();
   // Comments this engine can never deliver (no binding, no unbound channel).
   // They stay pending for an external sidecar; log once instead of every poll.
   const parked = new Set<string>();
@@ -191,15 +198,22 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       const url = new URL(`${base}/session/status`);
       if (directory) url.searchParams.set('directory', directory);
       const response = await request(url.toString(), { headers: { accept: 'application/json' } }, 3_000);
-      if (!response.ok) return false;
+      if (!response.ok) {
+        error(`watch: WARN session status probe returned HTTP ${response.status}; treating session as idle`);
+        return false;
+      }
       const payload = await response.json() as unknown;
-      if (typeof payload !== 'object' || payload === null) return false;
+      if (typeof payload !== 'object' || payload === null) {
+        error('watch: WARN session status probe returned an unexpected payload; treating session as idle');
+        return false;
+      }
       const raw = (payload as Record<string, unknown>)[sessionId];
       const type = raw && typeof raw === 'object' && typeof (raw as { type?: unknown }).type === 'string'
         ? (raw as { type: string }).type
         : '';
       return type === 'busy' || type === 'running' || type === 'retry';
-    } catch {
+    } catch (err) {
+      error(`watch: WARN session status probe failed (${(err as Error).message}); treating session as idle`);
       return false;
     }
   };
@@ -353,6 +367,21 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       const busy = await sessionBusy(healthyBase, sessionId, issue.worktreePath);
       if (busy) {
         const deferMs = options.busyDeferMs ?? 30_000;
+        const maxWaitMs = options.busyMaxWaitMs ?? 2 * 60 * 60 * 1000;
+        // 等待上限：会话长期占用（agent 卡死/状态残留 busy）不能无限排队——
+        // 超时按失败回收（attempts+1 + 错误记录），让面板可见且不再无休止等待。
+        const meta = store.queueMeta(item.commentId);
+        const waitedFrom = Date.parse(meta?.queuedAt ?? '') || Date.parse(meta?.notBefore ?? '') || Date.now();
+        if (Date.now() - waitedFrom > maxWaitMs) {
+          const reason = `目标会话持续占用超过 ${Math.round(maxWaitMs / 60000)} 分钟，唤醒等待超时`;
+          const retryAt = new Date(Date.now() + 10 * 60_000).toISOString();
+          if (store.requeueWake(item.commentId, claimToken, reason, retryAt)) {
+            seen.delete(item.key);
+            error(`watch: wake #${item.issueId} timed out waiting for a busy session; requeued with 10m backoff`);
+            await reportExecution(item.issueId, 'failed', reason);
+            return true;
+          }
+        }
         const deferUntil = new Date(Date.now() + deferMs).toISOString();
         if (!store.deferWake(item.commentId, claimToken, deferUntil)) {
           error(`watch: session ${sessionId} is busy and comment ${item.commentId} is no longer owned by this attempt`);
@@ -361,7 +390,13 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         // 延后不是投递完成：清掉 seen，让轮询在 not_before 到期后重新入队。
         seen.delete(item.key);
         log(`watch: session ${sessionId} busy; deferred wake #${item.issueId} until ${deferUntil}`);
-        await reportExecution(item.issueId, 'queued', `目标会话执行中，唤醒已排队（${Math.round(deferMs / 1000)}s 后重试）`);
+        // 活动流只记一次（同一条评论 10 分钟内不重复刷）——否则每 30s 一条活动
+        // 会持续触发 SSE 全图刷新。
+        const lastReport = busyDeferReportedAt.get(item.key) ?? 0;
+        if (Date.now() - lastReport > 10 * 60_000) {
+          busyDeferReportedAt.set(item.key, Date.now());
+          await reportExecution(item.issueId, 'queued', `目标会话执行中，唤醒已排队（每 ${Math.round(deferMs / 1000)}s 重试）`);
+        }
         return true;
       }
       // A task bound to a worktree must not dispatch into a Session rooted at

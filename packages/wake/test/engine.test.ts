@@ -479,3 +479,54 @@ describe('wake engine: session mutex (busy defer)', () => {
     }
   });
 });
+
+describe('wake engine: busy review hardening', () => {
+  it('reports the queued activity once instead of on every defer cycle', async () => {
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_busy2',
+      fetchImpl: url => {
+        if (url.includes('/session/status')) {
+          return Promise.resolve(new Response(JSON.stringify({ ses_busy2: { type: 'busy' } }), { status: 200 }));
+        }
+        return okResponse();
+      },
+      engineOptions: { pollMs: 15, busyDeferMs: 5 },
+    });
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 等一会' }).id;
+      // 让引擎经历多轮 defer（每 5ms 一轮，等 ~120ms ≈ 多轮）
+      await new Promise(r => setTimeout(r, 120));
+      const queuedActivities = store.listActivities(issueId)
+        .filter(a => a.action === 'execution' && a.detail.includes('唤醒已排队'));
+      assert.equal(queuedActivities.length, 1, 'queued activity must be throttled to once');
+      assert.equal(store.queueMeta(commentId)!.attempts, 0);
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('requeues as a failure after the busy wait exceeds its limit', async () => {
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_stuck',
+      fetchImpl: url => {
+        if (url.includes('/session/status')) {
+          return Promise.resolve(new Response(JSON.stringify({ ses_stuck: { type: 'busy' } }), { status: 200 }));
+        }
+        return okResponse();
+      },
+      // 等待上限 1ms：第二轮就应判定超时
+      engineOptions: { pollMs: 15, busyDeferMs: 5, busyMaxWaitMs: 1 },
+    });
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 卡死测试' }).id;
+      await waitFor(() => store.queueMeta(commentId)!.attempts >= 1);
+      const meta = store.queueMeta(commentId)!;
+      assert.ok(meta.lastError.includes('超时'), 'timeout must be recorded as the failure reason');
+      assert.equal(store.getComment(commentId)!.status, 'pending');
+    } finally {
+      await engine.stop();
+    }
+  });
+});
