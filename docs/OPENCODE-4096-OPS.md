@@ -517,3 +517,30 @@ ps -o pid,ppid,lstart,command -p "$(lsof -t -iTCP:4096 -sTCP:LISTEN)"
 
 **关键约束**：同一个 Session 同一时刻只有一个在飞投递；`@agent` 前缀仍是唤醒触发条件（2026-10-22 拍板保留）。
 
+### 受控人工恢复（投递结果无法确认时，v24 租约语义）
+
+适用：评论徽章为「已停止 · 需人工」且存在 `sent/unverified_sent` 状态的会话保护租约。
+
+前置（必须逐项确认）：
+1. 面板会话面板显示会话 idle、无 Agent 正在运行；
+2. 执行活动流已核对（最近一次为「已送达但未确认完成」或「投递结果无法确认」）。
+
+诊断 SQL（只读）：
+
+```sql
+SELECT lease_key, comment_id, dispatch_id, fence, state, dispatch_started_at
+  FROM wake_session_leases WHERE session_id = :sessionId;
+```
+
+受控释放（四重条件 + fence 乐观锁；0 行 → 重读重诊，禁止拿旧 fence 机械重试）：
+
+```sql
+UPDATE wake_session_leases SET state = 'released'
+ WHERE lease_key = :key AND comment_id = :cid AND dispatch_id = :did
+   AND fence = :observedFence AND state IN ('sent', 'unverified_sent');
+```
+
+之后面板「重新唤醒」生成新轮次（新 dispatch_id）。注意：
+- `dispatching` 状态的租约**禁止直接释放**——POST 可能仍在途；等待停滞超阈值（90s）后按核验流程处理；
+- 仅做「重新唤醒」而不执行释放 SQL：新轮次会被旧保护 defer，不会恢复投递；
+- 误释放的风险（旧投递迟到 + 新投递并存）由操作者显式承担，系统不作保证。

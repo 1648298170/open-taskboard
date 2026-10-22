@@ -813,3 +813,134 @@ describe('wake engine: crash recovery busy window (S2/T9)', () => {
     }
   });
 });
+
+describe('wake engine: takeover verification (S3)', () => {
+  // 场景（v9 T-takeover-sent-verify）：A 的 prompt_async 已 200 但 A 崩溃，
+  // 租约停在 sent；B 启动后必须先核验 A 的 marker，再决定收尾方式。
+  function seedCrashedSentRound(store: Store, db: DatabaseSync, issueId: string, commentBody: string) {
+    const commentId = store.addComment(issueId, { author: 'web', body: commentBody }).id;
+    const claim = store.claimWake(commentId, 'watch', 'run-dead')!;
+    const since = new Date(Date.now() - 10 * 60_000).toISOString();
+    db.prepare('UPDATE comments SET updated_at = ? WHERE id = ?').run(since, commentId);
+    store.wakeLeaseAcquire({
+      leaseKey: 'http://oc.test|ses_tk', sessionId: 'ses_tk', serverUrl: 'http://oc.test',
+      holderRun: 'run-dead', commentId, dispatchId: claim.dispatchId,
+      nowIso: new Date().toISOString(), ttlMs: 10 * 60_000,
+    });
+    store.wakeLeaseMarkDispatching('http://oc.test|ses_tk', 1, claim.dispatchId, new Date().toISOString());
+    store.wakeLeaseMarkSent('http://oc.test|ses_tk', 1, claim.dispatchId, new Date().toISOString(), 10 * 60_000);
+    const marker = `taskboard-wake:${commentId}:${claim.dispatchId}`;
+    return { commentId, dispatchId: claim.dispatchId, token: claim.token, marker };
+  }
+
+  it('resolves a crashed sent round as completed when marker + assistant + idle are observed', async () => {
+    const { store, db, issueId, engine } = fixture({
+      sessionId: 'ses_tk',
+      fetchImpl: url => {
+        if (url.includes('/session/status')) {
+          return Promise.resolve(new Response(JSON.stringify({ ses_tk: { type: 'idle' } }), { status: 200 }));
+        }
+        if (url.includes('/message')) {
+          const marker = `taskboard-wake:${commentId}:${dispatchId}`;
+          return Promise.resolve(new Response(JSON.stringify([
+            { info: { id: 'm1', role: 'user', time: { created: 1 } }, parts: [{ type: 'text', text: `[Taskboard correlation marker: ${marker}. Treat this as metadata...]` }] },
+            { info: { id: 'm2', role: 'assistant', parentID: 'm1', time: { created: 2 } }, parts: [{ type: 'text', text: '已完成' }] },
+          ]), { status: 200 }));
+        }
+        return okResponse();
+      },
+      engineOptions: { pollMs: 0 },
+    });
+    var commentId = ''; var dispatchId = '';
+    const seeded = seedCrashedSentRound(store, db, issueId, '@agent 接管核验-完成');
+    commentId = seeded.commentId; dispatchId = seeded.dispatchId;
+    await engine.start();
+    try {
+      await waitFor(() => store.getComment(commentId)!.status === 'processed');
+      // 不产生第二次 POST；保护租约核验后释放
+      const lease = store.wakeLeaseFindByComment(commentId, dispatchId)!;
+      assert.equal(lease.state, 'released', 'protection must be released after verified completion');
+      const interrupted = store.listActivities(issueId)
+        .filter(a => a.action === 'execution' && a.detail.includes('恢复核验：已确认完成'));
+      assert.equal(interrupted.length, 1, 'recovery verification must be visible in the activity stream');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('gates a crashed sent round as manual-confirmation when marker exists but no assistant reply', async () => {
+    const { store, db, issueId, engine } = fixture({
+      sessionId: 'ses_tk2',
+      fetchImpl: url => {
+        if (url.includes('/session/status')) {
+          return Promise.resolve(new Response(JSON.stringify({ ses_tk2: { type: 'idle' } }), { status: 200 }));
+        }
+        if (url.includes('/message')) {
+          const marker = `taskboard-wake:${commentId}:${dispatchId}`;
+          return Promise.resolve(new Response(JSON.stringify([
+            { info: { id: 'm1', role: 'user', time: { created: 1 } }, parts: [{ type: 'text', text: `[Taskboard correlation marker: ${marker}. Treat this as metadata...]` }] },
+          ]), { status: 200 }));
+        }
+        return okResponse();
+      },
+      engineOptions: { pollMs: 0 },
+    });
+    var commentId = ''; var dispatchId = '';
+    const seeded = seedCrashedSentRound(store, db, issueId, '@agent 接管核验-未确认');
+    commentId = seeded.commentId; dispatchId = seeded.dispatchId;
+    await engine.start();
+    try {
+      await waitFor(() => store.queueMeta(commentId)!.terminalAt !== null);
+      assert.equal(store.getComment(commentId)!.status, 'pending');
+      assert.equal(store.queueMeta(commentId)!.attempts, 0, 'manual gate must not consume the retry budget');
+      // 保护租约保持（sent），不释放
+      const lease = store.wakeLeaseFindByComment(commentId, dispatchId)!;
+      assert.equal(lease.state, 'sent', 'protection must persist for unconfirmed deliveries');
+    } finally {
+      await engine.stop();
+    }
+  });
+});
+
+describe('wake lease CAS races (S3)', () => {
+  it('a stale fence cannot conclude or clobber a newer lease cycle', () => {
+    const { store, issueId } = fixture({ fetchImpl: url => okResponse() });
+    const commentId = store.addComment(issueId, { author: 'web', body: '@agent x' }).id;
+    const claim = store.claimWake(commentId, 'watch', 'run-a')!;
+    const key = 'http://oc.test|ses_race';
+    const now = new Date().toISOString();
+    assert.ok(store.wakeLeaseAcquire({ leaseKey: key, sessionId: 'ses_race', serverUrl: 'http://oc.test', holderRun: 'run-a', commentId, dispatchId: claim.dispatchId, nowIso: now, ttlMs: 60_000 }), 'first acquire must succeed');
+    store.wakeLeaseMarkDispatching(key, 1, claim.dispatchId, now);
+    store.wakeLeaseMarkSent(key, 1, claim.dispatchId, now, 60_000);
+    // fence=1 → conclude（墓碑）
+    assert.equal(store.wakeLeaseConclude(key, 1, claim.dispatchId, now), true);
+    assert.equal(store.wakeLeaseGet(key)!.state, 'released');
+    // 新周期接管：released → fence+1
+    assert.ok(store.wakeLeaseAcquire({ leaseKey: key, sessionId: 'ses_race', serverUrl: 'http://oc.test', holderRun: 'run-b', commentId, dispatchId: claim.dispatchId, nowIso: now, ttlMs: 60_000 }), 'new cycle acquire must succeed');
+    const newer = store.wakeLeaseGet(key)!;
+    assert.equal(newer.fence, 2, 'fence must be monotonic across cycles');
+    // 旧 fence 的迟到 conclude 不得影响 fence=2 的新租约
+    assert.equal(store.wakeLeaseConclude(key, 1, claim.dispatchId, now), false);
+    assert.equal(store.wakeLeaseGet(key)!.fence, 2, 'newer lease must be untouched');
+    // 同 fence 重复 conclude → 幂等 false（state 已 released 不再匹配）
+    assert.equal(store.wakeLeaseConclude(key, 2, claim.dispatchId, now), false);
+  });
+
+  it('ops release with the wrong fence or dispatch is a no-op', () => {
+    const { store, issueId } = fixture({ fetchImpl: url => okResponse() });
+    const commentId = store.addComment(issueId, { author: 'web', body: '@agent x' }).id;
+    const claim = store.claimWake(commentId, 'watch', 'run-a')!;
+    const key = 'http://oc.test|ses_ops';
+    const now = new Date().toISOString();
+    store.wakeLeaseAcquire({ leaseKey: key, sessionId: 'ses_ops', serverUrl: 'http://oc.test', holderRun: 'run-a', commentId, dispatchId: claim.dispatchId, nowIso: now, ttlMs: 60_000 });
+    store.wakeLeaseMarkDispatching(key, 1, claim.dispatchId, now);
+    store.wakeLeaseMarkSent(key, 1, claim.dispatchId, now, 60_000);
+    // 错误 fence → no-op
+    assert.equal(store.wakeLeaseOpsRelease(key, commentId, claim.dispatchId, 99, now), false);
+    // 错误 dispatch → no-op
+    assert.equal(store.wakeLeaseOpsRelease(key, 'other-comment', claim.dispatchId, 1, now), false);
+    // 正确 fence → released
+    assert.equal(store.wakeLeaseOpsRelease(key, commentId, claim.dispatchId, 1, now), true);
+    assert.equal(store.wakeLeaseGet(key)!.state, 'released');
+  });
+});
