@@ -142,3 +142,42 @@ describe('comments.updated_at (v21)', () => {
     assert.ok(columns.includes('updated_at'));
   });
 });
+
+describe('wake queue: delayed completion & edit gate (v10)', () => {
+  it('completeTerminal resolves a manually-gated comment only for the same round', () => {
+    const { store, commentId } = fixture();
+    const claim = store.claimWake(commentId, 'watch', 'run-test')!;
+    assert.equal(store.terminalizeWake(commentId, claim.token, claim.dispatchId, '已送达未确认'), true);
+    // 错误轮次（迟到结果）→ no-op，评论保持人工终态
+    assert.equal(store.completeTerminalWake(commentId, 'wrong-dispatch'), false);
+    assert.equal(store.getComment(commentId)!.status, 'pending');
+    // 正确轮次 → processed + 终态清除
+    assert.equal(store.completeTerminalWake(commentId, claim.dispatchId), true);
+    assert.equal(store.getComment(commentId)!.status, 'processed');
+  });
+
+  it('edit gate keeps round identity when a protection lease exists (v10)', () => {
+    const { store, commentId } = fixture();
+    const claim = store.claimWake(commentId, 'watch', 'run-test')!;
+    assert.equal(store.terminalizeWake(commentId, claim.token, claim.dispatchId, '已送达未确认'), true);
+    // 种保护租约（sent）
+    store.wakeLeaseAcquire({ leaseKey: 'k|ses_1', sessionId: 'ses_1', serverUrl: 'http://oc.test', holderRun: 'run-test', commentId, dispatchId: claim.dispatchId, nowIso: new Date().toISOString(), ttlMs: 60_000 });
+    store.wakeLeaseMarkDispatching('k|ses_1', 1, claim.dispatchId, new Date().toISOString());
+    store.wakeLeaseMarkSent('k|ses_1', 1, claim.dispatchId, new Date().toISOString(), 60_000);
+    // 受保护编辑：仅存正文，轮次身份与终态保留
+    store.updateComment(commentId, { body: '@agent 改过的正文' }, 'web');
+    assert.equal(store.getComment(commentId)!.body, '@agent 改过的正文');
+    const meta = store.queueMeta(commentId)!;
+    assert.equal(meta.terminalAt !== null, true, 'terminal must persist under protection');
+    assert.equal(meta.dispatchId, claim.dispatchId, 'round identity must persist under protection');
+    // 解除保护后编辑 → 完整重置（新轮次）
+    const lease = store.wakeLeaseGet('k|ses_1')!;
+    store.wakeLeaseConclude(lease.leaseKey, lease.fence, lease.dispatchId!, new Date().toISOString());
+    store.updateComment(commentId, { body: '@agent 再次编辑' }, 'web');
+    const meta2 = store.queueMeta(commentId)!;
+    assert.equal(meta2.terminalAt, null);
+    assert.equal(meta2.dispatchId, null);
+    assert.equal(meta2.attempts, 0);
+    assert.equal(store.getComment(commentId)!.body, '@agent 再次编辑');
+  });
+});

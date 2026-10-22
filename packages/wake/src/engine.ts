@@ -28,7 +28,7 @@ import {
 /** The Store slice the engine depends on (the facade itself satisfies it). */
 export type WakeStore = Pick<
   Store,
-  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listQueueBatch' | 'queueMeta' | 'requeueWake' | 'deferWakeBusy' | 'deferWakeUnknown' | 'deferBusyTimeout' | 'resetBusy' | 'terminalizeWake' | 'completeTerminalWake' | 'absentScan' | 'listStaleProcessing' | 'listOrphanProcessing' | 'recordExecutionEvent' | 'subscribe' | 'registerWakeEngine' | 'heartbeatWakeEngine' | 'wakeLeaseAcquire' | 'wakeLeaseRenew' | 'wakeLeaseMarkDispatching' | 'wakeLeaseMarkSent' | 'wakeLeaseReleaseHeld' | 'wakeLeaseConclude' | 'wakeLeaseGet' | 'wakeLeaseFindByComment' | 'wakeLeaseHasProtection'
+  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listQueueBatch' | 'queueMeta' | 'requeueWake' | 'deferWakeBusy' | 'deferWakeUnknown' | 'deferBusyTimeout' | 'resetBusy' | 'closeBusyAt' | 'terminalizeWake' | 'completeTerminalWake' | 'absentScan' | 'listStaleProcessing' | 'listOrphanProcessing' | 'recordExecutionEvent' | 'subscribe' | 'registerWakeEngine' | 'heartbeatWakeEngine' | 'wakeLeaseAcquire' | 'wakeLeaseRenew' | 'wakeLeaseMarkDispatching' | 'wakeLeaseMarkSent' | 'wakeLeaseReleaseHeld' | 'wakeLeaseConclude' | 'wakeLeaseGet' | 'wakeLeaseFindByComment' | 'wakeLeaseHasProtection'
 >;
 
 /** Narrow child-process surface so tests can inject a deterministic spawn. */
@@ -133,6 +133,18 @@ interface WakeItem {
   source: 'event' | 'backfill';
 }
 
+/** 会话状态解析（纯函数，可测）：type missing 视为 idle（活跃会话才出现在映射里），
+ *  无法识别的非空 type 一律 unknown（fail-closed）。 */
+export function parseSessionStatus(payload: unknown, sessionId: string): 'busy' | 'idle' | 'unknown' {
+  if (typeof payload !== 'object' || payload === null) return 'unknown';
+  const raw = (payload as Record<string, unknown>)[sessionId];
+  if (raw === undefined) return 'idle'; // 活跃会话才出现在映射里；缺键 = idle
+  if (typeof raw !== 'object' || raw === null) return 'unknown'; // 存在但畸形 = fail-closed
+  const type = typeof (raw as { type?: unknown }).type === 'string' ? (raw as { type?: unknown }).type as string : '';
+  if (type === 'busy' || type === 'running' || type === 'retry') return 'busy';
+  if (type === 'idle' || type === '') return 'idle';
+  return 'unknown';
+}
 export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}): WakeEngine {
   const { store, config } = deps;
   const log = (message: string): void => deps.log(message);
@@ -221,15 +233,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         error(`watch: WARN session status probe returned HTTP ${response.status}; treating as unknown`);
         return 'unknown';
       }
-      const payload = await response.json() as unknown;
-      if (typeof payload !== 'object' || payload === null) return 'unknown';
-      const raw = (payload as Record<string, unknown>)[sessionId];
-      const type = raw && typeof raw === 'object' && typeof (raw as { type?: unknown }).type === 'string'
-        ? (raw as { type: string }).type
-        : '';
-      if (type === 'busy' || type === 'running' || type === 'retry') return 'busy';
-      if (type === 'idle' || type === '') return 'idle';
-      return 'unknown';
+      return parseSessionStatus(await response.json(), sessionId);
     } catch (err) {
       error(`watch: WARN session status probe failed (${(err as Error).message}); treating as unknown`);
       return 'unknown';
@@ -242,10 +246,12 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
    *  post-dispatch → probe=idle 前置 + 精确轮次 marker 核验四态。
    */
   const resolveStaleRow = async (issueId: string, commentId: string, claimToken: string,
-    dispatchId: string | null, timeoutMs: number): Promise<void> => {
+    dispatchId: string | null, timeoutMs: number,
+    busySince: string | null, updatedAt: string | null): Promise<void> => {
     const postDispatch = dispatchId != null && store.wakeLeaseHasProtection(commentId, dispatchId);
     if (!postDispatch) {
-      // I0：发送前中断——回收为 pending（attempts 保留），无证据租约由 TTL 惰性失效。
+      // I0：发送前中断——回收为 pending（attempts 保留）；T9：busy 窗口按 updated_at 关闭。
+      if (busySince) store.closeBusyAt(commentId, claimToken, dispatchId ?? '', updatedAt ?? nowIso());
       if (store.releaseWake(commentId, claimToken, 'pending')) {
         await reportExecution(issueId, 'queued', '发送前中断，已自动恢复（不消耗重试预算）');
       }
@@ -300,7 +306,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     if (!running) return;
     const timeoutMs = options.resultTimeoutMs ?? 10 * 60_000;
     const cutoffIso = new Date(Date.now() - timeoutMs).toISOString();
-    let stale: { id: string; issueId: string; claimToken: string; dispatchId: string | null }[] = [];
+    let stale: { id: string; issueId: string; claimToken: string; dispatchId: string | null; updatedAt: string; busySince: string | null }[] = [];
     try {
       stale = store.listStaleProcessing(cutoffIso, runId);
     } catch (err) {
@@ -311,7 +317,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       if (!running) return;
       if (inFlight.has(row.id)) continue;
       try {
-        await resolveStaleRow(row.issueId, row.id, row.claimToken, row.dispatchId, timeoutMs);
+        await resolveStaleRow(row.issueId, row.id, row.claimToken, row.dispatchId, timeoutMs, row.busySince ?? null, row.updatedAt);
       } catch (err) {
         error(`watch: stale processing recovery failed for comment ${row.id} (${(err as Error).message})`);
       }
@@ -325,7 +331,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     const liveCutoff = new Date(Date.now() - Math.max(3 * hb, 180_000)).toISOString();
     const graceCutoff = new Date(Date.now() - 60_000).toISOString();
     const legacyCutoff = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
-    let rows: { id: string; issueId: string; claimToken: string; dispatchId: string | null }[] = [];
+    let rows: { id: string; issueId: string; claimToken: string; dispatchId: string | null; updatedAt: string; busySince: string | null }[] = [];
     try {
       rows = store.listOrphanProcessing(graceCutoff, legacyCutoff, liveCutoff, runId);
     } catch (err) {
@@ -335,7 +341,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     for (const row of rows) {
       if (!running) return;
       try {
-        await resolveStaleRow(row.issueId, row.id, row.claimToken, row.dispatchId, options.resultTimeoutMs ?? 10 * 60_000);
+        await resolveStaleRow(row.issueId, row.id, row.claimToken, row.dispatchId, options.resultTimeoutMs ?? 10 * 60_000, row.busySince ?? null, row.updatedAt);
       } catch (err) {
         error(`watch: orphan recovery failed for comment ${row.id} (${(err as Error).message})`);
       }

@@ -868,13 +868,19 @@ export class Store {
   }
 
   /** 结果核对（本 run 专属）：超时未更新的本 run 认领（inFlight 排除在引擎侧）。 */
-  listStaleProcessing(cutoffIso: string, runId: string): { id: string; issueId: string; claimToken: string; dispatchId: string | null }[] {
+  listStaleProcessing(cutoffIso: string, runId: string): { id: string; issueId: string; claimToken: string; dispatchId: string | null; updatedAt: string; busySince: string | null }[] {
     return this.comments.listStaleProcessing(cutoffIso, runId);
+  }
+
+  /** 崩溃恢复关窗（T9）：按 updated_at 关闭 busy 窗口。 */
+  closeBusyAt(commentId: string, claimToken: string, dispatchId: string, closedAtIso: string): boolean {
+    if (!claimToken || !dispatchId) return false;
+    return this.comments.closeBusyAt(commentId, claimToken, dispatchId, closedAtIso);
   }
 
   /** 孤儿扫描：死 run（心跳过期）/ legacy（>24h 无 run 身份）的他人认领。 */
   listOrphanProcessing(graceCutoffIso: string, legacyCutoffIso: string, liveCutoffIso: string, myRun: string):
-    { id: string; issueId: string; claimToken: string; dispatchId: string | null }[] {
+    { id: string; issueId: string; claimToken: string; dispatchId: string | null; updatedAt: string; busySince: string | null }[] {
     return this.comments.listOrphanProcessing(graceCutoffIso, legacyCutoffIso, liveCutoffIso, myRun);
   }
 

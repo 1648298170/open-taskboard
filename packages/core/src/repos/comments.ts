@@ -302,16 +302,32 @@ export class CommentRepo {
   }
 
   /**
+   * 崩溃恢复关窗（T9）：按指定时刻（行 updated_at）关闭 busy 窗口——
+   * 停机时长按 unknown 暂停语义不计入，负差 clamp 0。
+   */
+  closeBusyAt(id: string, claimToken: string, dispatchId: string, closedAtIso: string): boolean {
+    const result = this.db.prepare(
+      `UPDATE comments
+       SET busy_accum_ms = busy_accum_ms + CASE WHEN busy_since IS NULL THEN 0
+             ELSE MAX(0, CAST((julianday(?) - julianday(busy_since)) * 86400000 AS INTEGER)) END,
+           busy_since = NULL, updated_at = ?
+       WHERE id = ? AND status = 'processing' AND claimed_by = ? AND dispatch_id = ?`
+    ).run(closedAtIso, now(), id, claimToken, dispatchId);
+    return result.changes > 0;
+  }
+
+  /**
    * 结果核对（本 run 专属）：只列本引擎认领、超过超时未更新的 processing 行。
    * inFlight 排除由引擎内存集合负责（不在此查询）。
    */
-  listStaleProcessing(cutoffIso: string, runId: string): { id: string; issueId: string; claimToken: string; dispatchId: string | null }[] {
+  listStaleProcessing(cutoffIso: string, runId: string): { id: string; issueId: string; claimToken: string; dispatchId: string | null; updatedAt: string; busySince: string | null }[] {
     return this.db.prepare(
-      `SELECT id, issue_id AS issueId, claimed_by AS claimToken, dispatch_id AS dispatchId
+      `SELECT id, issue_id AS issueId, claimed_by AS claimToken, dispatch_id AS dispatchId,
+              updated_at AS updatedAt, busy_since AS busySince
        FROM comments
        WHERE status = 'processing' AND updated_at < ? AND claimed_run = ?
        ORDER BY updated_at`
-    ).all(cutoffIso, runId) as { id: string; issueId: string; claimToken: string; dispatchId: string | null }[];
+    ).all(cutoffIso, runId) as { id: string; issueId: string; claimToken: string; dispatchId: string | null; updatedAt: string; busySince: string | null }[];
   }
 
   /**
@@ -322,9 +338,10 @@ export class CommentRepo {
    * 返回 dispatch_id 供 pre-dispatch 判定与轮次精确核验。
    */
   listOrphanProcessing(graceCutoffIso: string, legacyCutoffIso: string, liveCutoffIso: string, myRun: string):
-    { id: string; issueId: string; claimToken: string; dispatchId: string | null }[] {
+    { id: string; issueId: string; claimToken: string; dispatchId: string | null; updatedAt: string; busySince: string | null }[] {
     return this.db.prepare(
-      `SELECT id, issue_id AS issueId, claimed_by AS claimToken, dispatch_id AS dispatchId
+      `SELECT id, issue_id AS issueId, claimed_by AS claimToken, dispatch_id AS dispatchId,
+              updated_at AS updatedAt, busy_since AS busySince
        FROM comments
        WHERE status = 'processing' AND updated_at < ?
          AND (claimed_run IS NULL OR claimed_run <> ?)
@@ -336,6 +353,6 @@ export class CommentRepo {
          )
        ORDER BY updated_at`
     ).all(graceCutoffIso, myRun, liveCutoffIso, legacyCutoffIso) as
-      { id: string; issueId: string; claimToken: string; dispatchId: string | null }[];
+      { id: string; issueId: string; claimToken: string; dispatchId: string | null; updatedAt: string; busySince: string | null }[];
   }
 }

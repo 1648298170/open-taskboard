@@ -8,6 +8,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { Store } from '@taskboard/core';
 import {
+  parseSessionStatus,
   createWakeEngine,
   WATCH_REQUEST_TIMEOUT_MS,
   type SpawnFn,
@@ -765,6 +766,48 @@ describe('wake engine: startup reconciliation (crash recovery)', () => {
     try {
       await new Promise(r => setTimeout(r, 40));
       assert.equal(store.getComment(commentId)!.status, 'processing', 'fresh claims must not be reset');
+    } finally {
+      await engine.stop();
+    }
+  });
+});
+
+describe('wake engine: tri-state probe parsing (S2)', () => {
+  it('parseSessionStatus classifies all payload shapes', () => {
+    assert.equal(parseSessionStatus({ ses_1: { type: 'busy' } }, 'ses_1'), 'busy');
+    assert.equal(parseSessionStatus({ ses_1: { type: 'running' } }, 'ses_1'), 'busy');
+    assert.equal(parseSessionStatus({ ses_1: { type: 'retry' } }, 'ses_1'), 'busy');
+    assert.equal(parseSessionStatus({ ses_1: { type: 'idle' } }, 'ses_1'), 'idle');
+    assert.equal(parseSessionStatus({}, 'ses_1'), 'idle');
+    assert.equal(parseSessionStatus({ ses_1: { type: 'weird' } }, 'ses_1'), 'unknown');
+    assert.equal(parseSessionStatus(null, 'ses_1'), 'unknown');
+    assert.equal(parseSessionStatus('garbage', 'ses_1'), 'unknown');
+    assert.equal(parseSessionStatus({ ses_1: 'busy' }, 'ses_1'), 'unknown');
+  });
+});
+
+describe('wake engine: crash recovery busy window (S2/T9)', () => {
+  it('closes the busy window at updated_at when recovering a pre-dispatch crash', async () => {
+    const { store, db, issueId, engine } = fixture({
+      sessionId: null,
+      fetchImpl: () => okResponse(),
+      config: { execParts: undefined },
+      engineOptions: { pollMs: 0 },
+    });
+    const commentId = store.addComment(issueId, { author: 'web', body: '@agent 崩溃前在跑' }).id;
+    store.claimWake(commentId, 'watch', 'run-dead');
+    // 崩溃前：busy_since 开了 3h，updated_at 停在 2h 前（I0：未发出请求）
+    const busySince = new Date(Date.now() - 3 * 60 * 60_000).toISOString();
+    const updatedAt = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    db.prepare('UPDATE comments SET busy_since = ?, updated_at = ? WHERE id = ?').run(busySince, updatedAt, commentId);
+    await engine.start();
+    try {
+      await waitFor(() => store.getComment(commentId)!.status === 'pending');
+      const meta = store.queueMeta(commentId)!;
+      // 窗口按 updated_at 关闭 → 累计 ≈ 1h（busy_since→updated_at），停机时长不计
+      assert.ok(meta.busyAccumMs > 50 * 60_000 && meta.busyAccumMs < 70 * 60_000, 'accum ≈ 1h: ' + meta.busyAccumMs);
+      assert.equal(meta.busySince, null);
+      assert.equal(meta.attempts, 0, 'pre-dispatch recovery must not consume budget');
     } finally {
       await engine.stop();
     }
