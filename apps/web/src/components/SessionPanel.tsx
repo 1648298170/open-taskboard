@@ -4,13 +4,15 @@
 
 import { X, ExternalLink } from 'lucide-react';
 
-export function SessionPanel({ url, title, onClose }: {
+export function SessionPanel({ url, title, hidden, onClose }: {
   url: string;
   title: string;
+  /** 任务抽屉打开时隐藏面板（iframe 保持运行，抽屉关闭即恢复）。 */
+  hidden?: boolean;
   onClose: () => void;
 }) {
   return (
-    <aside className="session-panel" aria-label="OpenCode 会话">
+    <aside className={hidden ? 'session-panel is-hidden' : 'session-panel'} aria-label="OpenCode 会话" aria-hidden={hidden || undefined}>
       <div className="session-panel-head">
         <span className="session-panel-title" title={title}>{title}</span>
         <div className="session-panel-actions">

@@ -2455,7 +2455,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   top: 0;
   right: 0;
   bottom: 0;
-  z-index: 70;
+  z-index: 15; /* 低于任务抽屉(20)：抽屉打开时面板让位隐藏，关闭即恢复 */
   width: min(920px, 92vw);
   display: flex;
   flex-direction: column;
@@ -2464,6 +2464,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   box-shadow: -14px 0 36px rgb(0 0 0 / 38%);
   animation: session-panel-in .22s ease both;
 }
+.session-panel.is-hidden { display: none; }
 @keyframes session-panel-in {
   from { transform: translateX(24px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }

@@ -946,12 +946,20 @@ export default function App() {
           onToast={showToast}
           onOpenIssue={openIssue}
           issues={issues}
-          onOpenSession={(url, sessionId, title) => setSessionPanel({ url, sessionId, title })}
+          onOpenSession={(url, sessionId, title) => {
+            // 右侧互斥：会话面板与任务抽屉不同时驻留；打开面板时收起抽屉。
+            setSessionPanel({ url, sessionId, title });
+            closeDrawer();
+          }}
           statuses={STATUSES} />
       )}
 
       {sessionPanel && (
-        <SessionPanel url={sessionPanel.url} title={sessionPanel.title || 'OpenCode 会话'} onClose={() => setSessionPanel(null)} />
+        <SessionPanel
+          url={sessionPanel.url}
+          title={sessionPanel.title || 'OpenCode 会话'}
+          hidden={openId !== null}
+          onClose={() => setSessionPanel(null)} />
       )}
 
       <NewIssueDialog open={dialogOpen} projectId={projectId!}
