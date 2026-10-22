@@ -345,8 +345,14 @@ export class Store {
     // Domain-managed timestamps: first start is immutable across retries; reopening clears completion.
     const effectivePatch: IssuePatch = { ...patch };
     const transitionAt = statusChanged ? now() : null;
-    if (statusChanged && patch.status === 'in_progress' && cur.startedAt === null) {
-      effectivePatch.startedAt = transitionAt;
+    if (statusChanged && patch.status === 'in_progress') {
+      if (cur.startedAt === null) effectivePatch.startedAt = transitionAt;
+      // 计划开始日期 = 实际开工日：首次进入进行中时自动落当天（已有值不覆盖）。
+      if (cur.startDate === null) effectivePatch.startDate = isoDay(new Date());
+      // 负责人跟随最近活动的 agent：agent 触发的流转把 assignee 更新为自己。
+      if (actor.trim() !== '' && actor !== 'web' && cur.assignee !== actor) {
+        effectivePatch.assignee = actor;
+      }
     }
     if (statusChanged && patch.status === 'done' && cur.completedAt === null) {
       effectivePatch.completedAt = transitionAt;
@@ -525,8 +531,18 @@ export class Store {
       // dashi 语义：认领即开工 —— todo 单向自动流转，「进行中」列从此
       // 机器级真实（agent 想跳过都跳不掉）。in_review/done 不回退。
       if (issue.status === 'todo') {
-        this.issues.update(id, { status: 'in_progress', ...(issue.startedAt === null ? { startedAt: t } : {}) });
+        this.issues.update(id, {
+          status: 'in_progress',
+          ...(issue.startedAt === null ? { startedAt: t } : {}),
+          ...(issue.startDate === null ? { startDate: isoDay(new Date()) } : {}),
+          ...(issue.assignee !== agent ? { assignee: agent } : {})
+        });
         this.logActivity(id, actor, 'status', 'todo → in_progress (claim)');
+        if (issue.assignee !== agent) this.logActivity(id, actor, 'assignee', agent);
+      } else if (this.issues.get(id)!.assignee !== agent) {
+        // 已在进行中/待验收的任务被认领：负责人跟随当前 agent（单独写一次版本）。
+        this.issues.update(id, { assignee: agent });
+        this.logActivity(id, actor, 'assignee', agent);
       }
       // Session ownership lives on Project. Legacy claim.sessionId is accepted
       // for transport compatibility but never creates a task-level override.

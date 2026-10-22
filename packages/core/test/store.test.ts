@@ -1767,3 +1767,37 @@ describe('task execution lifecycle', () => {
   });
 });
 
+
+describe('agent identity auto-fill (assignee/startDate)', () => {
+  it('claim writes assignee and startDate for a todo task', () => {
+    const { store } = fresh();
+    const project = store.createProject({ id: 'p1', name: 'P' });
+    const issue = store.createIssue({ projectId: project.id, title: 'T' });
+    assert.equal(issue.assignee, '');
+    assert.equal(issue.startDate, null);
+    const claimed = store.claimIssue(issue.id, 'sisyphus');
+    assert.equal(claimed.status, 'in_progress');
+    assert.equal(claimed.assignee, 'sisyphus');
+    const today = new Date();
+    const expected = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    assert.equal(claimed.startDate, expected);
+  });
+
+  it('manual move to in_progress fills startDate once and never overwrites', () => {
+    const { store } = fresh();
+    const project = store.createProject({ id: 'p1', name: 'P' });
+    const issue = store.createIssue({ projectId: project.id, title: 'T', startDate: '2026-01-02' });
+    const moved = store.updateIssue(issue.id, { status: 'in_progress' }, undefined, 'sisyphus', '测试流转：开工');
+    assert.equal(moved.startDate, '2026-01-02', 'existing startDate must not be overwritten');
+    assert.equal(moved.assignee, 'sisyphus', 'agent-driven move updates assignee');
+  });
+
+  it('web move to in_progress fills startDate but leaves agent-owned assignee alone', () => {
+    const { store } = fresh();
+    const project = store.createProject({ id: 'p1', name: 'P' });
+    const issue = store.createIssue({ projectId: project.id, title: 'T' });
+    const moved = store.updateIssue(issue.id, { status: 'in_progress' }, undefined, 'web');
+    assert.ok(moved.startDate, 'web move still stamps the planned start date');
+    assert.equal(moved.assignee, '', 'assignee stays agent-owned');
+  });
+});
