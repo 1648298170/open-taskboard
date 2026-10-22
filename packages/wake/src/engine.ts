@@ -247,9 +247,12 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       try {
         const issue = store.getIssue(row.issueId);
         const base = config.opencodeBase?.trim();
-        if (issue?.sessionId && base) {
+        if (issue?.sessionId) {
+          // 无法探测会话状态（未配 opencodeBase）时保守跳过：宁可晚判超时，
+          // 也不能把正在执行的长任务误判为超时回收。
+          if (!base) continue;
           const busy = await sessionBusy(base, issue.sessionId, issue.worktreePath);
-          if (busy) continue; // 仍在执行：延长等待，不判超时
+          if (busy) continue;
         }
         const reason = `投递后 ${Math.round(timeoutMs / 60_000)} 分钟未确认结果（agent 未标记 processed）`;
         const notBefore = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
@@ -368,6 +371,18 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   };
 
   /**
+   * 未绑定任务 + 内嵌模式无 headless 通道：这不是失败，只把评论还给队列
+   * （外部 watch 侧车可接手）。不增加 attempts、不写 failed 活动。
+   */
+  const parkForExternalSidecar = (item: WakeItem, claimToken: string): void => {
+    if (!store.releaseWake(item.commentId, claimToken, 'pending')) {
+      error(`watch: could not release wake claim for comment ${item.commentId}; a newer attempt owns it`);
+    }
+    seen.delete(item.key);
+    log('watch: leaving wake pending for the external sidecar');
+  };
+
+  /**
    * Claim before deliver, then route. Returns true when the wake was handled
    * (including "another attempt already owns it"); false means the caller may
    * retry on a future event.
@@ -419,7 +434,6 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       if (decideWake(issue.sessionId, sessionBase) !== 'prompt') {
         const reason = `任务绑定 Session ${issue.sessionId}，但没有可用的 OpenCode 服务；拒绝回退到其他会话`;
         error(`watch: task ${item.issueId} is bound to ${issue.sessionId}, but no healthy OpenCode server is reachable (checked: ${sessionCandidates.join(', ') || 'none'}); refusing to start a new session`);
-        await reportExecution(item.issueId, 'failed', reason);
         await failDelivery(item, claimToken, reason);
         return false;
       }
@@ -442,7 +456,6 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
           if (store.requeueWake(item.commentId, claimToken, reason, retryAt)) {
             seen.delete(item.key);
             error(`watch: wake #${item.issueId} timed out waiting for a busy session; requeued with 10m backoff`);
-            await reportExecution(item.issueId, 'failed', reason);
             return true;
           }
         }
@@ -479,13 +492,11 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
           if (!boundSession?.directory || normalizePath(boundSession.directory) !== normalizePath(issue.worktreePath)) {
             const reason = `Session ${sessionId} 不在绑定的 Worktree 目录 ${issue.worktreePath} 中；请在任务详情中创建工作树 Session 后重试`;
             error(`watch: refusing to dispatch task ${item.issueId}; session directory does not match worktree path`);
-            await reportExecution(item.issueId, 'failed', reason);
             await failDelivery(item, claimToken, reason);
             return false;
           }
         } catch (err) {
           const reason = `无法验证 Session ${sessionId} 与 Worktree 目录的对应关系：${(err as Error).message}`;
-          await reportExecution(item.issueId, 'failed', reason);
           error(`watch: ${reason}`);
           await failDelivery(item, claimToken, reason);
           return false;
@@ -505,7 +516,6 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         if (!res.ok) {
           const reason = `绑定 Session ${sessionId} 拒绝了提示词请求（HTTP ${res.status}）；没有创建备用会话`;
           error(`watch: bound session ${sessionId} rejected prompt (HTTP ${res.status}); no fallback session will be created`);
-          await reportExecution(item.issueId, 'failed', reason);
           await failDelivery(item, claimToken, reason);
           return false;
         }
@@ -516,7 +526,6 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         return true;
       } catch (err) {
         error(`watch: bound session ${sessionId} failed (${(err as Error).message}); no fallback session will be created`);
-        await reportExecution(item.issueId, 'failed', `提交到绑定 Session ${sessionId} 失败：${(err as Error).message}`);
         await failDelivery(item, claimToken, `提交到绑定 Session 失败：${(err as Error).message}`);
         return false;
       }
@@ -526,7 +535,6 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     // command whose cwd is not guaranteed to be that worktree.
     if (issue.worktreePath) {
       const reason = `任务已绑定 Worktree ${issue.worktreePath}，但没有绑定 OpenCode Session；为避免在错误目录执行，请先创建工作树 Session`;
-      await reportExecution(item.issueId, 'failed', reason);
       error(`watch: refusing to dispatch task ${item.issueId} without a Session bound to its worktree`);
       await failDelivery(item, claimToken, reason);
       return false;
@@ -556,10 +564,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     // with no execParts means only a TUI channel existed and it failed; fail
     // closed and leave the comment pending for a human / the external sidecar.
     if (!execParts || execParts.length === 0) {
-      const reason = '没有可用的 headless 执行命令；嵌入式唤醒只投递绑定会话，评论保持待处理';
-      error(`watch: task ${item.issueId} has no bound session and headless delivery is disabled; reverting wake to pending`);
-      await reportExecution(item.issueId, 'failed', reason);
-      await failDelivery(item, claimToken, reason);
+      parkForExternalSidecar(item, claimToken);
       return false;
     }
 

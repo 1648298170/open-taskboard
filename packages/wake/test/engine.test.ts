@@ -614,3 +614,49 @@ describe('wake engine: reliable delivery (s4)', () => {
     }
   });
 });
+
+describe('wake engine: delivery failure activity dedupe', () => {
+  it('records exactly one execution activity per failed attempt', async () => {
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_onefail',
+      fetchImpl: url => {
+        if (url.includes('/session/status')) {
+          return Promise.resolve(new Response(JSON.stringify({ ses_onefail: { type: 'idle' } }), { status: 200 }));
+        }
+        if (url.includes('/prompt_async')) return Promise.resolve(new Response('nope', { status: 500 }));
+        return okResponse();
+      },
+      engineOptions: { pollMs: 0, maxAttempts: 5, backoffBaseMs: 60_000 },
+    });
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 一次失败' }).id;
+      await waitFor(() => store.queueMeta(commentId)!.attempts >= 1);
+      const failureActivities = store.listActivities(issueId)
+        .filter(a => a.action === 'execution' && a.detail.includes('投递失败'));
+      assert.equal(failureActivities.length, 1, 'one failed attempt must produce one activity, got: ' + failureActivities.length);
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('parks unbound wakes for the external sidecar without spending retry budget', async () => {
+    const { store, issueId, engine } = fixture({
+      sessionId: null,
+      fetchImpl: () => okResponse(),
+      config: { execParts: undefined },
+      engineOptions: { pollMs: 15 },
+    });
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 未绑定' }).id;
+      await new Promise(r => setTimeout(r, 80));
+      const meta = store.queueMeta(commentId)!;
+      assert.equal(meta.attempts, 0, 'parking must not consume retry attempts');
+      assert.equal(meta.lastError, '');
+      assert.equal(store.getComment(commentId)!.status, 'pending');
+    } finally {
+      await engine.stop();
+    }
+  });
+});
