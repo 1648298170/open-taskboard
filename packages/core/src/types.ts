@@ -146,6 +146,10 @@ export interface Comment {
   notBefore: string | null;
   /** 人工终态时间（非空 = 已转人工确认，不再自动投递）。 */
   terminalAt: string | null;
+  /** 队列优先级（0=normal, 1=priority）。与任务业务优先级独立。 */
+  queuePriority: number;
+  /** 进入优先队列的时间（normal 时为 null）。 */
+  priorityAt: string | null;
 }
 
 /**

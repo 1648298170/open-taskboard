@@ -19,6 +19,8 @@ export interface WakeQueueMeta {
   busySince: string | null;
   busyAccumMs: number;
   absentScans: number;
+  queuePriority: number;
+  priorityAt: string | null;
 }
 
 export class CommentRepo {
@@ -76,6 +78,7 @@ export class CommentRepo {
         // 缺席计数与 busy 窗口同点清零：新轮次从独立计数开始（v9 意见 4）。
         sets.push('absent_scans = 0', 'first_absent_at = NULL', 'last_absent_at = NULL');
         sets.push('busy_since = NULL', 'busy_accum_ms = 0');
+        sets.push('queue_priority = 0', 'priority_at = NULL');
       }
     }
     if (sets.length === 0) return;
@@ -152,17 +155,20 @@ export class CommentRepo {
               c.author, c.body, c.status, c.created_at AS createdAt
        FROM comments c JOIN issues i ON i.id = c.issue_id
        WHERE c.status = 'pending' AND c.terminal_at IS NULL AND (c.not_before IS NULL OR c.not_before <= ?)
-       ORDER BY COALESCE(c.queued_at, c.created_at), c.rowid`
+       ORDER BY c.queue_priority DESC,
+         CASE WHEN c.queue_priority = 1 THEN c.priority_at END ASC,
+         COALESCE(c.queued_at, c.created_at) ASC, c.rowid`
     ).all(nowIso) as unknown as PendingWakeComment[];
   }
 
   /** 队列元数据（含轮次/终态/busy 字段，供引擎计算等待时长与终局判定）。 */
   queueMeta(id: string): WakeQueueMeta | null {
     return this.db.prepare(
-      `SELECT attempts, last_error AS lastError, not_before AS notBefore, queued_at AS queuedAt,
+      `SELECT attempts, last_error AS lastError, not_before AS notBefore, queued_at AS queuedAt, status,
               dispatch_id AS dispatchId, terminal_at AS terminalAt,
               busy_since AS busySince, busy_accum_ms AS busyAccumMs,
-              absent_scans AS absentScans
+              absent_scans AS absentScans,
+              queue_priority AS queuePriority, priority_at AS priorityAt
        FROM comments WHERE id = ?`
     ).get(id) as unknown as WakeQueueMeta | null;
   }
@@ -299,6 +305,76 @@ export class CommentRepo {
     ).run(nowIso, nowIso, id, dispatchId, claimToken, nowIso,
           leaseKey, leaseKey, dispatchId, leaseFence, staleCutoffIso);
     return result.changes > 0;
+  }
+
+
+  /**
+   * 队列优先级 CAS 更新（v10 Q1）：仅改 queue_priority/priority_at，
+   * 不动 body/attempts/not_before/queued_at/busy/dispatch_id/terminal_at/claimed_by。
+   * expected=当前值才执行；当前值已等于目标值 → 幂等 true；不匹配 → false。
+   */
+  setWakePriority(id: string, expected: number, target: number, nowIso: string): boolean {
+    const meta = this.queueMeta(id);
+    if (!meta || meta.status !== 'pending' || meta.terminalAt !== null) return false;
+    if (meta.queuePriority === target) return true; // 幂等：当前已等于目标
+    if (meta.queuePriority !== expected) return false; // CAS 冲突
+    const priorityAt = target === 1 ? nowIso : null;
+    const result = this.db.prepare(
+      `UPDATE comments
+       SET queue_priority = ?, priority_at = ?, updated_at = ?
+       WHERE id = ? AND queue_priority = ? AND status = 'pending' AND terminal_at IS NULL`
+    ).run(target, priorityAt, nowIso, id, expected);
+    return result.changes > 0;
+  }
+
+  /** 队列修订号递增（须与导致队列变更的写操作同事务调用）。 */
+  bumpQueueRevision(): number {
+    this.db.prepare(
+      `UPDATE app_settings SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'wake_queue_revision'`
+    ).run();
+    return this.getQueueRevision();
+  }
+
+  getQueueRevision(): number {
+    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = 'wake_queue_revision'").get() as { value: string } | undefined;
+    return row ? parseInt(row.value, 10) || 0 : 0;
+  }
+
+  /**
+   * 原子选领（v10 Q1 / §15.1）：在调用方的写事务内，按当前排序选取
+   * 最高顺序的到期兼容候选，并 CAS claim。候选失配由调用方重读。
+   * 返回 null = 无兼容候选。
+   */
+  claimNextWake(claimer: string, runId: string, nowIso: string, prefix: string, requireBound: boolean):
+    { token: string; dispatchId: string; commentId: string; issueId: string; body: string; issueTitle: string } | null {
+    const token = `${claimer}:${randomUUID()}`;
+    const dispatchId = randomUUID();
+    const boundFilter = requireBound ? 'AND p.default_session_id IS NOT NULL' : '';
+    const row = this.db.prepare(
+      `SELECT c.id AS commentId, c.issue_id AS issueId, c.body,
+              i.title AS issueTitle
+       FROM comments c
+       JOIN issues i ON i.id = c.issue_id
+       JOIN projects p ON p.id = i.project_id
+       WHERE c.status = 'pending' AND c.terminal_at IS NULL AND c.claimed_by = ''
+         AND (c.not_before IS NULL OR c.not_before <= ?)
+         AND TRIM(c.body) LIKE ? || '%'
+         ${boundFilter}
+       ORDER BY c.queue_priority DESC,
+                CASE WHEN c.queue_priority = 1 THEN c.priority_at END ASC,
+                COALESCE(c.queued_at, c.created_at) ASC, c.id ASC
+       LIMIT 1`
+    ).get(nowIso, prefix) as { commentId: string; issueId: string; body: string; issueTitle: string } | undefined;
+    if (!row) return null;
+    const result = this.db.prepare(
+      `UPDATE comments
+       SET status = 'processing', claimed_by = ?, claimed_run = ?, dispatch_id = ?,
+           not_before = NULL, absent_scans = 0, first_absent_at = NULL, last_absent_at = NULL, updated_at = ?
+       WHERE id = ? AND status = 'pending' AND terminal_at IS NULL AND claimed_by = ''
+         AND (not_before IS NULL OR not_before <= ?)`
+    ).run(token, runId, dispatchId, nowIso, row.commentId, nowIso);
+    if (result.changes === 0) return null;
+    return { token, dispatchId, commentId: row.commentId, issueId: row.issueId, body: row.body, issueTitle: row.issueTitle };
   }
 
   /**

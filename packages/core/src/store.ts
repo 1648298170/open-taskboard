@@ -931,6 +931,24 @@ export class Store {
     return this.wakeLeases.findByComment(commentId, dispatchId);
   }
 
+  /** 队列优先级 CAS 更新（v10 Q1）。 */
+  setWakePriority(commentId: string, expected: number, target: number): boolean {
+    const changed = this.comments.setWakePriority(commentId, expected, target, now());
+    if (changed) this.comments.bumpQueueRevision();
+    return changed;
+  }
+
+  getQueueRevision(): number {
+    return this.comments.getQueueRevision();
+  }
+
+  /** 原子选领（v10 Q1 / §15.1）：同一短事务内排序 + CAS claim。 */
+  claimNextWake(claimer: string, runId: string, prefix: string, opts?: { requireBound?: boolean }): {
+    token: string; dispatchId: string; commentId: string; issueId: string; body: string; issueTitle: string;
+  } | null {
+    return this.comments.claimNextWake(claimer, runId, now(), prefix, opts?.requireBound ?? false);
+  }
+
   /** 该评论轮次是否存在未解除的会话保护（编辑门禁/恢复判定）。 */
   wakeLeaseHasProtection(commentId: string, dispatchId: string | null): boolean {
     if (!dispatchId) return false;

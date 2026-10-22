@@ -181,3 +181,75 @@ describe('wake queue: delayed completion & edit gate (v10)', () => {
     assert.equal(store.getComment(commentId)!.body, '@agent 再次编辑');
   });
 });
+
+describe('wake queue center: priority & revision (Q1)', () => {
+  function seedThree(store: Store) {
+    const project = store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_1' });
+    const issueId = store.createIssue({ projectId: project.id, title: 'T' }).id;
+    const a = store.addComment(issueId, { author: 'web', body: '@agent A' }).id;
+    const b = store.addComment(issueId, { author: 'web', body: '@agent B' }).id;
+    const c = store.addComment(issueId, { author: 'web', body: '@agent C' }).id;
+    return { a, b, c, issueId };
+  }
+
+  it('priority items sort before normal items in the ready queue', () => {
+    const { store, issueId } = fixture();
+    const a = store.addComment(issueId, { author: 'web', body: '@agent A' }).id;
+    const b = store.addComment(issueId, { author: 'web', body: '@agent B' }).id;
+    // B 提升为优先
+      assert.equal(store.setWakePriority(b, 0, 1), true);
+      const batch = store.listQueueBatch(new Date().toISOString());
+      assert.equal(batch[0].id, b, 'priority item must sort first');
+      assert.ok(batch.some(c => c.id === a), 'normal item must be in the batch');
+      assert.ok(batch.length >= 3, 'fixture comment + A + B = 3');
+  });
+
+  it('setWakePriority CAS: expected mismatch returns false; same value is idempotent', () => {
+    const { store, issueId } = fixture();
+    const cid = store.addComment(issueId, { author: 'web', body: '@agent x' }).id;
+    // 当前是 0(normal)；expected=1 不匹配 → false
+    assert.equal(store.setWakePriority(cid, 1, 1), false, 'expected mismatch must fail');
+    // expected=0 目标=1 → 成功
+    assert.equal(store.setWakePriority(cid, 0, 1), true);
+    // 当前已是 1，重复设置 → 幂等 true
+    assert.equal(store.setWakePriority(cid, 0, 1), true, 'idempotent same-value must succeed');
+  });
+
+  it('manual re-wake resets priority to normal', () => {
+    const { store, issueId } = fixture();
+    const cid = store.addComment(issueId, { author: 'web', body: '@agent x' }).id;
+    store.setWakePriority(cid, 0, 1);
+    assert.equal(store.queueMeta(cid)!.queuePriority, 1);
+    // 人工重唤醒（status → pending）→ priority 归 normal
+    store.updateComment(cid, { status: 'pending' });
+    assert.equal(store.queueMeta(cid)!.queuePriority, 0, 're-wake must reset priority');
+    assert.equal(store.queueMeta(cid)!.priorityAt, null);
+  });
+
+  it('queueRevision increments on priority change', () => {
+    const { store, issueId } = fixture();
+    const cid = store.addComment(issueId, { author: 'web', body: '@agent x' }).id;
+    const before = store.getQueueRevision();
+    store.setWakePriority(cid, 0, 1);
+    assert.equal(store.getQueueRevision(), before + 1, 'revision must increment');
+  });
+
+  it('claimNextWake returns the highest-priority ready candidate', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new Store('.unused', db);
+    const project = store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_1' });
+    const issueId = store.createIssue({ projectId: project.id, title: 'T' }).id;
+    const a = store.addComment(issueId, { author: 'web', body: '@agent A' }).id;
+    const b = store.addComment(issueId, { author: 'web', body: '@agent B' }).id;
+    store.setWakePriority(b, 0, 1);
+    const result = store.claimNextWake('watch', 'run-pri', '@agent');
+    assert.ok(result, 'claimNextWake must find a candidate');
+    assert.equal(result!.commentId, b, 'priority item must be claimed first');
+    // 第二次 claim → 次高顺序（normal A）
+    const r2 = store.claimNextWake('watch', 'run-pri', '@agent');
+    assert.ok(r2);
+    assert.equal(r2!.commentId, a, 'next claim must get the normal item');
+    // 第三次 → 无候选
+    assert.equal(store.claimNextWake('watch', 'run-pri', '@agent'), null);
+  });
+});

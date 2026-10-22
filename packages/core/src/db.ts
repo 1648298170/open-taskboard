@@ -451,6 +451,20 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       dispatch_started_at TEXT
     )`);
     db.exec('CREATE INDEX IF NOT EXISTS idx_wake_leases_expires ON wake_session_leases(expires_at)');
+  },
+  // v25: wake queue center — per-comment queue priority (0=normal, 1=priority)
+  // and the timestamp when it entered the priority queue. Historical comments
+  // default to 0/NULL, preserving the original FIFO order. A singleton
+  // wake_queue_revision counter in app_settings tracks queue-affecting changes.
+  (db: DatabaseSync) => {
+    if (!hasColumn(db, 'comments', 'queue_priority')) {
+      db.exec('ALTER TABLE comments ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!hasColumn(db, 'comments', 'priority_at')) {
+      db.exec('ALTER TABLE comments ADD COLUMN priority_at TEXT');
+    }
+    db.exec('CREATE INDEX IF NOT EXISTS idx_comments_wake_priority ON comments(queue_priority, priority_at, status, not_before)');
+    db.exec("INSERT INTO app_settings (key, value) VALUES ('wake_queue_revision', '0') ON CONFLICT(key) DO NOTHING");
   }
 ];
 
