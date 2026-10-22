@@ -141,6 +141,8 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
   // T6-36: 绑定分支/工作树时预览最近提交（工作树优先——名字会被服务端
   // 解析成该工作树 checkout 的 HEAD）。换任务或换绑定即重取。
   const commitRef = detail ? (detail.worktree || detail.branch || '') : '';
+  // 会话页地址：const 局部量让 TS 在回调里保持窄化（非空才有值）。
+  const sessionUrl = detail ? detail.sessionUrl : null;
   const visibleActivities = detail ? detail.activities : [];
   useEffect(() => {
     setCommits(null);
@@ -285,8 +287,8 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                 } catch (err) { onToast(`✗ ${(err as Error).message}`); }
               }}>归档</button>
             )}
-          {detail.sessionUrl && (
-            <button className="btn tiny" onClick={() => onOpenSession(detail.sessionUrl, detail.sessionId, detail.title)}>打开会话</button>
+          {sessionUrl && (
+            <button className="btn tiny" onClick={() => onOpenSession(sessionUrl, detail.sessionId, detail.title)}>打开会话</button>
           )}
           {detail.status !== 'done' && (
             <button className="btn tiny detail-wake-action"
@@ -295,8 +297,8 @@ export function Drawer({ issueId, projectId, refreshKey, statuses, onClose, onCh
                 : '唤醒 agent：按项目路由发送或创建新会话'}
               onClick={async () => {
                 // 内嵌会话面板由 App 层持有；这里只负责把面板打开（唤醒评论随后入队）。
-                if (detail.sessionUrl) {
-                  onOpenSession(detail.sessionUrl, detail.sessionId, detail.title);
+                if (sessionUrl) {
+                  onOpenSession(sessionUrl, detail.sessionId, detail.title);
                 }
                 try {
                   const created = await api_.addComment(detail.id, `${WAKE_PREFIX} 认领此任务并编排（拆解子任务、排依赖）`);
