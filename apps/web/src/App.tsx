@@ -105,6 +105,28 @@ export default function App() {
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
   const [queueCount, setQueueCount] = useState<number | null>(null);
+
+  // §10: 全局队列徽标 —— 挂载加载 + 20s 轮询兜底 + 窗口聚焦刷新；失败保持
+  // 未知（不显示 0）；不传 projectId，徽标不受项目筛选影响；'wake-queue.changed'
+  // SSE 事件经由通用 refresh 链路触发组件重渲染时的下一次轮询。
+  const loadQueueCount = useCallback(async (): Promise<void> => {
+    try {
+      const snap = await api_.wakeQueue({ limit: 1 });
+      setQueueCount(snap.stale ? null : snap.counts.readyByTime + snap.counts.delayed);
+    } catch {
+      setQueueCount(null);
+    }
+  }, []);
+  useEffect(() => {
+    void loadQueueCount();
+    const timer = setInterval(() => { void loadQueueCount(); }, 20_000);
+    const onFocus = (): void => { void loadQueueCount(); };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [loadQueueCount]);
   // v0.4: 项目管理（新建对话框浮层；删除走 prompt 输入 id 确认）。
   const [projCreateOpen, setProjCreateOpen] = useState(false);
   const [projName, setProjName] = useState('');

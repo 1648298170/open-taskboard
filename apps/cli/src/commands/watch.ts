@@ -16,7 +16,7 @@ import { createWakeEngine, WATCH_REQUEST_TIMEOUT_MS } from '@taskboard/wake';
 
 export const watchCommand: Command = {
   summary: 'Wake an agent when a comment starts with @agent',
-  usage:               'watch [--on PREFIX] [--tui-url URL] [--opencode URL] [--exec CMD] [--model M] [--project ID] [--ignore-author A,B]',
+  usage:               'watch [--on PREFIX] [--tui-url URL] [--opencode URL] [--service-id ID] [--exec CMD] [--model M] [--project ID] [--ignore-author A,B]',
   bare: true,
   async run(ctx) {
     const { base, flags } = ctx;
@@ -28,6 +28,9 @@ export const watchCommand: Command = {
     // opencode server base — when set, tasks bound to a project Session wake
     // via prompt injection instead of a headless spawn.
     const opencodeBase = String(flags.opencode ?? process.env.OPENCODE_SERVER_URL ?? process.env.TASKBOARD_OPENCODE_URL ?? '').replace(/\/+$/, '') || undefined;
+    // §5 service identity — URL aliases of one OpenCode server share this
+    // lease namespace; unset keeps per-URL isolation (no guessed merging).
+    const serviceId = String(flags['service-id'] ?? process.env.TASKBOARD_OPENCODE_SERVICE_ID ?? '').trim() || undefined;
     // opencode TUI remote-control base — when set, wakes append the prompt
     // into the attached TUI's input box for a human to submit.
     const tuiBase = String(flags['tui-url'] ?? process.env.OPENCODE_TUI_URL ?? '').replace(/\/+$/, '') || undefined;
@@ -67,6 +70,7 @@ export const watchCommand: Command = {
         config: {
           prefix,
           opencodeBase,
+          opencodeServiceId: serviceId,
           tuiBase,
           execParts,
           model,

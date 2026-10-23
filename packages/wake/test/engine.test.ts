@@ -317,6 +317,324 @@ describe('wake engine: serialized queue', () => {
   });
 });
 
+describe('wake engine: lease-conflict recovery (§3)', () => {
+  it('a comment claimed but blocked by another round\'s lease defers back to pending without bumping attempts', async () => {
+    let promptCount = 0;
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) {
+          promptCount++;
+          return okResponse();
+        }
+        return okResponse();
+      },
+    });
+    const secondIssue = store.createIssue({ projectId: 'p1', title: 'Second' }).id;
+    await engine.start();
+    try {
+      const firstComment = store.addComment(issueId, { author: 'web', body: '@agent 第一条' });
+      await waitFor(() => promptCount === 1);
+      const firstLease = store.wakeLeaseFindByComment(firstComment.id, store.dispatchIdOf(firstComment.id)!);
+      assert.ok(firstLease, 'the first round must hold a lease');
+
+      // 第二条被 claim 后撞上第一轮的 sent 租约 → 必须 CAS 归还 pending
+      const secondComment = store.addComment(secondIssue, { author: 'web', body: '@agent 第二条' });
+      await waitFor(() => {
+        const c = store.getComment(secondComment.id)!;
+        return c.status === 'pending' && store.queueMeta(secondComment.id)!.notBefore !== null;
+      });
+      const meta = store.queueMeta(secondComment.id)!;
+      assert.equal(meta.attempts, 0, 'a lease conflict is not a delivery failure: attempts must not grow');
+      assert.ok(store.queueMeta(secondComment.id)!.busySince, 'the conflict defer opens the busy window');
+      assert.equal(promptCount, 1, 'the blocked comment must not be delivered');
+      const after = store.wakeLeaseGet(firstLease!.leaseKey);
+      assert.equal(after?.state, 'sent', 'the first round lease must be untouched');
+      assert.equal(after?.dispatchId, firstLease!.dispatchId, 'no other round may take over the lease');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('a markDispatching takeover defers the comment and never touches the new holder lease', async () => {
+    let promptCount = 0;
+    let commentId = '';
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_tk',
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) {
+          promptCount++;
+          return okResponse();
+        }
+        return okResponse();
+      },
+      wrapStore: base => {
+        const wrapped = Object.create(base) as Store;
+        wrapped.wakeLeaseMarkDispatching = (leaseKey: string, fence: number, dispatchId: string, nowIso: string) => {
+          // 模拟另一引擎在此间隙接管：以未来时刻走 held-expired 接管路径
+          // （fence+1、holder 换成 run-b），随后本轮 markDispatching 必然失配。
+          const future = new Date(Date.parse(nowIso) + 2 * 3_600_000).toISOString();
+          base.wakeLeaseAcquire({
+            leaseKey, sessionId: 'ses_tk', serverUrl: 'http://oc.test', holderRun: 'run-b',
+            commentId: 'other-comment', dispatchId: 'other-dispatch', nowIso: future, ttlMs: 60_000,
+          });
+          return base.wakeLeaseMarkDispatching(leaseKey, fence, dispatchId, nowIso);
+        };
+        return wrapped;
+      },
+    });
+    await engine.start();
+    try {
+      commentId = store.addComment(issueId, { author: 'web', body: '@agent 被接管' }).id;
+      await waitFor(() => {
+        const c = store.getComment(commentId)!;
+        return c.status === 'pending' && store.queueMeta(commentId)!.notBefore !== null;
+      });
+      assert.equal(store.queueMeta(commentId)!.attempts, 0, 'a takeover is not a delivery failure');
+      assert.equal(promptCount, 0, 'nothing may be sent after losing the send lease');
+      const lease = store.wakeLeaseGet('http://oc.test|ses_tk');
+      assert.equal(lease?.holderRun, 'run-b', 'the new holder keeps the lease');
+      assert.equal(lease?.state, 'held', 'the new holder lease must stay held');
+      assert.equal(lease?.fence, 2, 'the new holder fence must be untouched');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('an agent-confirmed processed wake concludes its lease so the session stays dispatchable (§6/§3)', async () => {
+    let promptCount = 0;
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) {
+          promptCount++;
+          return okResponse();
+        }
+        return okResponse();
+      },
+    });
+    const secondIssue = store.createIssue({ projectId: 'p1', title: 'Second' }).id;
+    await engine.start();
+    try {
+      const first = store.addComment(issueId, { author: 'web', body: '@agent 第一条' });
+      await waitFor(() => promptCount === 1);
+      const lease = store.wakeLeaseFindByComment(first.id, store.dispatchIdOf(first.id)!);
+      assert.equal(lease?.state, 'sent', 'the delivered round must hold protection');
+      // agent 经面板/MCP 标 processed —— 不做任何手动 conclude
+      store.updateComment(first.id, { status: 'processed' }, 'web');
+      await waitFor(() => store.wakeLeaseGet(lease!.leaseKey)?.state === 'released');
+      // 会话不再被冻结：第二条立即可投递
+      store.addComment(secondIssue, { author: 'web', body: '@agent 第二条' });
+      await waitFor(() => promptCount === 2);
+    } finally {
+      await engine.stop();
+    }
+  });
+});
+
+describe('wake engine: service identity lease namespace (§5)', () => {
+  const noPrompts = (url: string): Promise<Response> => {
+    const health = healthOk(url);
+    if (health) return health;
+    return okResponse();
+  };
+  const countPrompts = (url: string, counter: { n: number }): Promise<Response> => {
+    const health = healthOk(url);
+    if (health) return health;
+    if (url.includes('/prompt_async')) {
+      counter.n++;
+      return okResponse();
+    }
+    return okResponse();
+  };
+
+  it('two URL aliases sharing one service id share one lease (second wake defers)', async () => {
+    const counter = { n: 0 };
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      config: { opencodeBase: 'http://alias-b.test', opencodeServiceId: 'svc-1' },
+      fetchImpl: url => countPrompts(url, counter),
+    });
+    await engine.start();
+    try {
+      // 另一引擎（经 alias-a 访问同一服务）已在共享命名空间持有活动租约
+      store.wakeLeaseAcquire({
+        leaseKey: 'svc-1|ses_1', sessionId: 'ses_1', serverUrl: 'http://alias-a.test',
+        holderRun: 'run-a', commentId: 'other-comment', dispatchId: 'other-dispatch',
+        nowIso: new Date().toISOString(), ttlMs: 60_000,
+      });
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 别名冲突' }).id;
+      await waitFor(() => {
+        const c = store.getComment(commentId)!;
+        return c.status === 'pending' && store.queueMeta(commentId)!.notBefore !== null;
+      });
+      assert.equal(store.queueMeta(commentId)!.attempts, 0, 'alias conflict must not consume retries');
+      assert.equal(counter.n, 0, 'aliases sharing a service id must not double-dispatch');
+      assert.equal(store.wakeLeaseGet('svc-1|ses_1')?.holderRun, 'run-a', 'the original holder keeps the lease');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('different service ids stay isolated: an active lease under svc-a does not block svc-b', async () => {
+    const counter = { n: 0 };
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      config: { opencodeServiceId: 'svc-b' },
+      fetchImpl: url => countPrompts(url, counter),
+    });
+    await engine.start();
+    try {
+      store.wakeLeaseAcquire({
+        leaseKey: 'svc-a|ses_1', sessionId: 'ses_1', serverUrl: 'http://other.test',
+        holderRun: 'run-a', commentId: 'other-comment', dispatchId: 'other-dispatch',
+        nowIso: new Date().toISOString(), ttlMs: 60_000,
+      });
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 不同服务' }).id;
+      await waitFor(() => counter.n === 1, 5_000);
+      const lease = store.wakeLeaseFindByComment(commentId, store.dispatchIdOf(commentId)!);
+      assert.equal(lease?.leaseKey, 'svc-b|ses_1', 'svc-b must acquire under its own namespace');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('an active legacy URL-namespace lease blocks a newly configured service id (no parallel dispatch)', async () => {
+    const counter = { n: 0 };
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      config: { opencodeServiceId: 'svc-1' },
+      fetchImpl: url => countPrompts(url, counter),
+    });
+    await engine.start();
+    try {
+      // 升级前旧引擎留在 URL 命名空间的活动租约
+      store.wakeLeaseAcquire({
+        leaseKey: 'http://oc.test|ses_1', sessionId: 'ses_1', serverUrl: 'http://oc.test',
+        holderRun: 'run-old', commentId: 'other-comment', dispatchId: 'other-dispatch',
+        nowIso: new Date().toISOString(), ttlMs: 60_000,
+      });
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 迁移期' }).id;
+      await waitFor(() => {
+        const c = store.getComment(commentId)!;
+        return c.status === 'pending' && store.queueMeta(commentId)!.notBefore !== null;
+      });
+      assert.equal(store.queueMeta(commentId)!.attempts, 0, 'migration guard must not consume retries');
+      assert.equal(counter.n, 0, 'the legacy lease must not be ignored');
+      assert.equal(store.wakeLeaseGet('svc-1|ses_1'), null, 'no lease may be minted while the legacy one is active');
+    } finally {
+      await engine.stop();
+    }
+  });
+});
+
+describe('wake engine: atomic claim pump (§4)', () => {
+  it('a busy high-priority session defers without blocking other sessions', async () => {
+    const prompts: string[] = [];
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_a',
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) {
+          prompts.push(url);
+          return okResponse();
+        }
+        if (url.includes('/session/status')) {
+          // ses_a 持续 busy；不在映射里的 session 视为 idle
+          return Promise.resolve(new Response(JSON.stringify({ ses_a: { type: 'busy' } }), { status: 200 }));
+        }
+        return okResponse();
+      },
+    });
+    const projectB = store.createProject({ id: 'p2', name: 'Q', defaultSessionId: 'ses_b' });
+    const issueB = store.createIssue({ projectId: projectB.id, title: 'B' }).id;
+    // 先建候选并设好优先级，再启动引擎——避免 addComment 事件触发 pump 抢在
+    // setWakePriority 之前领取（CAS 要求 status=pending）。
+    const commentA = store.addComment(issueId, { author: 'web', body: '@agent 高优忙会话' }).id;
+    const commentB = store.addComment(issueB, { author: 'web', body: '@agent 空闲会话' }).id;
+    assert.equal(store.setWakePriority(commentA, 0, 1), true);
+    await engine.start();
+    try {
+      await waitFor(() => prompts.length === 1, 5_000);
+      assert.ok(
+        prompts[0]!.includes('/session/ses_b/'),
+        `the idle session must be served first; prompts=${JSON.stringify(prompts)} statuses=${JSON.stringify([store.getComment(commentA)!.status, store.getComment(commentB)!.status])}`,
+      );
+      const metaA = store.queueMeta(commentA)!;
+      assert.equal(store.getComment(commentA)!.status, 'pending', 'the busy candidate must be deferred');
+      assert.ok(metaA.notBefore, 'the deferred candidate carries bounded not_before');
+      assert.equal(metaA.attempts, 0, 'busy defer must not consume retries');
+      assert.equal(store.getComment(commentB)!.status, 'processing', 'the idle candidate proceeds');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('a TUI append persists tui-waiting evidence (§7)', async () => {
+    const { store, issueId, engine } = fixture({
+      sessionId: null,
+      config: { tuiBase: 'http://tui.test', execParts: undefined },
+      fetchImpl: () => okResponse(),
+    });
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent TUI 待人工' }).id;
+      await waitFor(() => store.queueMeta(commentId)!.runEvidence === 'tui-waiting');
+      assert.equal(store.getComment(commentId)!.status, 'processing', 'the human has not submitted yet');
+      const lease = store.wakeLeaseFindByComment(commentId, store.dispatchIdOf(commentId)!);
+      assert.equal(lease, null, 'the TUI channel holds no session lease');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('persists running evidence when the monitor observes busy + matched prompt (§7)', async () => {
+    let commentId = '';
+    let dispatchId = '';
+    let sent = false;
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) {
+          sent = true;
+          return okResponse();
+        }
+        if (url.includes('/session/status')) {
+          // 发送前必须 idle（否则候选被 defer、monitor 不会启动）；发送后 busy
+          return Promise.resolve(new Response(JSON.stringify(sent ? { ses_1: { type: 'busy' } } : {}), { status: 200 }));
+        }
+        if (url.includes('/message')) {
+          const marker = `taskboard-wake:${commentId}:${dispatchId}`;
+          return Promise.resolve(new Response(JSON.stringify([
+            { info: { id: 'm1', role: 'user', time: { created: 1 } }, parts: [{ type: 'text', text: `[Taskboard correlation marker: ${marker}. Treat this as metadata...]` }] },
+          ]), { status: 200 }));
+        }
+        return okResponse();
+      },
+    });
+    await engine.start();
+    try {
+      commentId = store.addComment(issueId, { author: 'web', body: '@agent 执行中' }).id;
+      await waitFor(() => store.getComment(commentId)!.status === 'processing');
+      dispatchId = store.dispatchIdOf(commentId)!;
+      // monitor 首轮轮询在 2s 后；观察 busy + 匹配 prompt → 持久化 running
+      await waitFor(() => store.queueMeta(commentId)!.runEvidence === 'running', 6_000);
+      assert.equal(store.getComment(commentId)!.status, 'processing');
+    } finally {
+      await engine.stop();
+    }
+  });
+});
+
 describe('wake engine: periodic poll', () => {
   it('drains a pending wake inserted after start() without an event', async () => {
     const { store, db, issueId, engine, fetchCalls } = fixture({
@@ -342,27 +660,27 @@ describe('wake engine: periodic poll', () => {
 });
 
 describe('wake engine: fault isolation', () => {
-  it('logs a throwing sweep and keeps delivering later wakes', async () => {
+  it('logs a throwing atomic claim and keeps delivering later wakes', async () => {
     let failNext = true;
     const { store, issueId, engine, logs } = fixture({
       sessionId: 'ses_1',
       fetchImpl: url => healthOk(url) ?? okResponse(),
       wrapStore: base => {
         const flaky = Object.create(base) as Store;
-        flaky.listQueueBatch = (now: string) => {
+        flaky.claimNextWake = ((claimer: string, runId: string, prefix: string, opts?: { requireBound?: boolean }) => {
           if (failNext) {
             failNext = false;
             throw new Error('boom');
           }
-          return base.listQueueBatch(now);
-        };
+          return base.claimNextWake(claimer, runId, prefix, opts);
+        }) as typeof base.claimNextWake;
         return flaky;
       },
     });
     await engine.start();
     try {
-      // 启动 sweep 的 listQueueBatch 抛错 → 补拉失败日志
-      await waitFor(() => logs.some(entry => entry.message.includes('补拉失败')));
+      // 启动 pump 的原子领取抛错 → 错误日志
+      await waitFor(() => logs.some(entry => entry.message.includes('原子领取失败')));
       // 引擎不 crash，后续事件投递正常
       const delivered = store.addComment(issueId, { author: 'web', body: '@agent 第二条' }).id;
       await waitFor(() => store.getComment(delivered)!.status === 'processing');
@@ -376,7 +694,7 @@ describe('wake engine: fault isolation', () => {
 describe('wake engine: embedded mode', () => {
   it('never spawns and leaves unbound wakes pending for the external sidecar', async () => {
     let spawned = 0;
-    const { store, issueId, engine, logs } = fixture({
+    const { store, issueId, engine } = fixture({
       sessionId: null,
       fetchImpl: () => okResponse(),
       spawn: () => {
@@ -388,7 +706,8 @@ describe('wake engine: embedded mode', () => {
     await engine.start();
     try {
       const commentId = store.addComment(issueId, { author: 'web', body: '@agent 无绑定任务' }).id;
-      await waitFor(() => logs.some(entry => entry.message.includes('leaving wake pending for the external sidecar')));
+      // §4：requireBound 过滤让 embedded 从不领取未绑定候选（无领取即无回滚抖动）
+      await sleep(150);
       assert.equal(spawned, 0, 'the embedded engine must never spawn a new session');
       // Not claimed at all: a coexisting `taskboard watch` can still take it.
       assert.equal(store.getComment(commentId)!.status, 'pending');

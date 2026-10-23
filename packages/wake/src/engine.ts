@@ -10,7 +10,6 @@
 
 import * as path from 'node:path';
 import type { Store, StoreEvent } from '@taskboard/core';
-import { isWakeComment } from '@taskboard/core';
 import { fetchWithTimeout, WATCH_REQUEST_TIMEOUT_MS, type FetchLike } from './fetch.js';
 import { acquireWatchLock } from './lock.js';
 import {
@@ -18,17 +17,14 @@ import {
   channelFor,
   decideWake,
   findCorrelatedAssistant,
-  isIgnoredAuthor,
   sessionBaseCandidates,
   shouldWake,
-  wakeKey,
-  wantsProject,
 } from './prompt.js';
 
 /** The Store slice the engine depends on (the facade itself satisfies it). */
 export type WakeStore = Pick<
   Store,
-  'claimWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'listQueueBatch' | 'queueMeta' | 'requeueWake' | 'deferWakeBusy' | 'deferWakeUnknown' | 'deferBusyTimeout' | 'resetBusy' | 'closeBusyAt' | 'terminalizeWake' | 'completeTerminalWake' | 'absentScan' | 'listStaleProcessing' | 'listOrphanProcessing' | 'recordExecutionEvent' | 'subscribe' | 'registerWakeEngine' | 'heartbeatWakeEngine' | 'wakeLeaseAcquire' | 'wakeLeaseRenew' | 'wakeLeaseMarkDispatching' | 'wakeLeaseMarkSent' | 'wakeLeaseReleaseHeld' | 'wakeLeaseConclude' | 'wakeLeaseGet' | 'wakeLeaseFindByComment' | 'wakeLeaseHasProtection'
+  'claimNextWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'queueMeta' | 'requeueWake' | 'deferWakeBusy' | 'deferWakeUnknown' | 'deferBusyTimeout' | 'resetBusy' | 'closeBusyAt' | 'terminalizeWake' | 'completeTerminalWake' | 'absentScan' | 'setRunEvidence' | 'listStaleProcessing' | 'listOrphanProcessing' | 'recordExecutionEvent' | 'subscribe' | 'registerWakeEngine' | 'heartbeatWakeEngine' |   'wakeLeaseAcquire' | 'wakeLeaseRenew' | 'wakeLeaseMarkDispatching' | 'wakeLeaseMarkSent' | 'wakeLeaseReleaseHeld' | 'wakeLeaseConclude' | 'wakeLeaseGet' | 'wakeLeaseFindByComment' | 'wakeLeaseHasProtection' | 'wakeLeaseHasActiveForSession'
 >;
 
 /** Narrow child-process surface so tests can inject a deterministic spawn. */
@@ -46,6 +42,13 @@ export interface WakeEngineConfig {
   prefix: string;
   /** Explicit OpenCode base (--opencode / deployment env). */
   opencodeBase?: string;
+  /**
+   * §5 service identity for the lease namespace (env TASKBOARD_OPENCODE_SERVICE_ID).
+   * Distinct from the access URL: multiple URL aliases of one OpenCode server
+   * must share this id or they would mint two leases for the same session.
+   * Unset → fall back to the normalized URL namespace (isolation preserved).
+   */
+  opencodeServiceId?: string;
   /** TUI base for unbound tasks (--tui-url fallback). */
   tuiBase?: string;
   /**
@@ -84,11 +87,12 @@ export interface WakeEngineOptions {
    */
   lockKey?: string;
   /**
-   * Durability trigger for the embedded engine: run the same startup sweep
-   * every `pollMs` milliseconds. It deliberately reuses `sweep()` → `enqueue`,
-   * so the serialized delivery queue stays the single execution path and an
-   * event-driven wake can never race a polled one. Event subscription stays
-   * for latency; this poll is the safety net that removes silent backlogs.
+   * Durability trigger for the embedded engine: re-run the atomic claim pump
+   * every `pollMs` milliseconds. Events and the poll share the single `pump`
+   * entry (coalesced while a pump is in flight), so an event-driven wake can
+   * never race a polled one and every claim goes through the same DB atomic
+   * select+claim. Event subscription stays for latency; this poll is the
+   * safety net that removes silent backlogs.
    * Undefined (external sidecar) means no timer at all.
    */
   pollMs?: number;
@@ -172,9 +176,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   // either way; these lines are the operator's early signal.
   let channelDown = false;
   let probeInFlight = false;
-  let queue: Promise<void> = Promise.resolve();
   let lifecycle = new AbortController();
-  const seen = new Set<string>();
   const monitoredSessions = new Set<string>();
   // busy 延后的活动流节流：同一评论 10 分钟内只记一条「已排队」活动。
   const busyDeferReportedAt = new Map<string, number>();
@@ -371,6 +373,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
 
   const monitorOpenCodeSession = async (
     issueId: string, sessionId: string, serverUrl: string, marker: string,
+    commentId: string, dispatchId: string,
   ): Promise<void> => {
     const monitorKey = `${sessionId}:${marker}`;
     if (monitoredSessions.has(monitorKey)) return;
@@ -403,6 +406,8 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
           observedBusy = true;
           if (matchedPrompt && !reportedRunning) {
             reportedRunning = true;
+            // §7：可靠运行证据（busy + 匹配本次唤醒）持久化——快照可显示「执行中」
+            store.setRunEvidence(commentId, dispatchId, 'running');
             await reportExecution(issueId, 'running',
               `已在 OpenCode Session ${sessionId} 历史中匹配到本次唤醒；当前会话处于执行状态`);
           }
@@ -454,69 +459,47 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       error(`watch: could not requeue wake for comment ${item.commentId}; a newer attempt owns it`);
       return;
     }
-    seen.delete(item.key);
     await reportExecution(item.issueId, finalFailure ? 'failed' : 'retrying', detail);
   };
 
   /**
    * 未绑定任务 + 内嵌模式无 headless 通道：这不是失败，只把评论还给队列
-   * （外部 watch 侧车可接手）。不增加 attempts、不写 failed 活动。
+   * （外部 watch 侧车可接手）。不增加 attempts、不写 failed 活动；设 有界
+   * not_before 防止本引擎热循环重领（§4.3 不允许领取后长期持有）。
    */
-  const parkForExternalSidecar = (item: WakeItem, claimToken: string): void => {
-    if (!store.releaseWake(item.commentId, claimToken, 'pending')) {
-      error(`watch: could not release wake claim for comment ${item.commentId}; a newer attempt owns it`);
+  const parkForExternalSidecar = (item: WakeItem, claimToken: string, dispatchId: string): void => {
+    const retryAt = new Date(Date.now() + 60_000).toISOString();
+    if (!store.deferWakeBusy(item.commentId, claimToken, dispatchId, retryAt)) {
+      error(`watch: could not park wake claim for comment ${item.commentId}; a newer attempt owns it`);
     }
-    seen.delete(item.key);
+    parked.add(item.key);
     log('watch: leaving wake pending for the external sidecar');
   };
 
   /**
-   * Claim before deliver, then route. Returns true when the wake was handled
-   * (including "another attempt already owns it"); false means the caller may
-   * retry on a future event.
+   * §4：只投递已由 claimNextWake 原子领取的候选（claim 发生在 pump 中，
+   * 全局顺序由 DB 原子领取决定）。返回 true 表示本轮已处置（含安全延后）。
    */
-  const deliverWake = async (item: WakeItem): Promise<boolean> => {
+  const deliverWake = async (item: WakeItem, claim: { token: string; dispatchId: string }): Promise<boolean> => {
     const issue = store.getIssue(item.issueId);
     if (!issue) {
-      error(`watch: cannot load task ${item.issueId} (not found); wake skipped`);
+      error(`watch: cannot load task ${item.issueId} (not found); reverting the claim`);
+      store.releaseWake(item.commentId, claim.token, 'pending');
       return false;
     }
     const prompt = buildWakePrompt(item.issueId, item.issueTitle, item.instruction);
     // Routing URLs are deployment configuration now: no per-project channel is
     // persisted, so only the explicit opencode base and --tui-url fallback apply.
-    const projectChannel: string | null = null;
-    const tuiUrl = channelFor(projectChannel, config.tuiBase);
+    const tuiUrl = channelFor(null, config.tuiBase);
     const execParts = config.execParts;
-
-    // An unbound task needs a TUI or headless channel. The embedded engine has
-    // neither, so it must skip BEFORE claiming: claim+revert cycles would starve
-    // a coexisting external sidecar (which also sees 'no longer pending') and
-    // leave the wake pending forever. Skipping keeps it claimable by the sidecar.
-    if (!issue.sessionId && !tuiUrl && (!execParts || execParts.length === 0)) {
-      if (!parked.has(item.key)) {
-        parked.add(item.key);
-        log(`watch: task ${item.issueId} has no bound session and no unbound channel; leaving wake pending for the external sidecar`);
-      }
-      return false;
-    }
-
-    // CAS claim AFTER routing is known: the comment is already 'processing'
-    // before any HTTP side effect, so a crash cannot leave two attempts
-    // believing they own it.
-    const claim = store.claimWake(item.commentId, 'watch', runId);
-    if (!claim) {
-      error(`watch: wake skipped for comment ${item.commentId}; it is no longer pending`);
-      return true;
-    }
     const { token: claimToken, dispatchId } = claim;
-    inFlight.add(item.commentId);
 
     await reportExecution(item.issueId, 'started', '收到唤醒请求，开始解析任务路由');
 
     if (issue.sessionId) {
       // Session binding is authoritative. Never inject a bound task into the
       // currently selected TUI session, and never silently spawn a new session.
-      const sessionCandidates = sessionBaseCandidates(config.opencodeBase, projectChannel, tuiUrl);
+      const sessionCandidates = sessionBaseCandidates(config.opencodeBase, null, tuiUrl);
       const sessionBase = await firstHealthySessionBase(sessionCandidates);
       // decideWake owns the routing decision (bound + reachable server →
       // prompt). A bound task that fails it must refuse: falling through to
@@ -529,14 +512,40 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       }
       const sessionId = issue.sessionId;
       const healthyBase = sessionBase!;
+      // §5：租约命名空间 = 显式 serviceId（操作者断言多个访问 URL 同属一个
+      // 服务）或回退到规范化 URL。键形 `namespace|sessionId`。
+      const serviceId = config.opencodeServiceId?.trim() || undefined;
+      const legacyKey = `${normalizeLeaseBase(healthyBase)}|${sessionId}`;
+      const leaseKey = serviceId && serviceId !== normalizeLeaseBase(healthyBase)
+        ? `${serviceId}|${sessionId}`
+        : legacyKey;
+      // §5 迁移护栏：启用新命名空间的首个周期，旧 URL key 下同 Session 的
+      // 活动租约不得被忽略——视为冲突延后，绝不并行第二把派发。
+      if (leaseKey !== legacyKey && store.wakeLeaseHasActiveForSession(sessionId, leaseKey, nowIso())) {
+        const deferUntil = new Date(Date.now() + (options.busyDeferMs ?? 30_000)).toISOString();
+        if (!store.deferWakeBusy(item.commentId, claimToken, dispatchId, deferUntil)) {
+          error(`watch: legacy lease still active for session ${sessionId} and comment ${item.commentId} is no longer owned by this attempt`);
+          return true;
+        }
+        await reportExecution(item.issueId, 'queued', '目标会话在旧租约命名空间下仍有活动保护，本轮延后（未投递，不消耗重试预算）');
+        log(`watch: legacy lease still active for session ${sessionId}; deferred wake #${item.issueId} until ${deferUntil}`);
+        return true;
+      }
       // 会话保护租约：先于 probe 获取，覆盖 probe→POST→ack 临界区。
-      const leaseKey = `${normalizeLeaseBase(healthyBase)}|${sessionId}`;
       let lease = store.wakeLeaseRenew({ leaseKey, holderRun: runId, commentId: item.commentId, dispatchId, nowIso: nowIso(), ttlMs: LEASE_TTL_MS })
         ? store.wakeLeaseGet(leaseKey)
         : store.wakeLeaseAcquire({ leaseKey, sessionId, serverUrl: healthyBase, holderRun: runId, commentId: item.commentId, dispatchId, nowIso: nowIso(), ttlMs: LEASE_TTL_MS });
       if (!lease) {
-        seen.delete(item.key);
-        await reportExecution(item.issueId, 'queued', '目标会话被其他投递租约占用，本轮延后');
+        // §3：评论已 claim 但 Session 租约被他人持有——这不是投递失败，
+        // 不得增加 attempts；CAS 归还队列并设 有界退避（busy 窗口语义），
+        // 绝不触碰持有者的租约。CAS 失败说明别的尝试已接管评论，不得覆盖。
+        const deferUntil = new Date(Date.now() + (options.busyDeferMs ?? 30_000)).toISOString();
+        if (!store.deferWakeBusy(item.commentId, claimToken, dispatchId, deferUntil)) {
+          error(`watch: lease for session ${sessionId} is held by another dispatch and comment ${item.commentId} is no longer owned by this attempt`);
+          return true;
+        }
+        await reportExecution(item.issueId, 'queued', '目标会话被其他投递租约占用，本轮延后（未投递，不消耗重试预算）');
+        log(`watch: session ${sessionId} lease held by another dispatch; deferred wake #${item.issueId} until ${deferUntil}`);
         return true;
       }
       // 执行通道互斥（§5.1）：会话正忙（agent 在跑）时不注入新 prompt——会打断
@@ -553,7 +562,6 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
           const retryAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
           if (store.deferBusyTimeout(item.commentId, claimToken, dispatchId, reason, retryAt)) {
             store.wakeLeaseReleaseHeld(leaseKey, lease.fence, runId, item.commentId, dispatchId);
-            seen.delete(item.key);
             error(`watch: wake #${item.issueId} timed out waiting for a busy session; requeued with 24h backoff`);
             return true;
           }
@@ -567,7 +575,6 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
           return true;
         }
         store.wakeLeaseReleaseHeld(leaseKey, lease.fence, runId, item.commentId, dispatchId);
-        seen.delete(item.key);
         log(`watch: session ${sessionId} ${st}; deferred wake #${item.issueId} until ${deferUntil}`);
         const lastReport = busyDeferReportedAt.get(item.key) ?? 0;
         if (Date.now() - lastReport > 10 * 60_000) {
@@ -581,9 +588,15 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       // probe=idle：busy episode 结束，清零后进入发送临界区。
       store.resetBusy(item.commentId, claimToken, dispatchId);
       if (!store.wakeLeaseMarkDispatching(leaseKey, lease.fence, dispatchId, nowIso())) {
-        // 租约在核验间隙丢失（被接管）→ 本轮放弃，下轮重新获取。
-        seen.delete(item.key);
-        await reportExecution(item.issueId, 'queued', '发送租约已被接管，本轮延后');
+        // §3：租约在核验间隙被接管（fence 变更）——发送权已失但评论仍归本轮，
+        // CAS 归还队列（不增 attempts），绝不触碰新持有者的租约。
+        const deferUntil = new Date(Date.now() + (options.busyDeferMs ?? 30_000)).toISOString();
+        if (!store.deferWakeBusy(item.commentId, claimToken, dispatchId, deferUntil)) {
+          error(`watch: send lease for session ${sessionId} was taken over and comment ${item.commentId} is no longer owned by this attempt`);
+          return true;
+        }
+        await reportExecution(item.issueId, 'queued', '发送租约已被接管，本轮延后（未投递，不消耗重试预算）');
+        log(`watch: send lease for session ${sessionId} was taken over; deferred wake #${item.issueId} until ${deferUntil}`);
         return true;
       }
       // A task bound to a worktree must not dispatch into a Session rooted at
@@ -627,7 +640,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
           store.wakeLeaseMarkSent(leaseKey, lease.fence, dispatchId, nowIso(), LEASE_VERIFY_TTL_MS);
           log(`watch: queued prompt in bound session ${sessionId}`);
           await reportExecution(item.issueId, 'queued', `提示词已提交到绑定的 OpenCode Session ${sessionId}；该状态表示已排队，不代表 Agent 已完成`);
-          void monitorOpenCodeSession(item.issueId, sessionId, healthyBase, correlationMarker);
+          void monitorOpenCodeSession(item.issueId, sessionId, healthyBase, correlationMarker, item.commentId, dispatchId);
           return true;
         }
         if (res.status < 500) {
@@ -639,7 +652,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         }
         store.wakeLeaseMarkSent(leaseKey, lease.fence, dispatchId, nowIso(), LEASE_VERIFY_TTL_MS);
         await reportExecution(item.issueId, 'queued', `提示词提交返回 HTTP ${res.status}（结果未知），按可能已投递进入核验`);
-        void monitorOpenCodeSession(item.issueId, sessionId, healthyBase, correlationMarker);
+        void monitorOpenCodeSession(item.issueId, sessionId, healthyBase, correlationMarker, item.commentId, dispatchId);
         return true;
       } catch (err) {
         store.wakeLeaseMarkSent(leaseKey, lease.fence, dispatchId, nowIso(), LEASE_VERIFY_TTL_MS);
@@ -669,6 +682,8 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         });
         if (res.ok) {
           log(`watch: appended wake to TUI (${tuiUrl}) — 等待人工回车提交`);
+          // §7：TUI 已写入但未回车 = 等待人工提交（持久化证据，不可自动重发）
+          store.setRunEvidence(item.commentId, dispatchId, 'tui-waiting');
           await reportExecution(item.issueId, 'queued', `唤醒内容已写入 TUI 输入框 ${tuiUrl}，等待人工提交`);
           return true;
         }
@@ -682,7 +697,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     // with no execParts means only a TUI channel existed and it failed; fail
     // closed and leave the comment pending for a human / the external sidecar.
     if (!execParts || execParts.length === 0) {
-      parkForExternalSidecar(item, claimToken);
+      parkForExternalSidecar(item, claimToken, dispatchId);
       return false;
     }
 
@@ -723,23 +738,6 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     return false;
   };
 
-  const enqueue = (item: WakeItem): void => {
-    queue = queue.then(async () => {
-      if (!running) {
-        seen.delete(item.key);
-        return;
-      }
-      const delivered = await deliverWake(item);
-      inFlight.delete(item.commentId);
-      if (!delivered) seen.delete(item.key);
-    }).catch(err => {
-      inFlight.delete(item.commentId);
-      seen.delete(item.key);
-      if (item.source === 'backfill') error(`watch: 补拉唤醒失败: ${(err as Error).message}`);
-      else error(`watch: wake failed: ${(err as Error).message}`);
-    });
-  };
-
   /**
    * Probe `${opencodeBase}/global/health` and log only on transitions. Cheap
    * enough for the poll interval (one 2s-bounded request), and it makes a dead
@@ -766,56 +764,95 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     }
   };
 
+  // 执行器能力（§4.3/§8）：能否服务未绑定 Session 的任务（TUI 注入或
+  // headless 通道）。纯配置判定，决定 claimNextWake 的 requireBound 过滤，
+  // 不在事务内做任何探测。
+  const canServeUnbound = Boolean(config.tuiBase?.trim()) || Boolean(config.execParts && config.execParts.length > 0);
+
   /**
-   * Pending sweep: one direct query over pending comments replaces the old
-   * project→issue→detail N+1 backfill. The pending set is tiny; filtering by
-   * prefix/author/project happens in JS against the same predicates the event
-   * path uses. It runs once on start() and, when options.pollMs is set, on a
-   * periodic timer; both feed the same serialized queue.
+   * §4/I-03 统一原子调度入口：循环 claimNextWake（DB 原子选领，全局优先级
+   * 顺序由此决定，替代旧的 listQueueBatch→内存 seen→enqueue→逐条 claim 旁路）
+   * → 串行投递。候选 Session 忙碌/租约冲突时安全延后并继续领取下一个合格
+   * 候选，单个忙碌项不阻塞其他 Session。事件与轮询只触发 pump；pump 进行中
+   * 的重复触发合并为收尾重扫（§14 去抖，不并发领取）。
    */
-  const sweep = (): void => {
+  let pumping = false;
+  let pumpQueued = false;
+  const pump = async (): Promise<void> => {
     if (!running) return;
-    let found = 0;
+    if (pumping) { pumpQueued = true; return; }
+    pumping = true;
     try {
-      for (const comment of store.listQueueBatch(new Date().toISOString())) {
-        if (!isWakeComment(comment.body, config.prefix)) continue;
-        if (isIgnoredAuthor(comment.author, config.ignoreAuthors)) continue;
-        if (!wantsProject(config.projectFilter, comment.projectId)) continue;
-        const key = wakeKey(comment.issueId, comment.id);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        found++;
-        const instruction = comment.body.trimStart().slice(config.prefix.length).trim();
-        log(`watch: 补拉唤醒 #${comment.issueId}: ${instruction}`);
-        enqueue({
-          issueId: comment.issueId,
-          commentId: comment.id,
-          issueTitle: comment.issueTitle,
-          instruction,
-          author: comment.author,
-          key,
-          source: 'backfill',
-        });
-      }
-    } catch (err) {
-      error(`watch: 补拉失败: ${(err as Error).message}`);
+      do {
+        pumpQueued = false;
+        while (running) {
+          let candidate: ReturnType<typeof store.claimNextWake>;
+          try {
+            candidate = store.claimNextWake('watch', runId, config.prefix, {
+              requireBound: !canServeUnbound,
+              ignoreAuthors: [...config.ignoreAuthors],
+              projectFilter: config.projectFilter,
+            });
+          } catch (err) {
+            error(`watch: 原子领取失败: ${(err as Error).message}`);
+            break;
+          }
+          if (!candidate) break;
+          const instruction = candidate.body.trimStart().slice(config.prefix.length).trim();
+          log(`watch: 原子领取唤醒 #${candidate.issueId}: ${instruction}`);
+          const item: WakeItem = {
+            issueId: candidate.issueId,
+            commentId: candidate.commentId,
+            issueTitle: candidate.issueTitle,
+            instruction,
+            key: `${candidate.issueId}:${candidate.commentId}`,
+            source: 'event',
+          };
+          inFlight.add(item.commentId);
+          try {
+            await deliverWake(item, candidate);
+          } catch (err) {
+            error(`watch: wake failed: ${(err as Error).message}`);
+            break;
+          } finally {
+            inFlight.delete(item.commentId);
+          }
+        }
+      } while (pumpQueued && running);
+    } finally {
+      pumping = false;
     }
-    if (found) log(`watch: 补拉完成 — ${found} 条漏网唤醒入队`);
   };
 
+  /**
+   * Probe `${opencodeBase}/global/health` and log only on transitions. Cheap
+   * enough for the poll interval (one 2s-bounded request), and it makes a dead
+   * channel visible within one poll instead of a silent pending backlog.
+   */
+
   const onEvent = (event: StoreEvent): void => {
-    // Q2: 所有事件源只触发 priority 排序的 sweep——不直插特定评论到内存队列，
-    // 确保优先级顺序不被事件路径绕过。sweep 内部：listQueueBatch（priority 排序）
-    // → seen 去重 → enqueue → 串行投递。
+    // §4/§14：所有事件只触发原子 pump（DB 原子选领决定顺序），UI 刷新与
+    // 调度互不旁路；pump 自身去抖合并。
     try {
-      if (!shouldWake({ type: event.type, payload: event.payload }, config.prefix)) return;
-      // re-wake：状态改回 pending 时清 seen，让 sweep 重新入队
       if (event.type === 'comment.updated') {
-        const pid = String((event.payload as Record<string, unknown>).id ?? '');
-        const iid = String((event.payload as Record<string, unknown>).issueId ?? '');
-        if (pid && iid) seen.delete(wakeKey(iid, pid));
+        const payload = event.payload as Record<string, unknown>;
+        const pid = String(payload.id ?? '');
+        // §6/§3 收尾：agent 人工标 processed 即本轮被可靠确认完成——
+        // conclude 该轮租约，否则 sent 租约永久冻结该 Session 的后续投递。
+        // conclude 绑 (fence, dispatchId)，迟到事件改不了新一轮的租约。
+        if (payload.status === 'processed' && pid) {
+          const meta = store.queueMeta(pid);
+          const dispatchId = meta?.dispatchId;
+          if (meta && dispatchId) {
+            const lease = store.wakeLeaseFindByComment(pid, dispatchId);
+            if (lease && lease.state !== 'released') {
+              store.wakeLeaseConclude(lease.leaseKey, lease.fence, dispatchId, nowIso());
+            }
+          }
+        }
       }
-      void sweep();
+      if (!shouldWake({ type: event.type, payload: event.payload }, config.prefix)) return;
+      void pump();
     } catch (err) {
       error(`watch: event handling failed: ${(err as Error).message}`);
     }
@@ -838,13 +875,13 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     store.registerWakeEngine(runId, options.kind ?? 'sidecar', '', process.pid, nowIso(), nowIso(), '');
     void sweepOrphans();
     unsubscribe = store.subscribe(onEvent);
-    sweep();
+    void pump();
     if (options.pollMs !== undefined && options.pollMs > 0) {
       // Every tick: health transition check, then drain pending wakes.
       pollTimer = setInterval(() => {
         void probeChannelHealth();
         void sweepStaleProcessing();
-        sweep();
+        void pump();
       }, options.pollMs);
     }
     heartbeatTimer = setInterval(() => { store.heartbeatWakeEngine(runId, nowIso()); }, options.heartbeatMs ?? 30_000);
@@ -872,7 +909,6 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       releaseLock();
       releaseLock = null;
     }
-    await queue.catch(() => undefined);
     monitoredSessions.clear();
     parked.clear();
   };

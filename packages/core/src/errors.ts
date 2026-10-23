@@ -7,9 +7,12 @@ export class NotFoundError extends Error {
 }
 
 export class ConflictError extends Error {
-  constructor(message: string) {
+  /** Stable machine-readable business code (e.g. COMMENT_DISPATCH_PROTECTED). */
+  readonly code?: string;
+  constructor(message: string, code?: string) {
     super(message);
     this.name = 'ConflictError';
+    this.code = code;
   }
 }
 

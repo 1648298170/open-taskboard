@@ -5,7 +5,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Store } from '../src/index.js';
+import { Store, ConflictError, wakeViewState } from '../src/index.js';
 import { MIGRATIONS } from '../src/db.js';
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -263,5 +263,220 @@ describe('wake queue center: priority & revision (Q1)', () => {
     // 带 projectId：同一查询走 @projectId 过滤路径
     const filtered = store.wakeQueueSnapshot(new Date().toISOString(), { projectId: 'p1' });
     assert.ok(filtered.counts.pending >= 1, 'project-filtered snapshot must also work');
+  });
+});
+
+describe('Store.wakeLeaseHasActiveForSession (§5 migration guard)', () => {
+  const acquire = (store: Store, leaseKey: string, sessionId: string, ttlMs = 60_000): void => {
+    const ok = store.wakeLeaseAcquire({
+      leaseKey, sessionId, serverUrl: 'http://oc.test', holderRun: 'run-x',
+      commentId: 'c-x', dispatchId: 'd-x', nowIso: new Date().toISOString(), ttlMs,
+    });
+    assert.ok(ok, `acquire ${leaseKey} must succeed`);
+  };
+
+  it('counts only active leases under legacy URL-shaped keys, excluding the new namespace key', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new Store('.unused', db);
+    store.createProject({ id: 'p1', name: 'P' });
+    const now = new Date().toISOString();
+    // 活动的旧 URL 命名空间租约 → 计入
+    acquire(store, 'http://oc.test|ses_1', 'ses_1');
+    assert.equal(store.wakeLeaseHasActiveForSession('ses_1', 'svc-1|ses_1', now), true, 'active legacy lease must block');
+    // released → 不计入
+    const legacy = store.wakeLeaseGet('http://oc.test|ses_1')!;
+    store.wakeLeaseReleaseHeld(legacy.leaseKey, legacy.fence, 'run-x', 'c-x', 'd-x');
+    assert.equal(store.wakeLeaseGet(legacy.leaseKey)?.state, 'released');
+    assert.equal(store.wakeLeaseHasActiveForSession('ses_1', 'svc-1|ses_1', now), false, 'released legacy lease must not block');
+    // 过期 held → 不计入
+    acquire(store, 'http://oc.test|ses_2', 'ses_2', -1_000);
+    assert.equal(store.wakeLeaseHasActiveForSession('ses_2', 'svc-1|ses_2', now), false, 'expired held lease must not block');
+    // 非旧命名空间（无 ://）的活动租约 → 不计入（不同 serviceId 不互查）
+    acquire(store, 'svc-a|ses_3', 'ses_3');
+    assert.equal(store.wakeLeaseHasActiveForSession('ses_3', 'svc-b|ses_3', now), false, 'another explicit service id must not block');
+  });
+});
+
+describe('wakeViewState derivation (§7)', () => {
+  const view = (status: string, terminalAt: string | null, runEvidence: string | null, leaseState: string | null): string =>
+    wakeViewState({ status, terminalAt, runEvidence, leaseState });
+
+  it('derives the user-visible state from persisted evidence only', () => {
+    assert.equal(view('processed', null, null, null), 'done');
+    assert.equal(view('pending', '2026-01-01T00:00:00Z', null, null), 'manual');
+    assert.equal(view('pending', null, 'running', null), 'queued', 'evidence without a claim is stale and ignored');
+    assert.equal(view('pending', null, null, null), 'queued');
+    assert.equal(view('processing', null, null, null), 'verifying', 'processing without protection = recovery window');
+    assert.equal(view('processing', null, null, 'held'), 'preparing');
+    assert.equal(view('processing', null, null, 'dispatching'), 'preparing');
+    // HTTP 200 / sent 租约本身绝不等于 running
+    assert.equal(view('processing', null, null, 'sent'), 'sent-waiting');
+    assert.equal(view('processing', null, 'running', 'sent'), 'running');
+    assert.equal(view('processing', null, 'running', 'unverified_sent'), 'running');
+    assert.equal(view('processing', null, null, 'unverified_sent'), 'verifying');
+    assert.equal(view('processing', null, 'tui-waiting', null), 'tui-waiting');
+  });
+
+  it('setRunEvidence is dispatch-bound and cleared by the next claim', () => {
+    const { store, commentId } = fixture();
+    const claim = store.claimWake(commentId, 'watch', 'run-ev')!;
+    assert.ok(claim);
+    assert.equal(store.setRunEvidence(commentId, claim.dispatchId, 'running'), true);
+    assert.equal(store.queueMeta(commentId)!.runEvidence, 'running');
+    assert.equal(store.setRunEvidence(commentId, 'other-dispatch', 'running'), false, 'late evidence cannot cross rounds');
+    store.releaseWake(commentId, claim.token, 'pending');
+    const claim2 = store.claimWake(commentId, 'watch', 'run-ev2')!;
+    assert.ok(claim2);
+    assert.equal(store.queueMeta(commentId)!.runEvidence, null, 'a new round starts without evidence');
+  });
+});
+
+describe('protected comment deletion & reclassification (§6)', () => {
+  function round(store: Store, commentId: string): { token: string; dispatchId: string } {
+    const claim = store.claimWake(commentId, 'watch', 'run-del')!;
+    assert.ok(claim, 'round claim must succeed');
+    assert.ok(store.wakeLeaseAcquire({
+      leaseKey: 'http://oc.test|ses_del', sessionId: 'ses_del', serverUrl: 'http://oc.test',
+      holderRun: 'run-del', commentId, dispatchId: claim.dispatchId,
+      nowIso: new Date().toISOString(), ttlMs: 60_000,
+    }), 'lease acquire must succeed');
+    assert.ok(store.wakeLeaseMarkDispatching('http://oc.test|ses_del', 1, claim.dispatchId, new Date().toISOString()));
+    assert.ok(store.wakeLeaseMarkSent('http://oc.test|ses_del', 1, claim.dispatchId, new Date().toISOString(), 60_000));
+    return claim;
+  }
+
+  const expectProtected = (fn: () => unknown): void => {
+    assert.throws(fn, (err: unknown) => {
+      const e = err as ConflictError & { code?: string };
+      return e instanceof ConflictError && e.code === 'COMMENT_DISPATCH_PROTECTED';
+    }, 'deletion must be rejected with COMMENT_DISPATCH_PROTECTED');
+  };
+
+  it('deletes a plain pending comment', () => {
+    const { store, issueId } = fixture();
+    const plain = store.addComment(issueId, { author: 'web', body: '普通评论' }).id;
+    store.deleteComment(plain, 'web');
+    assert.equal(store.getComment(plain), null);
+  });
+
+  it('rejects deleting a claimed (processing) comment', () => {
+    const { store, commentId } = fixture();
+    assert.ok(store.claimWake(commentId, 'watch', 'run-x'));
+    expectProtected(() => store.deleteComment(commentId, 'web'));
+  });
+
+  it('rejects deleting a comment with an active sent lease, even terminalized', () => {
+    const { store, commentId } = fixture();
+    const claim = round(store, commentId);
+    expectProtected(() => store.deleteComment(commentId, 'web'));
+    // 转人工终态后保护租约仍未解除 → 依旧拒绝
+    assert.ok(store.terminalizeWake(commentId, claim.token, claim.dispatchId, '人工门禁'));
+    expectProtected(() => store.deleteComment(commentId, 'web'));
+  });
+
+  it('allows deletion once the round resolves and the lease concludes', () => {
+    const { store, commentId } = fixture();
+    const claim = round(store, commentId);
+    // 人工终态后保护租约仍未解除 → 依旧拒绝
+    assert.ok(store.terminalizeWake(commentId, claim.token, claim.dispatchId, '人工门禁'));
+    expectProtected(() => store.deleteComment(commentId, 'web'));
+    // 租约 conclude（轮次收尾）→ 保护解除 → 可删
+    assert.ok(store.wakeLeaseConclude('http://oc.test|ses_del', 1, claim.dispatchId, new Date().toISOString()));
+    store.deleteComment(commentId, 'web');
+    assert.equal(store.getComment(commentId), null);
+  });
+
+  it('still rejects editing the body of a processing comment (regression)', () => {
+    const { store, commentId } = fixture();
+    assert.ok(store.claimWake(commentId, 'watch', 'run-x'));
+    assert.throws(() => store.updateComment(commentId, { body: '@agent 改' }, 'web'), /only pending comments can be edited/);
+  });
+
+  it('blocks manual re-wake while protected, but allows the processed confirmation (§6/§3)', () => {
+    const { store, commentId } = fixture();
+    round(store, commentId);
+    // status→pending 会清 dispatch_id，把活动租约变成无人收尾的孤儿 → 拒绝
+    assert.throws(() => store.updateComment(commentId, { status: 'pending' }, 'web'), (err: unknown) => {
+      const e = err as ConflictError & { code?: string };
+      return e instanceof ConflictError && e.code === 'COMMENT_DISPATCH_PROTECTED';
+    });
+    // agent 确认完成是可靠收尾 → 放行
+    store.updateComment(commentId, { status: 'processed' }, 'web');
+    assert.equal(store.getComment(commentId)!.status, 'processed');
+  });
+
+  it('reclassifies wake → normal on edit and clears priority metadata', () => {
+    const { store, commentId } = fixture();
+    assert.equal(store.setWakePriority(commentId, 0, 1), true);
+    store.updateComment(commentId, { body: '不再是唤醒指令' }, 'web');
+    const meta = store.queueMeta(commentId)!;
+    assert.equal(meta.queuePriority, 0, 'leaving the queue must clear priority');
+    assert.equal(meta.priorityAt, null);
+    assert.equal(meta.notBefore, null);
+    // 快照按前缀过滤（§8 将把该口径下沉到队列层统一）：普通评论不再出现在队列视图
+    const snap = store.wakeQueueSnapshot(new Date().toISOString());
+    assert.equal(snap.items.some(i => i.commentId === commentId), false, 'the row must leave the wake queue view');
+  });
+
+  it('keeps priority when a wake comment is edited to another wake body', () => {
+    const { store, commentId } = fixture();
+    assert.equal(store.setWakePriority(commentId, 0, 1), true);
+    store.updateComment(commentId, { body: '@agent 改写后的指令' }, 'web');
+    assert.equal(store.queueMeta(commentId)!.queuePriority, 1, 'still a wake comment: priority must survive');
+  });
+
+  it('a normal comment edited to wake enters the queue with normal priority', () => {
+    const { store, issueId } = fixture();
+    const plain = store.addComment(issueId, { author: 'web', body: '普通起点' }).id;
+    store.updateComment(plain, { body: '@agent 现在是唤醒' }, 'web');
+    const batch = store.listQueueBatch(new Date().toISOString());
+    assert.ok(batch.some(c => c.id === plain), 'the reclassified comment must be claimable');
+    assert.equal(store.queueMeta(plain)!.queuePriority, 0, 'a new wake round enters as normal');
+  });
+});
+
+describe('claimNextWake strategy filters (§4+§8)', () => {
+  it('never claims a wake on an archived issue — claim and list stay consistent with the snapshot', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new Store('.unused', db);
+    store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_1' });
+    const issueId = store.createIssue({ projectId: 'p1', title: 'T' }).id;
+    store.addComment(issueId, { author: 'web', body: '@agent 归档前' }).id;
+    store.archiveIssue(issueId, 'web');
+    assert.equal(store.claimNextWake('watch', 'run-arch', '@agent'), null, 'archived issues must not be claimed');
+    assert.equal(store.listQueueBatch(new Date().toISOString()).length, 0, 'archived issues must not be listed');
+    const snap = store.wakeQueueSnapshot(new Date().toISOString());
+    assert.equal(snap.counts.pending, 0, 'snapshot agrees: archived excluded everywhere');
+  });
+
+  it('skips not-yet-due candidates and honors executor scope (ignoreAuthors/projectFilter)', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new Store('.unused', db);
+    store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_1' });
+    store.createProject({ id: 'p2', name: 'Q', defaultSessionId: 'ses_2' });
+    const i1 = store.createIssue({ projectId: 'p1', title: 'T1' }).id;
+    const i2 = store.createIssue({ projectId: 'p2', title: 'T2' }).id;
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const a = store.addComment(i1, { author: 'web', body: '@agent 未到期' }).id;
+    db.prepare('UPDATE comments SET not_before = ? WHERE id = ?').run(future, a);
+    assert.equal(store.claimNextWake('watch', 'run-due', '@agent'), null, 'not_before must gate atomic claim');
+    db.prepare('UPDATE comments SET not_before = NULL WHERE id = ?').run(a);
+    const b = store.addComment(i1, { author: 'watch', body: '@agent 自唤醒' }).id;
+    const c = store.addComment(i2, { author: 'web', body: '@agent p2 候选' }).id;
+    // 执行器范围：ignoreAuthors 过滤自身作者（同毫秒 tiebreak 是随机 id，
+    // 不依赖具体领到 a 还是 c——只断言被忽略者不领、候选可领）
+    const c1 = store.claimNextWake('watch', 'run-scope', '@agent', { ignoreAuthors: ['watch'] });
+    assert.ok(c1, 'a non-ignored candidate must still be found');
+    assert.notEqual(c1!.commentId, b, 'the ignored author must be skipped');
+    assert.equal(
+      (db.prepare('SELECT status FROM comments WHERE id = ?').get(b) as { status: string }).status,
+      'pending',
+      'the ignored-author candidate must stay pending',
+    );
+    store.releaseWake(c1!.commentId, c1!.token, 'pending');
+    // projectFilter 约束领取范围：p2 视角只能领到 c
+    const c2 = store.claimNextWake('watch', 'run-scope2', '@agent', { projectFilter: 'p2' });
+    assert.ok(c2, 'the p2 candidate must be claimed under the project scope');
+    assert.equal(c2!.commentId, c, 'the p1 candidates must not leak into the p2 scope');
   });
 });

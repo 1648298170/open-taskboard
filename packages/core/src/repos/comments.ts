@@ -22,6 +22,46 @@ export interface WakeQueueMeta {
   absentScans: number;
   queuePriority: number;
   priorityAt: string | null;
+  runEvidence: string | null;
+}
+
+/** §7 用户可见唤醒状态（单一来源，API/UI 共用；证据不足时宁可保守）。 */
+export type WakeViewState =
+  | 'queued'          // 排队中：未领取
+  | 'preparing'       // 准备派发：已领取但无「请求已发出」的证据
+  | 'sent-waiting'    // 已派发，等待执行结果
+  | 'running'         // 执行中：monitor 观察到 busy + 匹配本次唤醒
+  | 'tui-waiting'     // 等待人工提交：TUI 已写入输入框
+  | 'verifying'       // 等待核验：结果不确定
+  | 'manual'          // 需人工处理：人工终态门禁
+  | 'done';           // 终态
+
+/**
+ * §7 状态派生（纯函数）：证据链 = comment.status + terminal_at + lease.state
+ * + run_evidence。HTTP 200/prompt_async 成功绝不单独等于 running。
+ */
+export function wakeViewState(input: {
+  status: string;
+  terminalAt: string | null;
+  runEvidence: string | null;
+  leaseState: string | null;
+}): WakeViewState {
+  if (input.status === 'processed') return 'done';
+  if (input.terminalAt) return 'manual';
+  if (input.status !== 'processing') return 'queued';
+  if (input.runEvidence === 'tui-waiting') return 'tui-waiting';
+  switch (input.leaseState) {
+    case 'held':
+    case 'dispatching':
+      return 'preparing';
+    case 'sent':
+    case 'unverified_sent':
+      if (input.runEvidence === 'running') return 'running';
+      return input.leaseState === 'unverified_sent' ? 'verifying' : 'sent-waiting';
+    default:
+      // processing + 无活动保护 = 恢复窗口期，结果不确定
+      return 'verifying';
+  }
 }
 
 export class CommentRepo {
@@ -80,6 +120,7 @@ export class CommentRepo {
         sets.push('absent_scans = 0', 'first_absent_at = NULL', 'last_absent_at = NULL');
         sets.push('busy_since = NULL', 'busy_accum_ms = 0');
         sets.push('queue_priority = 0', 'priority_at = NULL');
+        sets.push('run_evidence = NULL');
       }
     }
     if (sets.length === 0) return;
@@ -103,7 +144,7 @@ export class CommentRepo {
       `UPDATE comments
        SET status = 'processing', claimed_by = ?, claimed_run = ?, dispatch_id = ?,
            not_before = NULL, absent_scans = 0, first_absent_at = NULL, last_absent_at = NULL,
-           updated_at = ?
+           run_evidence = NULL, updated_at = ?
        WHERE id = ? AND status = 'pending' AND terminal_at IS NULL AND claimed_by = ''
          AND (not_before IS NULL OR not_before <= ?)`
     ).run(token, runId, dispatchId, t, id, t);
@@ -149,13 +190,13 @@ export class CommentRepo {
     this.db.prepare('UPDATE issues SET updated_at = ? WHERE id = ?').run(now(), issueId);
   }
 
-  /** 队列批次：pending 且已到 not_before、未终态的评论，FIFO（queued_at → created_at → rowid）。 */
+  /** 队列批次：pending 且已到 not_before、未终态、未归档的评论（§8 与快照/领取同口径），FIFO（queued_at → created_at → rowid）。 */
   listQueueBatch(nowIso: string): PendingWakeComment[] {
     return this.db.prepare(
       `SELECT c.id, c.issue_id AS issueId, i.project_id AS projectId, i.title AS issueTitle,
               c.author, c.body, c.status, c.created_at AS createdAt
        FROM comments c JOIN issues i ON i.id = c.issue_id
-       WHERE c.status = 'pending' AND c.terminal_at IS NULL AND (c.not_before IS NULL OR c.not_before <= ?)
+       WHERE c.status = 'pending' AND c.terminal_at IS NULL AND i.archived_at IS NULL AND (c.not_before IS NULL OR c.not_before <= ?)
        ORDER BY c.queue_priority DESC,
          CASE WHEN c.queue_priority = 1 THEN c.priority_at END ASC,
          COALESCE(c.queued_at, c.created_at) ASC, c.rowid`
@@ -169,7 +210,8 @@ export class CommentRepo {
               dispatch_id AS dispatchId, terminal_at AS terminalAt,
               busy_since AS busySince, busy_accum_ms AS busyAccumMs,
               absent_scans AS absentScans,
-              queue_priority AS queuePriority, priority_at AS priorityAt
+              queue_priority AS queuePriority, priority_at AS priorityAt,
+              run_evidence AS runEvidence
        FROM comments WHERE id = ?`
     ).get(id) as unknown as WakeQueueMeta | null;
   }
@@ -260,9 +302,22 @@ export class CommentRepo {
       `UPDATE comments
        SET status = 'pending', terminal_at = ?, last_error = ?,
            claimed_by = '', claimed_run = NULL,
-           busy_since = NULL, busy_accum_ms = 0, updated_at = ?
+           busy_since = NULL, busy_accum_ms = 0, run_evidence = NULL, updated_at = ?
        WHERE id = ? AND status = 'processing' AND claimed_by = ? AND dispatch_id = ?`
     ).run(now(), error, now(), id, claimToken, dispatchId);
+    return result.changes > 0;
+  }
+
+  /**
+   * §7 运行阶段证据写入（CAS 绑 dispatch_id）：仅 monitor 的可靠运行观察
+   * （'running'）与 TUI 写入待人工提交（'tui-waiting'）两类不可推导状态；
+   * 新轮次 claim/人工重唤醒/终态时清零。迟到证据写不进新轮次。
+   */
+  setRunEvidence(id: string, dispatchId: string, evidence: 'running' | 'tui-waiting' | null): boolean {
+    const result = this.db.prepare(
+      `UPDATE comments SET run_evidence = ?, updated_at = ?
+       WHERE id = ? AND dispatch_id = ? AND status = 'processing'`
+    ).run(evidence, now(), id, dispatchId);
     return result.changes > 0;
   }
 
@@ -329,81 +384,133 @@ export class CommentRepo {
   }
 
   /**
-   * 队列快照（v10 Q3）：counts + items 在同一只读查询中生成。
-   * 分桶互斥：terminal_at 非空 → manual（优先判）；status=processing → processing；
-   * 剩余 pending 按 not_before 分为 readyByTime / delayed。
+   * 队列快照（v10 Q3 / §11/§13）：revision、counts、items 同一只读视图；
+   * 先按 view 分类再分页（counts 独立于 limit）；cursor 携带 revision，
+   * 过期返回 stale（上层转 409 STALE_QUEUE_CURSOR）；sessionProtected/
+   * waitReason/视图状态全部来自持久化证据（lease 状态子查询 + run_evidence），
+   * 不逐条探测 OpenCode，不暴露 claim token/fence。
    */
-  queueSnapshot(nowIso: string, opts: { projectId?: string; prefix: string; limit?: number }): {
+  queueSnapshot(nowIso: string, opts: {
+    projectId?: string; prefix: string; limit?: number;
+    view?: 'ready' | 'delayed' | 'processing' | 'manual';
+    cursorOffset?: number; cursorRevision?: number;
+  }): {
     revision: number;
     counts: { pending: number; readyByTime: number; delayed: number; processing: number; manual: number };
     items: {
       commentId: string; issueId: string; issueTitle: string; projectId: string;
       bodyPreview: string; status: string; queuePriority: number; priorityAt: string | null;
       queuedAt: string | null; notBefore: string | null; attempts: number; lastError: string;
-      queueState: 'ready' | 'delayed' | 'processing' | 'manual'; sessionProtected: boolean;
+      queueState: 'ready' | 'delayed' | 'processing' | 'manual';
+      viewState: string; sessionProtected: boolean; waitReason: string | null;
     }[];
+    nextOffset: number | null;
+    stale: boolean;
   } {
-    const projectFilter = opts.projectId ? 'AND i.project_id = @projectId' : '';
+    const revision = this.getQueueRevision();
+    // §11: cursor 携带的 revision 已过期 → stale（上层 409，前端重载第一页）
+    if (opts.cursorRevision !== undefined && opts.cursorRevision !== revision) {
+      return { revision, counts: { pending: 0, readyByTime: 0, delayed: 0, processing: 0, manual: 0 }, items: [], nextOffset: null, stale: true };
+    }
+    const projectFilter = opts.projectId ? 'AND i.project_id = ?' : '';
+    const countParams: (string | number)[] = [opts.prefix];
+    if (opts.projectId) countParams.push(opts.projectId);
     const base = `
       FROM comments c JOIN issues i ON i.id = c.issue_id
-      WHERE TRIM(c.body) LIKE @prefix || '%'
+      WHERE TRIM(c.body) LIKE ? || '%'
         AND i.archived_at IS NULL
         ${projectFilter}`;
-    // node:sqlite 对未使用的命名参数直接抛错（ERR_INVALID_STATE）——
-    // 仅在 SQL 真的含 @projectId 时才传入该参数。
-    const baseParams: Record<string, string | number> = { prefix: opts.prefix };
-    if (opts.projectId) baseParams.projectId = opts.projectId;
     const count = (where: string): number =>
-      (this.db.prepare(`SELECT COUNT(*) AS n ${base} ${where}`).get(baseParams) as { n: number }).n;
+      (this.db.prepare(`SELECT COUNT(*) AS n ${base} ${where}`).get(...countParams) as { n: number }).n;
     const pendingCount = count("AND c.status = 'pending' AND c.terminal_at IS NULL");
     const processingCount = count("AND c.status = 'processing'");
-    const manualCount = count("AND c.terminal_at IS NOT NULL");
-    const readyCount = (this.db.prepare(
-      `SELECT COUNT(*) AS n ${base} AND c.status = 'pending' AND c.terminal_at IS NULL AND (c.not_before IS NULL OR c.not_before <= @now)`
-    ).get({ ...baseParams, now: nowIso }) as { n: number }).n;
-    const delayed = pendingCount - readyCount;
-    const limit = opts.limit ?? 50;
+    const manualCount = count('AND c.terminal_at IS NOT NULL');
+    const readyWhere = "AND c.status = 'pending' AND c.terminal_at IS NULL AND (c.not_before IS NULL OR c.not_before <= ?)";
+    const readyCount = (this.db.prepare(`SELECT COUNT(*) AS n ${base} ${readyWhere}`).get(...countParams, nowIso) as { n: number }).n;
+    const counts = {
+      pending: pendingCount,
+      readyByTime: readyCount,
+      delayed: pendingCount - readyCount,
+      processing: processingCount,
+      manual: manualCount,
+    };
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+    const offset = Math.max(opts.cursorOffset ?? 0, 0);
+    // §11: view 过滤先行，再稳定排序 + 分页；等待原因/保护来源为持久化证据
+    const viewWhere: Record<string, string> = {
+      ready: "AND c.status = 'pending' AND c.terminal_at IS NULL AND (c.not_before IS NULL OR c.not_before <= ?)",
+      delayed: "AND c.status = 'pending' AND c.terminal_at IS NULL AND c.not_before > ?",
+      processing: "AND c.status = 'processing' AND c.terminal_at IS NULL",
+      manual: 'AND c.terminal_at IS NOT NULL',
+    };
+    const view = opts.view && viewWhere[opts.view] ? opts.view : undefined;
+    const itemsParams: (string | number)[] = [opts.prefix];
+    if (opts.projectId) itemsParams.push(opts.projectId);
+    if (view === 'ready' || view === 'delayed') itemsParams.push(nowIso);
     const items = this.db.prepare(
       `SELECT c.id AS commentId, c.issue_id AS issueId, i.title AS issueTitle,
               i.project_id AS projectId, c.body, c.status,
               c.queue_priority AS queuePriority, c.priority_at AS priorityAt,
               c.queued_at AS queuedAt, c.not_before AS notBefore,
               c.attempts, c.last_error AS lastError, c.terminal_at AS terminalAt,
-              p.name AS projectName
+              c.run_evidence AS runEvidence,
+              p.name AS projectName,
+              (SELECT l.state FROM wake_session_leases l
+                WHERE l.comment_id = c.id AND l.dispatch_id = c.dispatch_id
+                ORDER BY l.fence DESC LIMIT 1) AS leaseState
        FROM comments c JOIN issues i ON i.id = c.issue_id JOIN projects p ON p.id = i.project_id
-       WHERE TRIM(c.body) LIKE @prefix || '%' AND i.archived_at IS NULL ${projectFilter}
+       WHERE TRIM(c.body) LIKE ? || '%' AND i.archived_at IS NULL ${projectFilter}
          AND (c.status IN ('pending', 'processing') OR c.terminal_at IS NOT NULL)
+         ${view ? viewWhere[view] : '' }
        ORDER BY c.queue_priority DESC,
                 CASE WHEN c.queue_priority = 1 THEN c.priority_at END ASC,
                 COALESCE(c.queued_at, c.created_at) ASC, c.rowid
-       LIMIT @limit`
-    ).all({ ...baseParams, limit }) as any[];
+       LIMIT ? OFFSET ?`
+    ).all(...itemsParams, limit, offset) as Array<Record<string, unknown>>;
+    const rows = items.map(r => {
+      const status = String(r.status);
+      const terminalAt = r.terminalAt as string | null;
+      const leaseState = (r.leaseState as string | null) ?? null;
+      const runEvidence = (r.runEvidence as string | null) ?? null;
+      const viewState = wakeViewState({ status, terminalAt, runEvidence, leaseState });
+      const notBefore = r.notBefore as string | null;
+      let waitReason: string | null = null;
+      if (viewState === 'queued' && notBefore && notBefore > nowIso) waitReason = 'waiting-not-before';
+      else if (viewState === 'preparing' || (viewState === 'queued' && processingCount > 0)) waitReason = 'session-protected';
+      else if (viewState === 'tui-waiting') waitReason = 'waiting-human-submit';
+      else if (viewState === 'verifying') waitReason = 'verifying';
+      else if (viewState === 'manual') waitReason = 'needs-human';
+      return {
+        commentId: r.commentId as string,
+        issueId: r.issueId as string,
+        issueTitle: r.issueTitle as string,
+        projectId: r.projectId as string,
+        projectName: r.projectName as string,
+        bodyPreview: String(r.body).slice(0, 120),
+        status,
+        queuePriority: r.queuePriority as number,
+        priorityAt: r.priorityAt as string | null,
+        queuedAt: r.queuedAt as string | null,
+        notBefore,
+        attempts: r.attempts as number,
+        lastError: r.lastError as string,
+        queueState: (terminalAt !== null ? 'manual'
+          : status === 'processing' ? 'processing'
+          : (notBefore !== null && notBefore > nowIso) ? 'delayed'
+          : 'ready') as 'ready' | 'delayed' | 'processing' | 'manual',
+        viewState,
+        sessionProtected: leaseState !== null && ['dispatching', 'sent', 'unverified_sent'].includes(leaseState),
+        waitReason,
+      };
+    });
     return {
-      revision: this.getQueueRevision(),
-      counts: {
-        pending: pendingCount,
-        readyByTime: readyCount,
-        delayed,
-        processing: processingCount,
-        manual: manualCount,
-      },
-      items: items.map(r => ({
-        commentId: r.commentId, issueId: r.issueId, issueTitle: r.issueTitle,
-        projectId: r.projectId, projectName: r.projectName,
-        bodyPreview: r.body.slice(0, 120), status: r.status,
-        queuePriority: r.queuePriority, priorityAt: r.priorityAt,
-        queuedAt: r.queuedAt, notBefore: r.notBefore,
-        attempts: r.attempts, lastError: r.lastError,
-        queueState: r.terminalAt !== null ? 'manual' as const
-          : r.status === 'processing' ? 'processing' as const
-          : (r.notBefore !== null && r.notBefore > nowIso) ? 'delayed' as const
-          : 'ready' as const,
-        waitReason: null,
-        sessionProtected: false,
-      })),
+      revision,
+      counts,
+      items: rows,
+      nextOffset: rows.length === limit ? offset + limit : null,
+      stale: false,
     };
   }
-
   /** 队列修订号递增（须与导致队列变更的写操作同事务调用）。 */
   bumpQueueRevision(): number {
     this.db.prepare(
@@ -418,15 +525,25 @@ export class CommentRepo {
   }
 
   /**
-   * 原子选领（v10 Q1 / §15.1）：在调用方的写事务内，按当前排序选取
-   * 最高顺序的到期兼容候选，并 CAS claim。候选失配由调用方重读。
-   * 返回 null = 无兼容候选。
+   * 原子选领（v10 Q1 / §4/I-03）：候选筛选（wake 前缀、归档、not_before、
+   * 终态、未领取、可选执行器范围）、priority+FIFO 排序与 CAS 领取在同一
+   * 短写事务内完成（Store 包装负责 BEGIN/COMMIT，事务内禁止网络/探测）。
+   * 领取即初始化新轮次：dispatch_id 生成 + 缺席计数清零。
+   * scope 为执行器能力过滤（不改变全局队列成员，仅约束该引擎领取范围）。
    */
-  claimNextWake(claimer: string, runId: string, nowIso: string, prefix: string, requireBound: boolean):
+  claimNextWake(claimer: string, runId: string, nowIso: string, prefix: string, requireBound: boolean,
+    scope?: { ignoreAuthors?: readonly string[]; projectFilter?: string }):
     { token: string; dispatchId: string; commentId: string; issueId: string; body: string; issueTitle: string } | null {
     const token = `${claimer}:${randomUUID()}`;
     const dispatchId = randomUUID();
     const boundFilter = requireBound ? 'AND p.default_session_id IS NOT NULL' : '';
+    const projectFilter = scope?.projectFilter ? 'AND i.project_id = ?' : '';
+    const authors = scope?.ignoreAuthors ?? [];
+    const authorFilter = authors.length > 0 ? `AND c.author NOT IN (${authors.map(() => '?').join(',')})` : '';
+    // 占位符顺序与 SQL 一致：not_before → prefix → project → authors
+    const selectParams: (string | number)[] = [nowIso, prefix];
+    if (scope?.projectFilter) selectParams.push(scope.projectFilter);
+    selectParams.push(...authors);
     const row = this.db.prepare(
       `SELECT c.id AS commentId, c.issue_id AS issueId, c.body,
               i.title AS issueTitle
@@ -434,14 +551,17 @@ export class CommentRepo {
        JOIN issues i ON i.id = c.issue_id
        JOIN projects p ON p.id = i.project_id
        WHERE c.status = 'pending' AND c.terminal_at IS NULL AND c.claimed_by = ''
+         AND i.archived_at IS NULL
          AND (c.not_before IS NULL OR c.not_before <= ?)
          AND TRIM(c.body) LIKE ? || '%'
+         ${projectFilter}
+         ${authorFilter}
          ${boundFilter}
        ORDER BY c.queue_priority DESC,
                 CASE WHEN c.queue_priority = 1 THEN c.priority_at END ASC,
                 COALESCE(c.queued_at, c.created_at) ASC, c.id ASC
        LIMIT 1`
-    ).get(nowIso, prefix) as { commentId: string; issueId: string; body: string; issueTitle: string } | undefined;
+    ).get(...selectParams) as { commentId: string; issueId: string; body: string; issueTitle: string } | undefined;
     if (!row) return null;
     const result = this.db.prepare(
       `UPDATE comments

@@ -235,19 +235,22 @@ export const api_ = {
     api<{ commits: Commit[] }>('GET', `/api/projects/${projectId}/commits?ref=${encodeURIComponent(ref)}`)
       .then(r => r.commits),
   /** 队列中心快照（v10 Q3）：counts + items 同一读。 */
-  wakeQueue: (opts?: { projectId?: string; limit?: number }) => {
+  wakeQueue: (opts?: { projectId?: string; limit?: number; view?: 'ready' | 'delayed' | 'processing' | 'manual'; cursor?: string }) => {
     const params = new URLSearchParams();
     if (opts?.projectId) params.set('projectId', opts.projectId);
     if (opts?.limit) params.set('limit', String(opts.limit));
+    if (opts?.view) params.set('view', opts.view);
+    if (opts?.cursor) params.set('cursor', opts.cursor);
     const qs = params.toString();
     return api<{
-      generatedAt: string; queueRevision: number;
+      revision: number;
       counts: Record<string, number>;
       items: { commentId: string; issueId: string; issueTitle: string; projectId: string;
         bodyPreview: string; status: string; queuePriority: number; priorityAt: string | null;
         queuedAt: string | null; notBefore: string | null; attempts: number; lastError: string;
-        queueState: string; sessionProtected: boolean;
-      }[];
+        queueState: string; viewState: string; sessionProtected: boolean; waitReason: string | null }[];
+      nextCursor: string | null;
+      stale: boolean;
     }>('GET', `/api/wake-queue${qs ? `?${qs}` : ''}`);
   },
   /** 队列优先级 CAS 更新（v10 Q3）。 */

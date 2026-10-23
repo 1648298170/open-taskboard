@@ -141,4 +141,19 @@ export class WakeLeaseRepo {
           AND state IN ('dispatching', 'sent', 'unverified_sent') LIMIT 1`
     ).get(commentId, dispatchId));
   }
+
+  /**
+   * §5 迁移护栏：同 Session 在「旧 URL 命名空间」（key 形如 *://*|sid）下
+   * 是否仍有活动租约。显式 serviceId 启用新命名空间时，先看旧 key——
+   * 活动中的旧租约不得被忽略而并行第二把派发；不同显式 serviceId 不互查。
+   */
+  hasActiveLegacyForSession(sessionId: string, excludeKey: string, nowIso: string): boolean {
+    return Boolean(this.db.prepare(
+      `SELECT 1 FROM wake_session_leases
+        WHERE session_id = ? AND lease_key <> ? AND lease_key LIKE '%://%'
+          AND (state IN ('dispatching', 'sent', 'unverified_sent')
+               OR (state = 'held' AND expires_at > ?))
+        LIMIT 1`
+    ).get(sessionId, excludeKey, nowIso));
+  }
 }

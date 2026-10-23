@@ -18,6 +18,8 @@ export function registerErrorHandler(app: FastifyInstance): void {
       console.error('[taskboard]', err);
       return reply.code(status).send({ error: 'Internal Server Error' });
     }
-    return reply.code(status).send({ error: err.message });
+    // Stable business code (e.g. COMMENT_DISPATCH_PROTECTED) when present.
+    const code = (err as { code?: string }).code;
+    return reply.code(status).send({ error: err.message, ...(code ? { code } : {}) });
   });
 }

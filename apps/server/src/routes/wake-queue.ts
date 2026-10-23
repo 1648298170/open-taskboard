@@ -5,12 +5,19 @@ import { ValidationError } from '@taskboard/core';
 export default async function wakeQueueRoutes(app: FastifyInstance, opts: { store: Store }): Promise<void> {
   const store = opts.store;
 
-  app.get('/api/wake-queue', async (req) => {
-    const q = req.query as { projectId?: string; limit?: string };
+  app.get('/api/wake-queue', async (req, reply) => {
+    const q = req.query as { projectId?: string; limit?: string; view?: string; cursor?: string };
     const limit = q.limit ? Math.min(Math.max(parseInt(q.limit, 10) || 50, 1), 200) : 50;
-    return store.wakeQueueSnapshot(new Date().toISOString(), {
-      projectId: q.projectId || undefined, limit,
+    const views = ['ready', 'delayed', 'processing', 'manual'] as const;
+    const view = views.includes(q.view as typeof views[number]) ? q.view as typeof views[number] : undefined;
+    const snap = store.wakeQueueSnapshot(new Date().toISOString(), {
+      projectId: q.projectId || undefined, limit, view, cursor: q.cursor || undefined,
     });
+    // §11: cursor 携带的 revision 已过期 → 409，前端清 cursor 重载第一页
+    if (snap.stale) {
+      return reply.status(409).send({ error: 'queue changed; reload from the first page', code: 'STALE_QUEUE_CURSOR' });
+    }
+    return snap;
   });
 
   app.patch('/api/wake-queue/:commentId/priority', async (req, reply) => {

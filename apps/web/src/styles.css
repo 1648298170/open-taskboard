@@ -2580,3 +2580,20 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
 .wake-queue-err { color: var(--danger, #e5484d); }
 .wake-queue-btn { position: relative; }
 .wake-queue-badge { position: absolute; top: -4px; right: -4px; font-size: 9px; min-width: 14px; height: 14px; line-height: 14px; text-align: center; border-radius: 7px; background: var(--danger, #e5484d); color: #fff; }
+/* wake queue panel: lifecycle state + protection/wait badges (§7/§13) */
+.wake-queue-state {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--border, #444);
+  border-radius: 3px;
+  opacity: .85;
+}
+.wake-queue-state[data-state="running"] { color: #7ee787; border-color: #7ee78755; }
+.wake-queue-state[data-state="manual"] { color: #ffa657; border-color: #ffa65755; }
+.wake-queue-state[data-state="verifying"] { color: #d2a8ff; border-color: #d2a8ff55; }
+.wake-queue-protected, .wake-queue-wait {
+  font-size: 11px;
+  opacity: .75;
+}
+.wake-queue-more { display: flex; justify-content: center; padding: 6px 0; }

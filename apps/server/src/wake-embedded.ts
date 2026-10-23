@@ -102,6 +102,9 @@ export async function startEmbeddedWake(opts: EmbeddedWakeOptions): Promise<Embe
       config: {
         prefix: '@agent',
         opencodeBase,
+        // §5: explicit service identity — URL aliases of one OpenCode server
+        // share a lease namespace instead of minting parallel leases.
+        opencodeServiceId: opts.env.TASKBOARD_OPENCODE_SERVICE_ID?.trim() || undefined,
         // TUI and headless are external-sidecar channels only.
         tuiBase: undefined,
         execParts: undefined,
@@ -114,7 +117,8 @@ export async function startEmbeddedWake(opts: EmbeddedWakeOptions): Promise<Embe
   );
 
   await engine.start();
-  log(`wake embedded: on (instance=${instanceId}, opencode=${opencodeBase}, poll=${pollMs})`);
+  const serviceId = opts.env.TASKBOARD_OPENCODE_SERVICE_ID?.trim();
+  log(`wake embedded: on (instance=${instanceId}, opencode=${opencodeBase}, service=${serviceId ?? 'url-namespace'}, poll=${pollMs})`);
 
   let stopped = false;
   return {

@@ -108,7 +108,7 @@ describe('embedded wake: startup', () => {
     });
     try {
       assert.ok(
-        fixture.logs.some(line => /^wake embedded: on \(instance=[0-9a-f]{8}, opencode=http:\/\/oc\.test, poll=60000\)$/.test(line)),
+        fixture.logs.some(line => /^wake embedded: on \(instance=[0-9a-f]{8}, opencode=http:\/\/oc\.test, service=(url-namespace|svc-[0-9a-z-]+), poll=60000\)$/.test(line)),
         `missing boot line: ${fixture.logs.join(' | ')}`
       );
       assert.equal(fixture.wake.engine?.isRunning(), true);
@@ -154,6 +154,20 @@ describe('embedded wake: gate', () => {
     try {
       assert.equal(fixture.wake.engine, null);
       assert.ok(fixture.logs.includes('wake embedded: off (TASKBOARD_WAKE_EMBEDDED=0)'));
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it('passes TASKBOARD_OPENCODE_SERVICE_ID into the engine lease namespace and boot line (§5)', async () => {
+    const fixture = await makeServer({
+      env: { TASKBOARD_OPENCODE_URL: 'http://oc.test', TASKBOARD_OPENCODE_SERVICE_ID: 'svc-custom' },
+    });
+    try {
+      assert.ok(
+        fixture.logs.some(line => /^wake embedded: on \(instance=[0-9a-f]{8}, opencode=http:\/\/oc\.test, service=svc-custom, poll=60000\)$/.test(line)),
+        `missing service boot line: ${fixture.logs.join(' | ')}`
+      );
     } finally {
       await fixture.cleanup();
     }
