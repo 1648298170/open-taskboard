@@ -322,7 +322,25 @@ export class CommentRepo {
   }
 
   /**
-   * 延迟确认完成（v10）：终态评论在其轮次的租约上观察到 assistant+idle 后
+   * §P1-4: 服务端证据驱动的幂等收尾（monitor 专用）——执行证据明确时，
+   * 不依赖 Agent 自觉标 processed：CAS 绑 (id, dispatch_id, processing)，
+   * 人工重置/新轮次/已终结均不匹配（迟到收尾 no-op）。outcome='manual'
+   * 落 terminal_at 人工门禁；'processed' 为证据充分的业务完成。
+   */
+  finalizeDispatch(id: string, dispatchId: string, outcome: 'processed' | 'manual', error: string): boolean {
+    const t = now();
+    const sets = outcome === 'processed'
+      ? `status = 'processed', terminal_at = NULL, last_error = '', claimed_by = '', run_evidence = NULL, updated_at = '${t}'`
+      : `status = 'pending', terminal_at = '${t}', last_error = ?, claimed_by = '', run_evidence = NULL, busy_since = NULL, busy_accum_ms = 0, updated_at = '${t}'`;
+    const params = outcome === 'processed' ? [] : [error];
+    const result = this.db.prepare(
+      `UPDATE comments SET ${sets} WHERE id = ? AND dispatch_id = ? AND status = 'processing'`
+    ).run(...params, id, dispatchId);
+    return result.changes > 0;
+  }
+
+  /**
+   * 延迟确认完成（v10）：终态评论在本轮租约上观察到 assistant+idle 后
    * 转 processed。CAS 绑 (dispatch_id, pending, terminal_at 非空)——旧轮次
    * 观察对新轮次评论必然 no-op。
    */
@@ -392,7 +410,7 @@ export class CommentRepo {
    */
   queueSnapshot(nowIso: string, opts: {
     projectId?: string; prefix: string; limit?: number;
-    view?: 'ready' | 'delayed' | 'processing' | 'manual';
+    view?: 'ready' | 'delayed' | 'queued' | 'processing' | 'manual';
     cursorOffset?: number; cursorRevision?: number;
   }): {
     revision: number;
@@ -440,11 +458,13 @@ export class CommentRepo {
     const viewWhere: Record<string, string> = {
       ready: "AND c.status = 'pending' AND c.terminal_at IS NULL AND (c.not_before IS NULL OR c.not_before <= ?)",
       delayed: "AND c.status = 'pending' AND c.terminal_at IS NULL AND c.not_before > ?",
+      queued: "AND c.status = 'pending' AND c.terminal_at IS NULL",
       processing: "AND c.status = 'processing' AND c.terminal_at IS NULL",
       manual: 'AND c.terminal_at IS NOT NULL',
     };
     const view = opts.view && viewWhere[opts.view] ? opts.view : undefined;
-    const itemsParams: (string | number)[] = [opts.prefix];
+    // 绑定顺序与语句一致：SELECT 子查询 nowIso → LIKE prefix → projectId → view nowIso
+    const itemsParams: (string | number)[] = [nowIso, opts.prefix];
     if (opts.projectId) itemsParams.push(opts.projectId);
     if (view === 'ready' || view === 'delayed') itemsParams.push(nowIso);
     const items = this.db.prepare(
@@ -457,7 +477,11 @@ export class CommentRepo {
               p.name AS projectName,
               (SELECT l.state FROM wake_session_leases l
                 WHERE l.comment_id = c.id AND l.dispatch_id = c.dispatch_id
-                ORDER BY l.fence DESC LIMIT 1) AS leaseState
+                ORDER BY l.fence DESC LIMIT 1) AS leaseState,
+              (SELECT 1 FROM wake_session_leases lb JOIN projects pd ON pd.id = i.project_id
+                WHERE lb.session_id = pd.default_session_id
+                  AND (lb.state IN ('dispatching', 'sent', 'unverified_sent')
+                       OR (lb.state = 'held' AND lb.expires_at > ?)) LIMIT 1) AS sessionBusy
        FROM comments c JOIN issues i ON i.id = c.issue_id JOIN projects p ON p.id = i.project_id
        WHERE TRIM(c.body) LIKE ? || '%' AND i.archived_at IS NULL ${projectFilter}
          AND (c.status IN ('pending', 'processing') OR c.terminal_at IS NOT NULL)
@@ -476,7 +500,7 @@ export class CommentRepo {
       const notBefore = r.notBefore as string | null;
       let waitReason: string | null = null;
       if (viewState === 'queued' && notBefore && notBefore > nowIso) waitReason = 'waiting-not-before';
-      else if (viewState === 'preparing' || (viewState === 'queued' && processingCount > 0)) waitReason = 'session-protected';
+      else if (viewState === 'queued' && r.sessionBusy != null) waitReason = 'session-protected';
       else if (viewState === 'tui-waiting') waitReason = 'waiting-human-submit';
       else if (viewState === 'verifying') waitReason = 'verifying';
       else if (viewState === 'manual') waitReason = 'needs-human';

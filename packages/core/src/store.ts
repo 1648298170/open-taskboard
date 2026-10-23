@@ -998,7 +998,7 @@ export class Store {
    */
   wakeQueueSnapshot(nowIso: string, opts?: {
     projectId?: string; prefix?: string; limit?: number;
-    view?: 'ready' | 'delayed' | 'processing' | 'manual'; cursor?: string;
+    view?: 'ready' | 'delayed' | 'queued' | 'processing' | 'manual'; cursor?: string;
   }): {
     revision: number;
     counts: { pending: number; readyByTime: number; delayed: number; processing: number; manual: number };
@@ -1083,6 +1083,11 @@ export class Store {
   /** §5 迁移护栏：同 Session 在旧 URL 命名空间下是否仍有活动租约。 */
   wakeLeaseHasActiveForSession(sessionId: string, excludeKey: string, nowIso: string): boolean {
     return this.wakeLeases.hasActiveLegacyForSession(sessionId, excludeKey, nowIso);
+  }
+
+  /** §P1-4: 服务端证据驱动幂等收尾（monitor 专用，CAS 绑 dispatch_id）。 */
+  finalizeDispatch(commentId: string, dispatchId: string, outcome: 'processed' | 'manual', error: string): boolean {
+    return this.comments.finalizeDispatch(commentId, dispatchId, outcome, error);
   }
 
   /** §7 运行阶段证据写入（monitor/TUI 专用，CAS 绑 dispatch_id）。 */

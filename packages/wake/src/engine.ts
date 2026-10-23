@@ -24,7 +24,7 @@ import {
 /** The Store slice the engine depends on (the facade itself satisfies it). */
 export type WakeStore = Pick<
   Store,
-  'claimNextWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'queueMeta' | 'requeueWake' | 'deferWakeBusy' | 'deferWakeUnknown' | 'deferBusyTimeout' | 'resetBusy' | 'closeBusyAt' | 'terminalizeWake' | 'completeTerminalWake' | 'absentScan' | 'setRunEvidence' | 'listStaleProcessing' | 'listOrphanProcessing' | 'recordExecutionEvent' | 'subscribe' | 'registerWakeEngine' | 'heartbeatWakeEngine' |   'wakeLeaseAcquire' | 'wakeLeaseRenew' | 'wakeLeaseMarkDispatching' | 'wakeLeaseMarkSent' | 'wakeLeaseReleaseHeld' | 'wakeLeaseConclude' | 'wakeLeaseGet' | 'wakeLeaseFindByComment' | 'wakeLeaseHasProtection' | 'wakeLeaseHasActiveForSession'
+  'claimNextWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'queueMeta' | 'requeueWake' | 'deferWakeBusy' | 'deferWakeUnknown' | 'deferBusyTimeout' | 'resetBusy' | 'closeBusyAt' | 'terminalizeWake' | 'completeTerminalWake' | 'absentScan' | 'setRunEvidence' | 'finalizeDispatch' | 'listStaleProcessing' | 'listOrphanProcessing' | 'recordExecutionEvent' | 'subscribe' | 'registerWakeEngine' | 'heartbeatWakeEngine' |   'wakeLeaseAcquire' | 'wakeLeaseRenew' | 'wakeLeaseMarkDispatching' | 'wakeLeaseMarkSent' | 'wakeLeaseReleaseHeld' | 'wakeLeaseConclude' | 'wakeLeaseGet' | 'wakeLeaseFindByComment' | 'wakeLeaseHasProtection' | 'wakeLeaseHasActiveForSession'
 >;
 
 /** Narrow child-process surface so tests can inject a deterministic spawn. */
@@ -106,6 +106,13 @@ export interface WakeEngineOptions {
    * 超过后 +24h 纯重排（不耗 attempts）。默认 2 小时。
    */
   busyMaxWaitMs?: number;
+  /**
+   * §P1-3: bounded verification window for the delivery monitor. When the
+   * deadline expires without matching evidence, recover-mode monitors release
+   * the round safely (nothing-proven-sent) while alert-mode only reports.
+   * Default 10 minutes.
+   */
+  monitorDeadlineMs?: number;
   /** 指数退避的基数与上限（毫秒）。默 30s 起 10min 封顶。 */
   backoffBaseMs?: number;
   backoffMaxMs?: number;
@@ -255,6 +262,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       // I0：发送前中断——回收为 pending（attempts 保留）；T9：busy 窗口按 updated_at 关闭。
       if (busySince) store.closeBusyAt(commentId, claimToken, dispatchId ?? '', updatedAt ?? nowIso());
       if (store.releaseWake(commentId, claimToken, 'pending')) {
+        requestPump(); // §4 P1-1: 回到可调度状态即触发续调
         await reportExecution(issueId, 'queued', '发送前中断，已自动恢复（不消耗重试预算）');
       }
       return;
@@ -274,6 +282,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         if (store.releaseWake(commentId, claimToken, 'processed')) {
           const lease = dispatchId ? store.wakeLeaseFindByComment(commentId, dispatchId) : null;
           if (lease) store.wakeLeaseConclude(lease.leaseKey, lease.fence, dispatchId, nowIso());
+          requestPump(); // §4 P1-1: 核验完成后自动续调下一条
           await reportExecution(issueId, err ? 'failed' : 'succeeded',
             err ? `恢复核验：Agent 返回错误：${String(err).slice(0, 500)}`
                 : '恢复核验：已确认完成（marker + assistant 回复 + idle）');
@@ -373,7 +382,8 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
 
   const monitorOpenCodeSession = async (
     issueId: string, sessionId: string, serverUrl: string, marker: string,
-    commentId: string, dispatchId: string,
+    commentId: string, dispatchId: string, claimToken: string,
+    recovery: 'alert' | 'recover',
   ): Promise<void> => {
     const monitorKey = `${sessionId}:${marker}`;
     if (monitoredSessions.has(monitorKey)) return;
@@ -381,7 +391,8 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     let observedBusy = false;
     let reportedRunning = false;
     let matchedPrompt = false;
-    const deadline = Date.now() + 10 * 60_000;
+    // §P1-3: 有界核验——deadline 可配置（测试用小值），不得无限挂起
+    const deadline = Date.now() + (options.monitorDeadlineMs ?? 10 * 60_000);
     try {
       while (running && Date.now() < deadline) {
         await sleep(2_000);
@@ -414,13 +425,22 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         }
         if (assistant && status === 'idle') {
           const failure = assistant.info?.error;
+          // §P1-4: 证据充分（关联 assistant + idle）→ 服务端幂等收尾，不依赖 Agent
+          // 自觉标 processed；报错不伪造 processed → terminal_at 人工门禁；
+          // 收尾释放会话后立即续调（C1 触发器）；CAS 绑 dispatch_id 防迟到覆盖。
+          const detail = failure ? (typeof failure === 'string' ? failure : JSON.stringify(failure)).slice(0, 1500) : '';
+          const finalized = store.finalizeDispatch(commentId, dispatchId, failure ? 'manual' : 'processed', detail);
+          const roundLease = store.wakeLeaseFindByComment(commentId, dispatchId);
+          if (roundLease) store.wakeLeaseConclude(roundLease.leaseKey, roundLease.fence, dispatchId, nowIso());
+          if (finalized) requestPump();
           if (failure) {
-            const detail = typeof failure === 'string' ? failure : JSON.stringify(failure);
             await reportExecution(issueId, 'failed',
-              `OpenCode 已返回与本次唤醒关联的 Assistant 错误：${detail.slice(0, 1500)}`);
+              `OpenCode 已返回与本次唤醒关联的 Assistant 错误（已转人工门禁）：${detail}`);
           } else {
-            await reportExecution(issueId, 'succeeded',
-              `已匹配本次唤醒标识 ${marker}，并观察到后续 Assistant 回复且 Session 已空闲`);
+            await reportExecution(issueId, finalized ? 'succeeded' : 'queued',
+              finalized
+                ? `已匹配本次唤醒标识 ${marker} 并观察到 Assistant 回复+Session 空闲；服务端已安全收尾并续调队列`
+                : `已匹配本次唤醒标识 ${marker}（该轮已由其他路径收尾）`);
           }
           return;
         }
@@ -431,7 +451,20 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
           observedBusy = false;
         }
       }
-      if (running) log(`watch: stopped completion observation for session ${sessionId} after 10 minutes (matched prompt: ${matchedPrompt})`);
+      if (running && !matchedPrompt && recovery === 'recover') {
+        // §P1-3: 结果未知 + 有界核验内 marker 始终未出现 → 充分证据表明未送达：
+        // CAS 释放租约、评论回队列重试，并立即续调。迟到证据被 fence/dispatch 阻断。
+        const lease = store.wakeLeaseFindByComment(commentId, dispatchId);
+        const releasedLease = lease ? store.wakeLeaseConclude(lease.leaseKey, lease.fence, dispatchId, nowIso()) : false;
+        if (store.releaseWake(commentId, claimToken, 'pending')) {
+          requestPump();
+          error(`watch: delivery verification for session ${sessionId} found no trace of the marker within the deadline; recovered the round for retry (lease concluded: ${releasedLease})`);
+        } else {
+          error(`watch: delivery verification inconclusive for comment ${commentId}; a newer attempt owns the row`);
+        }
+      } else if (running) {
+        log(`watch: stopped completion observation for session ${sessionId} after ${Math.round((options.monitorDeadlineMs ?? 10 * 60_000) / 1000)}s (matched prompt: ${matchedPrompt}, mode: ${recovery})`);
+      }
     } catch (err) {
       error(`watch: session completion observation failed for ${sessionId}: ${(err as Error).message}`);
     } finally {
@@ -480,7 +513,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
    * §4：只投递已由 claimNextWake 原子领取的候选（claim 发生在 pump 中，
    * 全局顺序由 DB 原子领取决定）。返回 true 表示本轮已处置（含安全延后）。
    */
-  const deliverWake = async (item: WakeItem, claim: { token: string; dispatchId: string }): Promise<boolean> => {
+  const deliverWake = async (item: WakeItem, claim: { token: string; dispatchId: string }, ctx?: { phase: string; leaseKey?: string; fence?: number }): Promise<boolean> => {
     const issue = store.getIssue(item.issueId);
     if (!issue) {
       error(`watch: cannot load task ${item.issueId} (not found); reverting the claim`);
@@ -531,10 +564,43 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         log(`watch: legacy lease still active for session ${sessionId}; deferred wake #${item.issueId} until ${deferUntil}`);
         return true;
       }
+      // §P1-2: Worktree/Session 映射校验前置到租约与发送临界区之前——纯只读
+      // 检查（无副作用），失败时不产生任何需要收尾的租约。
+      // ① 不匹配（确定性结果）→ failDelivery 退避重试；② 校验网络/服务异常
+      // → 发送未发生，按未知保守 defer（不耗 attempts），退避后重试校验。
+      if (issue.worktreePath) {
+        try {
+          const sessionsRes = await request(`${healthyBase}/session?directory=${encodeURIComponent(issue.worktreePath)}`);
+          if (!sessionsRes.ok) throw new Error(`OpenCode returned HTTP ${sessionsRes.status}`);
+          const sessions = await sessionsRes.json() as { id?: string; directory?: string }[];
+          const boundSession = Array.isArray(sessions) ? sessions.find(entry => entry?.id === sessionId) : undefined;
+          const normalizePath = (value: string): string => {
+            const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+            return deps.platform === 'win32' ? normalized.toLowerCase() : normalized;
+          };
+          if (!boundSession?.directory || normalizePath(boundSession.directory) !== normalizePath(issue.worktreePath)) {
+            const reason = `Session ${sessionId} 不在绑定的 Worktree 目录 ${issue.worktreePath} 中；请在任务详情中创建工作树 Session 后重试`;
+            error(`watch: refusing to dispatch task ${item.issueId}; session directory does not match worktree path (session=${sessionId}, lease=${leaseKey})`);
+            await failDelivery(item, claimToken, dispatchId, reason);
+            return false;
+          }
+        } catch (err) {
+          const deferUntil = new Date(Date.now() + (options.busyDeferMs ?? 30_000)).toISOString();
+          if (!store.deferWakeUnknown(item.commentId, claimToken, dispatchId, deferUntil)) {
+            error(`watch: worktree validation unavailable and comment ${item.commentId} is no longer owned by this attempt`);
+            return true;
+          }
+          error(`watch: worktree validation for session ${sessionId} failed (${(err as Error).message}); deferred to ${deferUntil} (nothing sent)`);
+          await reportExecution(item.issueId, 'queued', 'Worktree 校验暂不可用（网络/服务异常），已退避重试（未投递，不消耗重试预算）');
+          return true;
+        }
+      }
+      if (ctx) ctx.phase = 'validated';
       // 会话保护租约：先于 probe 获取，覆盖 probe→POST→ack 临界区。
       let lease = store.wakeLeaseRenew({ leaseKey, holderRun: runId, commentId: item.commentId, dispatchId, nowIso: nowIso(), ttlMs: LEASE_TTL_MS })
         ? store.wakeLeaseGet(leaseKey)
         : store.wakeLeaseAcquire({ leaseKey, sessionId, serverUrl: healthyBase, holderRun: runId, commentId: item.commentId, dispatchId, nowIso: nowIso(), ttlMs: LEASE_TTL_MS });
+      if (ctx) { ctx.phase = 'leased'; ctx.leaseKey = leaseKey; }
       if (!lease) {
         // §3：评论已 claim 但 Session 租约被他人持有——这不是投递失败，
         // 不得增加 attempts；CAS 归还队列并设 有界退避（busy 窗口语义），
@@ -587,6 +653,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
       }
       // probe=idle：busy episode 结束，清零后进入发送临界区。
       store.resetBusy(item.commentId, claimToken, dispatchId);
+      if (ctx) { ctx.phase = 'dispatching'; ctx.leaseKey = leaseKey; ctx.fence = lease.fence; }
       if (!store.wakeLeaseMarkDispatching(leaseKey, lease.fence, dispatchId, nowIso())) {
         // §3：租约在核验间隙被接管（fence 变更）——发送权已失但评论仍归本轮，
         // CAS 归还队列（不增 attempts），绝不触碰新持有者的租约。
@@ -599,35 +666,12 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         log(`watch: send lease for session ${sessionId} was taken over; deferred wake #${item.issueId} until ${deferUntil}`);
         return true;
       }
-      // A task bound to a worktree must not dispatch into a Session rooted at
-      // the project's main checkout. Query sessions in the target directory
-      // and fail closed when the bound Session cannot be found there.
-      if (issue.worktreePath) {
-        try {
-          const sessionsRes = await request(`${healthyBase}/session?directory=${encodeURIComponent(issue.worktreePath)}`);
-          if (!sessionsRes.ok) throw new Error(`OpenCode returned HTTP ${sessionsRes.status}`);
-          const sessions = await sessionsRes.json() as { id?: string; directory?: string }[];
-          const boundSession = Array.isArray(sessions) ? sessions.find(entry => entry?.id === sessionId) : undefined;
-          const normalizePath = (value: string): string => {
-            const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
-            return deps.platform === 'win32' ? normalized.toLowerCase() : normalized;
-          };
-          if (!boundSession?.directory || normalizePath(boundSession.directory) !== normalizePath(issue.worktreePath)) {
-            const reason = `Session ${sessionId} 不在绑定的 Worktree 目录 ${issue.worktreePath} 中；请在任务详情中创建工作树 Session 后重试`;
-            error(`watch: refusing to dispatch task ${item.issueId}; session directory does not match worktree path`);
-            await failDelivery(item, claimToken, dispatchId, reason);
-            return false;
-          }
-        } catch (err) {
-          const reason = `无法验证 Session ${sessionId} 与 Worktree 目录的对应关系：${(err as Error).message}`;
-          error(`watch: ${reason}`);
-          await failDelivery(item, claimToken, dispatchId, reason);
-          return false;
-        }
-      }
+      // A task bound to a worktree must never dispatch into a Session rooted at
+      // the project's main checkout — validated pre-lease above (§P1-2), so no
+      // post-dispatching failure path can leave an active lease behind.
+      const correlationMarker = makeWakeCorrelationMarker(item.commentId, dispatchId);
+      const correlatedPrompt = `${prompt}\n\n[Taskboard correlation marker: ${correlationMarker}. Treat this as metadata; do not repeat it in your answer.]`;
       try {
-        const correlationMarker = makeWakeCorrelationMarker(item.commentId, dispatchId);
-        const correlatedPrompt = `${prompt}\n\n[Taskboard correlation marker: ${correlationMarker}. Treat this as metadata; do not repeat it in your answer.]`;
         const res = await request(`${healthyBase}/session/${encodeURIComponent(sessionId)}/prompt_async`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -638,9 +682,10 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         });
         if (res.ok) {
           store.wakeLeaseMarkSent(leaseKey, lease.fence, dispatchId, nowIso(), LEASE_VERIFY_TTL_MS);
+        if (ctx) ctx.phase = 'sent';
           log(`watch: queued prompt in bound session ${sessionId}`);
           await reportExecution(item.issueId, 'queued', `提示词已提交到绑定的 OpenCode Session ${sessionId}；该状态表示已排队，不代表 Agent 已完成`);
-          void monitorOpenCodeSession(item.issueId, sessionId, healthyBase, correlationMarker, item.commentId, dispatchId);
+          void monitorOpenCodeSession(item.issueId, sessionId, healthyBase, correlationMarker, item.commentId, dispatchId, claimToken, 'alert');
           return true;
         }
         if (res.status < 500) {
@@ -651,13 +696,18 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
           return false;
         }
         store.wakeLeaseMarkSent(leaseKey, lease.fence, dispatchId, nowIso(), LEASE_VERIFY_TTL_MS);
+        if (ctx) ctx.phase = 'sent';
         await reportExecution(item.issueId, 'queued', `提示词提交返回 HTTP ${res.status}（结果未知），按可能已投递进入核验`);
-        void monitorOpenCodeSession(item.issueId, sessionId, healthyBase, correlationMarker, item.commentId, dispatchId);
+        void monitorOpenCodeSession(item.issueId, sessionId, healthyBase, correlationMarker, item.commentId, dispatchId, claimToken, 'recover');
         return true;
       } catch (err) {
         store.wakeLeaseMarkSent(leaseKey, lease.fence, dispatchId, nowIso(), LEASE_VERIFY_TTL_MS);
+        if (ctx) ctx.phase = 'sent';
         error(`watch: bound session ${sessionId} failed (${(err as Error).message}); 结果未知，按可能已投递进入核验`);
         await reportExecution(item.issueId, 'queued', '提示词提交结果未知（网络异常），按可能已投递进入核验');
+        // §P1-3: 异常路径同样必须进入有界主动核验（此前缺失——标 sent 后直接返回，
+        // 无人验证 marker 是否出现在 OpenCode history，既不重发也无收尾）。
+        void monitorOpenCodeSession(item.issueId, sessionId, healthyBase, correlationMarker, item.commentId, dispatchId, claimToken, 'recover');
         return true;
       }
     }
@@ -809,10 +859,26 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
             source: 'event',
           };
           inFlight.add(item.commentId);
+          // §P1-5: 执行上下文——异常按发送阶段分类恢复
+          const ctx = { phase: 'claimed', leaseKey: undefined as string | undefined, fence: undefined as number | undefined };
           try {
-            await deliverWake(item, candidate);
+            await deliverWake(item, candidate, ctx);
           } catch (err) {
-            error(`watch: wake failed: ${(err as Error).message}`);
+            error(`watch: wake failed at phase '${ctx.phase}': ${(err as Error).message}`);
+            if (ctx.phase === 'claimed' || ctx.phase === 'validated' || ctx.phase === 'leased') {
+              // 未进入发送临界区：CAS 回队列 + 尽力释放 held 租约，不耗 attempts
+              if (ctx.leaseKey && ctx.fence !== undefined) {
+                store.wakeLeaseReleaseHeld(ctx.leaseKey, ctx.fence, runId, item.commentId, candidate.dispatchId);
+              }
+              store.releaseWake(item.commentId, candidate.token, 'pending');
+              requestPump();
+            } else if (ctx.phase === 'dispatching') {
+              // dispatching 且 POST 尚未尝试（可证未发）：幂等 conclude + 回队列
+              store.wakeLeaseConclude(ctx.leaseKey ?? '', ctx.fence ?? -1, candidate.dispatchId, new Date().toISOString());
+              store.releaseWake(item.commentId, candidate.token, 'pending');
+              requestPump();
+            }
+            // sent/monitoring 阶段：交给 monitor 与恢复扫描核验，不盲目重发
             break;
           } finally {
             inFlight.delete(item.commentId);
@@ -822,6 +888,11 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
     } finally {
       pumping = false;
     }
+  };
+
+  /** §4 P1-1: 统一调度入口的即时触发（收尾/释放后自动续调）；pump 自身单飞去重。 */
+  const requestPump = (): void => {
+    if (running) void pump();
   };
 
   /**
@@ -848,6 +919,8 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
             if (lease && lease.state !== 'released') {
               store.wakeLeaseConclude(lease.leaseKey, lease.fence, dispatchId, nowIso());
             }
+            // §4 P1-1: 本轮收尾释放会话 → 立即续调排队的下一条（不经轮询等待）
+            requestPump();
           }
         }
       }

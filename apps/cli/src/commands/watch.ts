@@ -78,7 +78,7 @@ export const watchCommand: Command = {
           ignoreAuthors
         }
       },
-      { lockKey }
+      { lockKey, pollMs: 30_000 }
     );
 
     await engine.start();

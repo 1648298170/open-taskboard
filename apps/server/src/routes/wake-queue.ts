@@ -8,7 +8,7 @@ export default async function wakeQueueRoutes(app: FastifyInstance, opts: { stor
   app.get('/api/wake-queue', async (req, reply) => {
     const q = req.query as { projectId?: string; limit?: string; view?: string; cursor?: string };
     const limit = q.limit ? Math.min(Math.max(parseInt(q.limit, 10) || 50, 1), 200) : 50;
-    const views = ['ready', 'delayed', 'processing', 'manual'] as const;
+    const views = ['ready', 'delayed', 'queued', 'processing', 'manual'] as const;
     const view = views.includes(q.view as typeof views[number]) ? q.view as typeof views[number] : undefined;
     const snap = store.wakeQueueSnapshot(new Date().toISOString(), {
       projectId: q.projectId || undefined, limit, view, cursor: q.cursor || undefined,

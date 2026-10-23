@@ -75,16 +75,19 @@ export function WakeQueuePanel({ open, onClose, onOpenIssue }: {
   const [busyId, setBusyId] = useState<string | null>(null);
   const cursorRef = useRef<string | null>(null);
 
+  const tabToView = (t: Tab): 'queued' | 'processing' | 'manual' =>
+    t === 'queued' ? 'queued' : t === 'inflight' ? 'processing' : 'manual';
+
   const refresh = useCallback(async () => {
     try {
       setError(null);
-      const d = await api_.wakeQueue({ limit: 50 });
+      const d = await api_.wakeQueue({ limit: 50, view: tabToView(tab) });
       cursorRef.current = d.nextCursor;
       setData(d);
     } catch {
       setError('加载失败');
     }
-  }, []);
+  }, [tab]);
 
   // §10: 打开期间 20s 轮询兜底——SSE 事件丢失时仍能刷新，且轮询只拉快照、
   // 不触发任何调度行为。
@@ -123,7 +126,7 @@ export function WakeQueuePanel({ open, onClose, onOpenIssue }: {
     if (!cursor) return;
     try {
       setError(null);
-      const d = await api_.wakeQueue({ limit: 50, cursor });
+      const d = await api_.wakeQueue({ limit: 50, view: tabToView(tab), cursor });
       cursorRef.current = d.nextCursor;
       setData(prev => {
         if (!prev) return d;
@@ -142,7 +145,7 @@ export function WakeQueuePanel({ open, onClose, onOpenIssue }: {
 
   if (!open) return null;
 
-  const items = (data?.items ?? []).filter(i => TAB_VIEW_STATES[tab].includes(i.viewState));
+  const items = data?.items ?? [];
 
   return (
     <aside className="wake-queue-panel" role="complementary" aria-label="唤醒队列">
@@ -159,7 +162,7 @@ export function WakeQueuePanel({ open, onClose, onOpenIssue }: {
       </div>
       <div className="wake-queue-tabs">
         {([['queued', '待调度'], ['inflight', '已领取/执行中'], ['manual', '需人工']] as const).map(([v, label]) => (
-          <button key={v} className={`wake-queue-tab${tab === v ? ' on' : ''}`} onClick={() => setTab(v)}>{label}</button>
+          <button key={v} className={`wake-queue-tab${tab === v ? ' on' : ''}`} onClick={() => { cursorRef.current = null; setTab(v); void refresh(); }}>{label}</button>
         ))}
         <button className="icon-btn wake-queue-refresh" title="刷新" onClick={() => void refresh()}>
           <RefreshCw size={14} />

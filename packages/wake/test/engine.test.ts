@@ -577,6 +577,64 @@ describe('wake engine: atomic claim pump (§4)', () => {
     }
   });
 
+  it('P1-1: concluding a round immediately pumps due candidates without any new comment', async () => {
+    let promptCount = 0;
+    const { store, db, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) { promptCount++; return okResponse(); }
+        return okResponse();
+      },
+    });
+    const secondIssue = store.createIssue({ projectId: 'p1', title: 'Second' }).id;
+    await engine.start();
+    try {
+      const first = store.addComment(issueId, { author: 'web', body: '@agent 第一条' }).id;
+      await waitFor(() => promptCount === 1);
+      const second = store.addComment(secondIssue, { author: 'web', body: '@agent 第二条' }).id;
+      await waitFor(() => store.queueMeta(second)!.notBefore !== null, 3_000);
+      // 第二条已到期（defer 退避清零）但仍被租约挡住；A 一收尾必须立即续调
+      db.prepare('UPDATE comments SET not_before = NULL WHERE id = ?').run(second);
+      store.updateComment(first, { status: 'processed' }, 'web');
+      await waitFor(() => promptCount === 2, 2_000);
+      assert.equal(store.getComment(second)!.status, 'processing', 'B auto-dispatched after A concluded');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('P1-1: a deferred wake continues within the poll bound after the blocker concludes', async () => {
+    let promptCount = 0;
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      engineOptions: { busyDeferMs: 200, pollMs: 120 },
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) { promptCount++; return okResponse(); }
+        return okResponse();
+      },
+    });
+    const secondIssue = store.createIssue({ projectId: 'p1', title: 'Second' }).id;
+    await engine.start();
+    try {
+      const first = store.addComment(issueId, { author: 'web', body: '@agent 第一条' }).id;
+      await waitFor(() => promptCount === 1);
+      const second = store.addComment(secondIssue, { author: 'web', body: '@agent 第二条' }).id;
+      await waitFor(() => store.queueMeta(second)!.notBefore !== null, 3_000);
+      // agent 确认完成（无第三条评论、无重启）→ conclude；B 在 defer 退避到期的有界时间内自动续调
+      store.updateComment(first, { status: 'processed' }, 'web');
+      await waitFor(() => promptCount === 2, 3_000);
+      assert.equal(store.getComment(first)!.status, 'processed');
+      assert.equal(store.getComment(second)!.status, 'processing');
+      assert.equal(store.wakeLeaseFindByComment(first, store.dispatchIdOf(first)!)?.state ?? 'released', 'released', 'A lease concluded');
+    } finally {
+      await engine.stop();
+    }
+  });
+
   it('a TUI append persists tui-waiting evidence (§7)', async () => {
     const { store, issueId, engine } = fixture({
       sessionId: null,
@@ -629,6 +687,227 @@ describe('wake engine: atomic claim pump (§4)', () => {
       // monitor 首轮轮询在 2s 后；观察 busy + 匹配 prompt → 持久化 running
       await waitFor(() => store.queueMeta(commentId)!.runEvidence === 'running', 6_000);
       assert.equal(store.getComment(commentId)!.status, 'processing');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('P1-4: assistant reply + idle evidence finalizes the round server-side and auto-dispatches the next', async () => {
+    let commentId = '';
+    let dispatchId = '';
+    let promptCalls = 0;
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      engineOptions: { busyDeferMs: 200 },
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) { promptCalls++; return okResponse(); }
+        if (url.includes('/session/status')) {
+          return Promise.resolve(new Response(JSON.stringify({ ses_1: { type: 'idle' } }), { status: 200 }));
+        }
+        if (url.includes('/message')) {
+          const marker = `taskboard-wake:${commentId}:${dispatchId}`;
+          return Promise.resolve(new Response(JSON.stringify([
+            { info: { id: 'm1', role: 'user', time: { created: 1 } }, parts: [{ type: 'text', text: `[Taskboard correlation marker: ${marker}. Treat this as metadata...]` }] },
+            { info: { id: 'm2', role: 'assistant', parentID: 'm1', time: { created: 2 } }, parts: [{ type: 'text', text: '业务已完成' }] },
+          ]), { status: 200 }));
+        }
+        return okResponse();
+      },
+    });
+    const secondIssue = store.createIssue({ projectId: 'p1', title: 'Second' }).id;
+    await engine.start();
+    try {
+      commentId = store.addComment(issueId, { author: 'web', body: '@agent 漏标 processed' }).id;
+      await waitFor(() => promptCalls === 1);
+      dispatchId = store.dispatchIdOf(commentId)!;
+      const second = store.addComment(secondIssue, { author: 'web', body: '@agent 排队者' }).id;
+      // Agent 不标 processed：monitor 依据 assistant+idle 证据服务端收尾
+      await waitFor(() => store.getComment(commentId)!.status === 'processed', 6_000);
+      // 收尾释放会话 → 排队的 B 自动派发（C1 触发器）；A 的租约墓碑行会被 B
+      // 合法接管（fence+1），故不断言旧行内容，而以「B 可派发」为释放证据
+      await waitFor(() => store.getComment(second)!.status === 'processing', 3_000);
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('P1-4: assistant error finalizes to the manual gate instead of faking processed', async () => {
+    let commentId = '';
+    let dispatchId = '';
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) return okResponse();
+        if (url.includes('/session/status')) {
+          return Promise.resolve(new Response(JSON.stringify({ ses_1: { type: 'idle' } }), { status: 200 }));
+        }
+        if (url.includes('/message')) {
+          const marker = `taskboard-wake:${commentId}:${dispatchId}`;
+          return Promise.resolve(new Response(JSON.stringify([
+            { info: { id: 'm1', role: 'user', time: { created: 1 } }, parts: [{ type: 'text', text: `[Taskboard correlation marker: ${marker}. Treat this as metadata...]` }] },
+            { info: { id: 'm2', role: 'assistant', parentID: 'm1', time: { created: 2 }, error: '业务执行失败' }, parts: [{ type: 'text', text: '出错了' }] },
+          ], { status: 200 })));
+        }
+        return okResponse();
+      },
+    });
+    await engine.start();
+    try {
+      commentId = store.addComment(issueId, { author: 'web', body: '@agent assistant 报错' }).id;
+      await waitFor(() => store.getComment(commentId)!.status === 'processing');
+      dispatchId = store.dispatchIdOf(commentId)!;
+      // assistant 报错：证据充分但失败 → 转人工门禁，不伪造 processed
+      await waitFor(() => store.queueMeta(commentId)!.terminalAt !== null, 6_000);
+      const meta = store.queueMeta(commentId)!;
+      assert.equal(meta.status, 'pending', 'error lands on the manual gate, not processed');
+      assert.ok(meta.terminalAt, 'terminal gate must be set');
+      assert.equal(
+        store.wakeLeaseFindByComment(commentId, dispatchId)!.state,
+        'released',
+        'lease must be concluded on error finalize',
+      );
+    } finally {
+      await engine.stop();
+    }
+  });
+});
+
+describe('wake engine: unknown-delivery verification (P1-3)', () => {
+  it('P1-3: response lost but prompt received — monitor verifies and never re-sends', async () => {
+    let commentId = '';
+    let dispatchId = '';
+    let promptCalls = 0;
+    let sent = false;
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) {
+          promptCalls++;
+          sent = true;
+          // 模拟响应丢失：请求已被 OpenCode 接收但 HTTP 响应中断
+          return Promise.reject(new Error('socket hang up'));
+        }
+        if (url.includes('/session/status')) {
+          // 发送前必须 idle（否则候选被 defer、monitor 不启动）；发送后 busy
+          return Promise.resolve(new Response(JSON.stringify(sent ? { ses_1: { type: 'busy' } } : {}), { status: 200 }));
+        }
+        if (url.includes('/message')) {
+          const marker = `taskboard-wake:${commentId}:${dispatchId}`;
+          return Promise.resolve(new Response(JSON.stringify([
+            { info: { id: 'm1', role: 'user', time: { created: 1 } }, parts: [{ type: 'text', text: `[Taskboard correlation marker: ${marker}. Treat this as metadata...]` }] },
+          ]), { status: 200 }));
+        }
+        return okResponse();
+      },
+    });
+    await engine.start();
+    try {
+      commentId = store.addComment(issueId, { author: 'web', body: '@agent 响应丢失' }).id;
+      await waitFor(() => store.getComment(commentId)!.status === 'processing');
+      dispatchId = store.dispatchIdOf(commentId)!;
+      // monitor 核验：history 中出现 marker → 已接收，继续观察，绝不重发
+      await waitFor(() => store.queueMeta(commentId)!.runEvidence === 'running', 6_000);
+      assert.equal(promptCalls, 1, 'unknown result must be verified, never blindly re-sent');
+      assert.equal(store.getComment(commentId)!.status, 'processing');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('P1-3: verified non-delivery is safely recovered and retried once (§P1-3)', async () => {
+    let promptCalls = 0;
+    let failPrompt = true;
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      engineOptions: { monitorDeadlineMs: 400 },
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) {
+          promptCalls++;
+          if (failPrompt) return Promise.reject(new Error('connection reset'));
+          return okResponse();
+        }
+        // history 始终无 marker：核验证明未送达
+        return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+      },
+    });
+    await engine.start();
+    try {
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 未送达恢复' }).id;
+      // 第一次尝试：异常 → sent(unknown) → monitor 核验 400ms 内无 marker → 安全恢复回队列并自动重试
+      await waitFor(() => promptCalls === 1);
+      // 恢复网络：服务端恢复路径触发重试成功（无需新评论、不耗 attempts）
+      failPrompt = false;
+      await waitFor(() => promptCalls === 2, 4_000);
+      assert.equal(store.queueMeta(commentId)!.attempts, 0, 'verified non-delivery recovery must not consume retries');
+      assert.equal(store.getComment(commentId)!.status, 'processing');
+    } finally {
+      await engine.stop();
+    }
+  });
+});
+
+describe('wake engine: pre-dispatch worktree validation (P1-2)', () => {
+  it('worktree mismatch requeues via failDelivery without leaving a lease (nothing sent)', async () => {
+    let promptCount = 0;
+    const { store, db, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) { promptCount++; return okResponse(); }
+        // /session?directory 返回不含目标 session 的列表 → 校验不匹配
+        return Promise.resolve(new Response(JSON.stringify([{ id: 'ses_other', directory: 'D:/other' }]), { status: 200 }));
+      },
+    });
+    await engine.start();
+    try {
+      db.prepare('UPDATE issues SET worktree_path = ? WHERE id = ?').run('D:/wt', issueId);
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent worktree 不匹配' }).id;
+      await waitFor(() => {
+        const c = store.getComment(commentId)!;
+        return c.status === 'pending' && store.queueMeta(commentId)!.attempts === 1;
+      }, 3_000);
+      assert.equal(promptCount, 0, 'nothing may be sent on mismatch');
+      assert.equal(
+        store.wakeLeaseFindByComment(commentId, store.dispatchIdOf(commentId)!),
+        null,
+        'no lease may survive a pre-dispatch validation failure',
+      );
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('worktree validation network failure defers as unknown without consuming attempts', async () => {
+    let promptCount = 0;
+    const { store, db, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) { promptCount++; return okResponse(); }
+        if (url.includes('/session?directory')) return Promise.reject(new Error('connection reset'));
+        return okResponse();
+      },
+    });
+    await engine.start();
+    try {
+      db.prepare('UPDATE issues SET worktree_path = ? WHERE id = ?').run('D:/wt', issueId);
+      const commentId = store.addComment(issueId, { author: 'web', body: '@agent 校验网络异常' }).id;
+      await waitFor(() => {
+        const c = store.getComment(commentId)!;
+        return c.status === 'pending' && store.queueMeta(commentId)!.notBefore !== null;
+      }, 3_000);
+      assert.equal(store.queueMeta(commentId)!.attempts, 0, 'validation outage is not a delivery failure');
+      assert.equal(promptCount, 0, 'nothing may be sent on unknown validation');
     } finally {
       await engine.stop();
     }

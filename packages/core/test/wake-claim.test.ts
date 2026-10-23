@@ -264,6 +264,28 @@ describe('wake queue center: priority & revision (Q1)', () => {
     const filtered = store.wakeQueueSnapshot(new Date().toISOString(), { projectId: 'p1' });
     assert.ok(filtered.counts.pending >= 1, 'project-filtered snapshot must also work');
   });
+
+  it('waitReason uses per-item session evidence, not global processing counts (P2-2)', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new Store('.unused', db);
+    store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_1' });
+    store.createProject({ id: 'p2', name: 'Q', defaultSessionId: 'ses_2' });
+    const i1 = store.createIssue({ projectId: 'p1', title: 'T1' }).id;
+    const i2 = store.createIssue({ projectId: 'p2', title: 'T2' }).id;
+    const a = store.addComment(i1, { author: 'web', body: '@agent 排队者' }).id;
+    const b = store.addComment(i2, { author: 'web', body: '@agent 全局执行中' }).id;
+    // 全局存在 processing（p2 的 B），但 A 的 Session 无任何租约证据 → 不得虚报
+    assert.ok(store.claimWake(b, 'watch', 'run-b'));
+    const snap1 = store.wakeQueueSnapshot(new Date().toISOString());
+    assert.equal(snap1.items.find(x => x.commentId === a)!.waitReason, null, 'global processing must not imply session-protected');
+    // A 所属 Session 出现活动租约 → 才允许 session-protected
+    store.wakeLeaseAcquire({
+      leaseKey: 'http://oc.test|ses_1', sessionId: 'ses_1', serverUrl: 'http://oc.test',
+      holderRun: 'run-x', commentId: 'cx', dispatchId: 'dx', nowIso: new Date().toISOString(), ttlMs: 60_000,
+    });
+    const snap2 = store.wakeQueueSnapshot(new Date().toISOString());
+    assert.equal(snap2.items.find(x => x.commentId === a)!.waitReason, 'session-protected', 'same-session active lease must be reported');
+  });
 });
 
 describe('Store.wakeLeaseHasActiveForSession (§5 migration guard)', () => {

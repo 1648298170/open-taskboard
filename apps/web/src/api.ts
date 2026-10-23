@@ -235,7 +235,7 @@ export const api_ = {
     api<{ commits: Commit[] }>('GET', `/api/projects/${projectId}/commits?ref=${encodeURIComponent(ref)}`)
       .then(r => r.commits),
   /** 队列中心快照（v10 Q3）：counts + items 同一读。 */
-  wakeQueue: (opts?: { projectId?: string; limit?: number; view?: 'ready' | 'delayed' | 'processing' | 'manual'; cursor?: string }) => {
+  wakeQueue: (opts?: { projectId?: string; limit?: number; view?: 'ready' | 'delayed' | 'queued' | 'processing' | 'manual'; cursor?: string }) => {
     const params = new URLSearchParams();
     if (opts?.projectId) params.set('projectId', opts.projectId);
     if (opts?.limit) params.set('limit', String(opts.limit));
