@@ -475,6 +475,7 @@ export class CommentRepo {
     const base = `
       FROM comments c JOIN issues i ON i.id = c.issue_id
       WHERE c.author IN ${HUMAN_AUTHORS}
+        AND c.body NOT LIKE '状态变更记录：%'
         AND i.archived_at IS NULL
         ${projectFilter}`;
     const count = (where: string): number =>
