@@ -1085,6 +1085,39 @@ export class Store {
     return this.wakeLeases.hasActiveLegacyForSession(sessionId, excludeKey, nowIso);
   }
 
+  /** §D1: 同 worktree 是否存在其他评论的活动派发（资源互斥）。 */
+  hasActiveDispatchForWorktree(worktreePath: string, excludeCommentId: string): boolean {
+    return this.comments.hasActiveDispatchForWorktree(worktreePath, excludeCommentId);
+  }
+
+  /** §D1: 全局活动派发计数。 */
+  countActiveDispatches(): number {
+    return this.comments.countActiveDispatches();
+  }
+
+  /**
+   * §D2: 取消唤醒——pending 直接落终态；processing 经 dispatch CAS 收尾。
+   * 同事务 conclude 活动租约（取消即本轮终止，Session 立即可派发），
+   * 幂等：已取消返回 false。
+   */
+  cancelWake(commentId: string, reason: string): boolean {
+    if (!reason.trim()) throw new ValidationError('cancel reason must be non-empty');
+    return inTransaction(this.db, () => {
+      const meta = this.comments.queueMeta(commentId);
+      if (!meta) return false;
+      if (meta.terminalAt) return false;
+      const changed = this.comments.cancel(commentId, reason.trim());
+      if (changed && meta.dispatchId) {
+        const lease = this.wakeLeaseFindByComment(commentId, meta.dispatchId);
+        if (lease && lease.state !== 'released') {
+          this.wakeLeaseConclude(lease.leaseKey, lease.fence, meta.dispatchId, now());
+        }
+        this.noteQueueChanged();
+      }
+      return changed;
+    });
+  }
+
   /** §P1-4: 服务端证据驱动幂等收尾（monitor 专用，CAS 绑 dispatch_id）。 */
   finalizeDispatch(commentId: string, dispatchId: string, outcome: 'processed' | 'manual', error: string): boolean {
     return this.comments.finalizeDispatch(commentId, dispatchId, outcome, error);

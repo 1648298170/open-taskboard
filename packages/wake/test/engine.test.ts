@@ -854,6 +854,67 @@ describe('wake engine: unknown-delivery verification (P1-3)', () => {
   });
 });
 
+describe('wake engine: resource mutex & global limit (D1)', () => {
+  it('same worktree across sessions: the second wake defers without dispatching', async () => {
+    let promptCalls = 0;
+    const { store, db, issueId, engine } = fixture({
+      sessionId: 'ses_a',
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) { promptCalls++; return okResponse(); }
+        if (url.includes('/session?directory')) {
+          return Promise.resolve(new Response(JSON.stringify([
+            { id: 'ses_a', directory: 'D:/wt' }, { id: 'ses_b', directory: 'D:/wt' },
+          ]), { status: 200 }));
+        }
+        return okResponse();
+      },
+    });
+    const projectB = store.createProject({ id: 'p2', name: 'Q', defaultSessionId: 'ses_b' });
+    const issueB = store.createIssue({ projectId: projectB.id, title: 'B' }).id;
+    await engine.start();
+    try {
+      db.prepare('UPDATE issues SET worktree_path = ? WHERE id IN (?, ?)').run('D:/wt', issueId, issueB);
+      const a = store.addComment(issueId, { author: 'web', body: '@agent A' }).id;
+      const b = store.addComment(issueB, { author: 'web', body: '@agent B' }).id;
+      await waitFor(() => promptCalls === 1);
+      // B：同 worktree 存在活动派发 → 互斥 defer
+      await waitFor(() => store.getComment(b)!.status === 'pending' && store.queueMeta(b)!.notBefore !== null, 3_000);
+      assert.equal(promptCalls, 1, 'same-worktree second wake must not dispatch in parallel');
+      assert.equal(store.queueMeta(b)!.attempts, 0, 'resource wait must not consume retries');
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  it('D1: global dispatch limit defers new dispatches at the cap', async () => {
+    let promptCalls = 0;
+    const { store, issueId, engine } = fixture({
+      sessionId: 'ses_1',
+      engineOptions: { globalDispatchLimit: 1 },
+      fetchImpl: url => {
+        const health = healthOk(url);
+        if (health) return health;
+        if (url.includes('/prompt_async')) { promptCalls++; return okResponse(); }
+        return okResponse();
+      },
+    });
+    const secondIssue = store.createIssue({ projectId: 'p1', title: 'Second' }).id;
+    await engine.start();
+    try {
+      const first = store.addComment(issueId, { author: 'web', body: '@agent 第一条' }).id;
+      await waitFor(() => promptCalls === 1);
+      const second = store.addComment(secondIssue, { author: 'web', body: '@agent 第二条' }).id;
+      await waitFor(() => store.getComment(second)!.status === 'pending' && store.queueMeta(second)!.notBefore !== null, 3_000);
+      assert.equal(promptCalls, 1, 'the cap must hold new dispatches back');
+      assert.equal(store.queueMeta(second)!.attempts, 0, 'cap defer must not consume retries');
+    } finally {
+      await engine.stop();
+    }
+  });
+});
+
 describe('wake engine: pre-dispatch worktree validation (P1-2)', () => {
   it('worktree mismatch requeues via failDelivery without leaving a lease (nothing sent)', async () => {
     let promptCount = 0;

@@ -7,6 +7,9 @@ import type { Comment, PendingWakeComment } from '../types.js';
 // (terminal_at joins the payload only in the S4 contract batch).
 const COMMENT_COLS = 'id, issue_id AS issueId, author, body, status, created_at AS createdAt, attempts, last_error AS lastError, not_before AS notBefore, terminal_at AS terminalAt';
 const now = (): string => new Date().toISOString();
+// 入队资格口径（用户已确认）：人类作者评论即入队，不再要求 @agent 前缀；
+// agent 执行者（mcp/sisyphus/watch 等）的审计内容按作者天然排除。
+const HUMAN_AUTHORS = "('web', 'admin')".replace(/"/g, "'");
 const shortId = (): string => randomUUID().slice(0, 8);
 
 export interface WakeQueueMeta {
@@ -196,7 +199,7 @@ export class CommentRepo {
       `SELECT c.id, c.issue_id AS issueId, i.project_id AS projectId, i.title AS issueTitle,
               c.author, c.body, c.status, c.created_at AS createdAt
        FROM comments c JOIN issues i ON i.id = c.issue_id
-       WHERE c.status = 'pending' AND c.terminal_at IS NULL AND i.archived_at IS NULL AND (c.not_before IS NULL OR c.not_before <= ?)
+       WHERE c.status = 'pending' AND c.terminal_at IS NULL AND i.archived_at IS NULL AND c.author IN ${HUMAN_AUTHORS} AND (c.not_before IS NULL OR c.not_before <= ?)
        ORDER BY c.queue_priority DESC,
          CASE WHEN c.queue_priority = 1 THEN c.priority_at END ASC,
          COALESCE(c.queued_at, c.created_at) ASC, c.rowid`
@@ -339,6 +342,42 @@ export class CommentRepo {
     return result.changes > 0;
   }
 
+  /** §D1: worktree 级资源互斥——同 worktree 是否存在其他评论的活动派发。 */
+  hasActiveDispatchForWorktree(worktreePath: string, excludeCommentId: string): boolean {
+    return Boolean(this.db.prepare(
+      `SELECT 1 FROM wake_session_leases l
+        JOIN comments c2 ON c2.id = l.comment_id
+        JOIN issues i2 ON i2.id = c2.issue_id
+        WHERE i2.worktree_path = ? AND c2.id != ?
+          AND l.state IN ('dispatching', 'sent', 'unverified_sent')
+        LIMIT 1`
+    ).get(worktreePath, excludeCommentId));
+  }
+
+  /** §D1: 全局活动派发计数（dispatching/sent/unverified_sent）。 */
+  countActiveDispatches(): number {
+    return (this.db.prepare(
+      `SELECT COUNT(*) AS n FROM wake_session_leases WHERE state IN ('dispatching', 'sent', 'unverified_sent')`
+    ).get() as { n: number }).n;
+  }
+
+  /**
+   * §D2: 取消——pending 直接落 terminal_at（人工门禁语义，无自动重投）；
+   * processing 经由 dispatch CAS（finalizeDispatch manual）安全收尾。
+   * 已终态/不存在 → false。取消后租约由调用方 conclude。
+   */
+  cancel(id: string, reason: string): boolean {
+    const t = now();
+    const r1 = this.db.prepare(
+      `UPDATE comments SET terminal_at = ?, last_error = ?, updated_at = ?
+       WHERE id = ? AND status = 'pending' AND terminal_at IS NULL`
+    ).run(t, reason, t, id);
+    if (r1.changes > 0) return true;
+    const dispatchId = this.dispatchId(id);
+    if (!dispatchId) return false;
+    return this.finalizeDispatch(id, dispatchId, 'manual', reason);
+  }
+
   /**
    * 延迟确认完成（v10）：终态评论在本轮租约上观察到 assistant+idle 后
    * 转 processed。CAS 绑 (dispatch_id, pending, terminal_at 非空)——旧轮次
@@ -431,11 +470,11 @@ export class CommentRepo {
       return { revision, counts: { pending: 0, readyByTime: 0, delayed: 0, processing: 0, manual: 0 }, items: [], nextOffset: null, stale: true };
     }
     const projectFilter = opts.projectId ? 'AND i.project_id = ?' : '';
-    const countParams: (string | number)[] = [opts.prefix];
+    const countParams: (string | number)[] = [];
     if (opts.projectId) countParams.push(opts.projectId);
     const base = `
       FROM comments c JOIN issues i ON i.id = c.issue_id
-      WHERE TRIM(c.body) LIKE ? || '%'
+      WHERE c.author IN ${HUMAN_AUTHORS}
         AND i.archived_at IS NULL
         ${projectFilter}`;
     const count = (where: string): number =>
@@ -464,7 +503,7 @@ export class CommentRepo {
     };
     const view = opts.view && viewWhere[opts.view] ? opts.view : undefined;
     // 绑定顺序与语句一致：SELECT 子查询 nowIso → LIKE prefix → projectId → view nowIso
-    const itemsParams: (string | number)[] = [nowIso, opts.prefix];
+    const itemsParams: (string | number)[] = [nowIso];
     if (opts.projectId) itemsParams.push(opts.projectId);
     if (view === 'ready' || view === 'delayed') itemsParams.push(nowIso);
     const items = this.db.prepare(
@@ -483,7 +522,7 @@ export class CommentRepo {
                   AND (lb.state IN ('dispatching', 'sent', 'unverified_sent')
                        OR (lb.state = 'held' AND lb.expires_at > ?)) LIMIT 1) AS sessionBusy
        FROM comments c JOIN issues i ON i.id = c.issue_id JOIN projects p ON p.id = i.project_id
-       WHERE TRIM(c.body) LIKE ? || '%' AND i.archived_at IS NULL ${projectFilter}
+       WHERE c.author IN ${HUMAN_AUTHORS} AND i.archived_at IS NULL ${projectFilter}
          AND (c.status IN ('pending', 'processing') OR c.terminal_at IS NOT NULL)
          ${view ? viewWhere[view] : '' }
        ORDER BY c.queue_priority DESC,
@@ -565,7 +604,7 @@ export class CommentRepo {
     const authors = scope?.ignoreAuthors ?? [];
     const authorFilter = authors.length > 0 ? `AND c.author NOT IN (${authors.map(() => '?').join(',')})` : '';
     // 占位符顺序与 SQL 一致：not_before → prefix → project → authors
-    const selectParams: (string | number)[] = [nowIso, prefix];
+    const selectParams: (string | number)[] = [nowIso];
     if (scope?.projectFilter) selectParams.push(scope.projectFilter);
     selectParams.push(...authors);
     const row = this.db.prepare(
@@ -576,8 +615,8 @@ export class CommentRepo {
        JOIN projects p ON p.id = i.project_id
        WHERE c.status = 'pending' AND c.terminal_at IS NULL AND c.claimed_by = ''
          AND i.archived_at IS NULL
+         AND c.author IN ${HUMAN_AUTHORS}
          AND (c.not_before IS NULL OR c.not_before <= ?)
-         AND TRIM(c.body) LIKE ? || '%'
          ${projectFilter}
          ${authorFilter}
          ${boundFilter}

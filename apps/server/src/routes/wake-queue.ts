@@ -20,6 +20,18 @@ export default async function wakeQueueRoutes(app: FastifyInstance, opts: { stor
     return snap;
   });
 
+  // §D2: 取消唤醒（状态校验：已终态 409；成功后租约 conclude 并续调队列）
+  app.post('/api/wake-queue/:commentId/cancel', async (req, reply) => {
+    const { commentId } = req.params as { commentId: string };
+    const body = (req.body ?? {}) as { reason?: string };
+    const meta = store.queueMeta(commentId);
+    if (!meta) return reply.status(404).send({ error: 'comment not found' });
+    if (meta.terminalAt) return reply.status(409).send({ error: 'already cancelled/manual', code: 'ALREADY_CANCELLED' });
+    const changed = store.cancelWake(commentId, body.reason || '用户在队列中心取消');
+    if (!changed) return reply.status(409).send({ error: 'cannot cancel in the current state', code: 'CANCEL_REJECTED' });
+    return { ok: true };
+  });
+
   app.patch('/api/wake-queue/:commentId/priority', async (req, reply) => {
     const { commentId } = req.params as { commentId: string };
     const body = req.body as { priority: number; expectedPriority: number };

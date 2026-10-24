@@ -24,7 +24,7 @@ import {
 /** The Store slice the engine depends on (the facade itself satisfies it). */
 export type WakeStore = Pick<
   Store,
-  'claimNextWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'queueMeta' | 'requeueWake' | 'deferWakeBusy' | 'deferWakeUnknown' | 'deferBusyTimeout' | 'resetBusy' | 'closeBusyAt' | 'terminalizeWake' | 'completeTerminalWake' | 'absentScan' | 'setRunEvidence' | 'finalizeDispatch' | 'listStaleProcessing' | 'listOrphanProcessing' | 'recordExecutionEvent' | 'subscribe' | 'registerWakeEngine' | 'heartbeatWakeEngine' |   'wakeLeaseAcquire' | 'wakeLeaseRenew' | 'wakeLeaseMarkDispatching' | 'wakeLeaseMarkSent' | 'wakeLeaseReleaseHeld' | 'wakeLeaseConclude' | 'wakeLeaseGet' | 'wakeLeaseFindByComment' | 'wakeLeaseHasProtection' | 'wakeLeaseHasActiveForSession'
+  'claimNextWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'queueMeta' | 'requeueWake' | 'deferWakeBusy' | 'deferWakeUnknown' | 'deferBusyTimeout' | 'resetBusy' | 'closeBusyAt' | 'terminalizeWake' | 'completeTerminalWake' | 'absentScan' | 'setRunEvidence' | 'finalizeDispatch' | 'hasActiveDispatchForWorktree' | 'countActiveDispatches' | 'listStaleProcessing' | 'listOrphanProcessing' | 'recordExecutionEvent' | 'subscribe' | 'registerWakeEngine' | 'heartbeatWakeEngine' |   'wakeLeaseAcquire' | 'wakeLeaseRenew' | 'wakeLeaseMarkDispatching' | 'wakeLeaseMarkSent' | 'wakeLeaseReleaseHeld' | 'wakeLeaseConclude' | 'wakeLeaseGet' | 'wakeLeaseFindByComment' | 'wakeLeaseHasProtection' | 'wakeLeaseHasActiveForSession'
 >;
 
 /** Narrow child-process surface so tests can inject a deterministic spawn. */
@@ -106,6 +106,12 @@ export interface WakeEngineOptions {
    * 超过后 +24h 纯重排（不耗 attempts）。默认 2 小时。
    */
   busyMaxWaitMs?: number;
+  /**
+   * §D1: global cap on active dispatches (dispatching/sent/unverified_sent
+   * across all sessions). 0/undefined = unlimited (legacy behavior). When the
+   * cap is reached the candidate defers with bounded backoff.
+   */
+  globalDispatchLimit?: number;
   /**
    * §P1-3: bounded verification window for the delivery monitor. When the
    * deadline expires without matching evidence, recover-mode monitors release
@@ -595,6 +601,18 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
           return true;
         }
       }
+      // §D1: worktree 级资源互斥——同 worktree 的其他评论活动派发未结束时
+      // 本轮 defer（不耗 attempts），避免共享工作目录的不安全并行。
+      if (issue.worktreePath && store.hasActiveDispatchForWorktree(issue.worktreePath, item.commentId)) {
+        const deferUntil = new Date(Date.now() + (options.busyDeferMs ?? 30_000)).toISOString();
+        if (!store.deferWakeBusy(item.commentId, claimToken, dispatchId, deferUntil)) {
+          error(`watch: worktree ${issue.worktreePath} is busy and comment ${item.commentId} is no longer owned by this attempt`);
+          return true;
+        }
+        error(`watch: worktree ${issue.worktreePath} has an active dispatch; deferred wake #${item.issueId} until ${deferUntil}`);
+        await reportExecution(item.issueId, 'queued', '目标 Worktree 存在活动派发，本轮延后（未投递，不消耗重试预算）');
+        return true;
+      }
       if (ctx) ctx.phase = 'validated';
       // 会话保护租约：先于 probe 获取，覆盖 probe→POST→ack 临界区。
       let lease = store.wakeLeaseRenew({ leaseKey, holderRun: runId, commentId: item.commentId, dispatchId, nowIso: nowIso(), ttlMs: LEASE_TTL_MS })
@@ -649,6 +667,18 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
             ? `目标会话执行中，唤醒已排队（每 ${Math.round(deferMs / 1000)}s 重试）`
             : '会话状态未知，暂停投递与 busy 计时（不消耗重试预算）');
         }
+        return true;
+      }
+      // §D1: 全局并发上限——活动派发数达到可配置上限时本轮 defer
+      // （默认 0 = 不限制，保持既有行为）。
+      const globalLimit = options.globalDispatchLimit ?? 0;
+      if (globalLimit > 0 && store.countActiveDispatches() >= globalLimit) {
+        const deferUntil = new Date(Date.now() + (options.busyDeferMs ?? 30_000)).toISOString();
+        if (!store.deferWakeBusy(item.commentId, claimToken, dispatchId, deferUntil)) {
+          error(`watch: global dispatch limit (${globalLimit}) reached and comment ${item.commentId} is no longer owned by this attempt`);
+          return true;
+        }
+        await reportExecution(item.issueId, 'queued', '全局活动派发已达上限，本轮延后（未投递，不消耗重试预算）');
         return true;
       }
       // probe=idle：busy episode 结束，清零后进入发送临界区。

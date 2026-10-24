@@ -265,6 +265,17 @@ describe('wake queue center: priority & revision (Q1)', () => {
     assert.ok(filtered.counts.pending >= 1, 'project-filtered snapshot must also work');
   });
 
+  it('human plain comments enter the queue without the @agent prefix (口径已确认)', () => {
+    const { store, commentId, issueId } = fixture();
+    // 先移除夹具自带的前缀评论，隔离验证普通评论的入队与领取
+    store.deleteComment(commentId, 'web');
+    const plain = store.addComment(issueId, { author: 'web', body: '普通评论也要入队' }).id;
+    const batch = store.listQueueBatch(new Date().toISOString());
+    assert.ok(batch.some(c => c.id === plain), 'human plain comment must be queued');
+    const claimed = store.claimNextWake('watch', 'run-plain', '@agent');
+    assert.ok(claimed && claimed.commentId === plain, 'human plain comment must be claimable');
+  });
+
   it('waitReason uses per-item session evidence, not global processing counts (P2-2)', () => {
     const db = new DatabaseSync(':memory:');
     const store = new Store('.unused', db);
@@ -427,17 +438,43 @@ describe('protected comment deletion & reclassification (§6)', () => {
     assert.equal(store.getComment(commentId)!.status, 'processed');
   });
 
+  it('D2 cancel: pending comment lands on the terminal gate and leaves the queue', () => {
+    const { store, commentId } = fixture();
+    assert.equal(store.cancelWake(commentId, '用户取消'), true);
+    const meta = store.queueMeta(commentId)!;
+    assert.equal(store.getComment(commentId)!.status, 'pending');
+    assert.ok(meta.terminalAt, 'cancel must set the manual gate');
+    assert.equal(meta.attempts, 0);
+    // 再取消 → 幂等 false（已终态）
+    assert.equal(store.cancelWake(commentId, '再取消'), false);
+  });
+
+  it('D2 cancel: processing round concludes its lease and the session stays dispatchable', () => {
+    const { store, commentId } = fixture();
+    round(store, commentId);
+    assert.equal(store.cancelWake(commentId, '排队中心取消执行中任务'), true);
+    const meta = store.queueMeta(commentId)!;
+    assert.ok(meta.terminalAt, 'cancelled processing round lands on the manual gate');
+    assert.equal(
+      store.wakeLeaseFindByComment(commentId, meta.dispatchId!)!.state,
+      'released',
+      'cancel must conclude the round lease',
+    );
+  });
+
   it('reclassifies wake → normal on edit and clears priority metadata', () => {
     const { store, commentId } = fixture();
     assert.equal(store.setWakePriority(commentId, 0, 1), true);
     store.updateComment(commentId, { body: '不再是唤醒指令' }, 'web');
     const meta = store.queueMeta(commentId)!;
-    assert.equal(meta.queuePriority, 0, 'leaving the queue must clear priority');
+    assert.equal(meta.queuePriority, 0, 'priority must clear on wake→plain edit');
     assert.equal(meta.priorityAt, null);
     assert.equal(meta.notBefore, null);
-    // 快照按前缀过滤（§8 将把该口径下沉到队列层统一）：普通评论不再出现在队列视图
+    // 口径更新：资格按作者判定——普通人类评论仍留在队列（普通优先级），仅清除优先级元数据
     const snap = store.wakeQueueSnapshot(new Date().toISOString());
-    assert.equal(snap.items.some(i => i.commentId === commentId), false, 'the row must leave the wake queue view');
+    const row = snap.items.find(i => i.commentId === commentId)!;
+    assert.ok(row, 'human plain comment stays in the queue view');
+    assert.equal(row.queuePriority, 0);
   });
 
   it('keeps priority when a wake comment is edited to another wake body', () => {
