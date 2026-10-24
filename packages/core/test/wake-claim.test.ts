@@ -276,6 +276,17 @@ describe('wake queue center: priority & revision (Q1)', () => {
     assert.ok(claimed && claimed.commentId === plain, 'human plain comment must be claimable');
   });
 
+  it('system audit comments (状态变更记录) never enter the wake queue (防唤醒风暴)', () => {
+    const { store, commentId, issueId } = fixture();
+    // 用户点 done 产生的系统审计评论：author=web（人类白名单内）但内容是系统回声
+    const audit = store.addComment(issueId, { author: 'web', body: '状态变更记录：in_review → done\nTaskboard 网页人工操作；操作者未提供额外说明。' }).id;
+    store.deleteComment(commentId, 'web'); // 移除夹具自带的前缀评论，隔离验证审计评论被排除
+    assert.equal(store.listQueueBatch(new Date().toISOString()).some(c => c.id === audit), false, 'audit comment must not be swept');
+    assert.equal(store.claimNextWake('watch', 'run-audit', '@agent'), null, 'audit comment must not be claimable');
+    const snap = store.wakeQueueSnapshot(new Date().toISOString());
+    assert.equal(snap.items.some(i => i.commentId === audit), false, 'audit comment must not appear in the queue view');
+  });
+
   it('waitReason uses per-item session evidence, not global processing counts (P2-2)', () => {
     const db = new DatabaseSync(':memory:');
     const store = new Store('.unused', db);

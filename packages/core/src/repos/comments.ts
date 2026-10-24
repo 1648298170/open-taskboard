@@ -199,7 +199,7 @@ export class CommentRepo {
       `SELECT c.id, c.issue_id AS issueId, i.project_id AS projectId, i.title AS issueTitle,
               c.author, c.body, c.status, c.created_at AS createdAt
        FROM comments c JOIN issues i ON i.id = c.issue_id
-       WHERE c.status = 'pending' AND c.terminal_at IS NULL AND i.archived_at IS NULL AND c.author IN ${HUMAN_AUTHORS} AND (c.not_before IS NULL OR c.not_before <= ?)
+       WHERE c.status = 'pending' AND c.terminal_at IS NULL AND i.archived_at IS NULL AND c.author IN ${HUMAN_AUTHORS} AND c.body NOT LIKE '状态变更记录：%' AND (c.not_before IS NULL OR c.not_before <= ?)
        ORDER BY c.queue_priority DESC,
          CASE WHEN c.queue_priority = 1 THEN c.priority_at END ASC,
          COALESCE(c.queued_at, c.created_at) ASC, c.rowid`
@@ -522,7 +522,7 @@ export class CommentRepo {
                   AND (lb.state IN ('dispatching', 'sent', 'unverified_sent')
                        OR (lb.state = 'held' AND lb.expires_at > ?)) LIMIT 1) AS sessionBusy
        FROM comments c JOIN issues i ON i.id = c.issue_id JOIN projects p ON p.id = i.project_id
-       WHERE c.author IN ${HUMAN_AUTHORS} AND i.archived_at IS NULL ${projectFilter}
+       WHERE c.author IN ${HUMAN_AUTHORS} AND c.body NOT LIKE '状态变更记录：%' AND i.archived_at IS NULL ${projectFilter}
          AND (c.status IN ('pending', 'processing') OR c.terminal_at IS NOT NULL)
          ${view ? viewWhere[view] : '' }
        ORDER BY c.queue_priority DESC,
@@ -616,6 +616,7 @@ export class CommentRepo {
        WHERE c.status = 'pending' AND c.terminal_at IS NULL AND c.claimed_by = ''
          AND i.archived_at IS NULL
          AND c.author IN ${HUMAN_AUTHORS}
+         AND c.body NOT LIKE '状态变更记录：%'
          AND (c.not_before IS NULL OR c.not_before <= ?)
          ${projectFilter}
          ${authorFilter}
