@@ -199,7 +199,7 @@ export class CommentRepo {
       `SELECT c.id, c.issue_id AS issueId, i.project_id AS projectId, i.title AS issueTitle,
               c.author, c.body, c.status, c.created_at AS createdAt
        FROM comments c JOIN issues i ON i.id = c.issue_id
-       WHERE c.status = 'pending' AND c.terminal_at IS NULL AND i.archived_at IS NULL AND c.author IN ${HUMAN_AUTHORS} AND c.body NOT LIKE '状态变更记录：%' AND (c.not_before IS NULL OR c.not_before <= ?)
+       WHERE c.status = 'pending' AND c.terminal_at IS NULL AND i.archived_at IS NULL AND i.status IN ('todo', 'in_progress') AND c.author IN ${HUMAN_AUTHORS} AND c.body NOT LIKE '状态变更记录：%' AND (c.not_before IS NULL OR c.not_before <= ?)
        ORDER BY c.queue_priority DESC,
          CASE WHEN c.queue_priority = 1 THEN c.priority_at END ASC,
          COALESCE(c.queued_at, c.created_at) ASC, c.rowid`
@@ -475,6 +475,7 @@ export class CommentRepo {
     const base = `
       FROM comments c JOIN issues i ON i.id = c.issue_id
       WHERE c.author IN ${HUMAN_AUTHORS}
+        AND i.status IN ('todo', 'in_progress')
         AND c.body NOT LIKE '状态变更记录：%'
         AND i.archived_at IS NULL
         ${projectFilter}`;
@@ -523,7 +524,7 @@ export class CommentRepo {
                   AND (lb.state IN ('dispatching', 'sent', 'unverified_sent')
                        OR (lb.state = 'held' AND lb.expires_at > ?)) LIMIT 1) AS sessionBusy
        FROM comments c JOIN issues i ON i.id = c.issue_id JOIN projects p ON p.id = i.project_id
-       WHERE c.author IN ${HUMAN_AUTHORS} AND c.body NOT LIKE '状态变更记录：%' AND i.archived_at IS NULL ${projectFilter}
+       WHERE c.author IN ${HUMAN_AUTHORS} AND i.status IN ('todo', 'in_progress') AND c.body NOT LIKE '状态变更记录：%' AND i.archived_at IS NULL ${projectFilter}
          AND (c.status IN ('pending', 'processing') OR c.terminal_at IS NOT NULL)
          ${view ? viewWhere[view] : '' }
        ORDER BY c.queue_priority DESC,
@@ -610,12 +611,12 @@ export class CommentRepo {
     selectParams.push(...authors);
     const row = this.db.prepare(
       `SELECT c.id AS commentId, c.issue_id AS issueId, c.body,
-              i.title AS issueTitle
+              i.title AS issueTitle, i.status AS issueStatus
        FROM comments c
        JOIN issues i ON i.id = c.issue_id
        JOIN projects p ON p.id = i.project_id
        WHERE c.status = 'pending' AND c.terminal_at IS NULL AND c.claimed_by = ''
-         AND i.archived_at IS NULL
+         AND i.archived_at IS NULL AND i.status IN ('todo', 'in_progress')
          AND c.author IN ${HUMAN_AUTHORS}
          AND c.body NOT LIKE '状态变更记录：%'
          AND (c.not_before IS NULL OR c.not_before <= ?)
@@ -636,6 +637,12 @@ export class CommentRepo {
          AND (not_before IS NULL OR not_before <= ?)`
     ).run(token, runId, dispatchId, nowIso, row.commentId, nowIso);
     if (result.changes === 0) return null;
+    // §bece7e9e: 任务级联动——评论被领取即任务开工（todo → in_progress，同事务），
+    // 看板状态与实际执行一致（R7 根因：评论认领与任务认领脱钩）。
+    this.db.prepare(
+      `UPDATE issues SET status = 'in_progress', started_at = COALESCE(started_at, ?), updated_at = ?
+       WHERE id = ? AND status = 'todo'`
+    ).run(nowIso, nowIso, row.issueId);
     return { token, dispatchId, commentId: row.commentId, issueId: row.issueId, body: row.body, issueTitle: row.issueTitle };
   }
 

@@ -234,7 +234,7 @@ describe('wake queue center: priority & revision (Q1)', () => {
     assert.equal(store.getQueueRevision(), before + 1, 'revision must increment');
   });
 
-  it('claimNextWake returns the highest-priority ready candidate', () => {
+    it('claimNextWake returns the highest-priority ready candidate', () => {
     const db = new DatabaseSync(':memory:');
     const store = new Store('.unused', db);
     const project = store.createProject({ id: 'p1', name: 'P', defaultSessionId: 'ses_1' });
@@ -307,6 +307,42 @@ describe('wake queue center: priority & revision (Q1)', () => {
     });
     const snap2 = store.wakeQueueSnapshot(new Date().toISOString());
     assert.equal(snap2.items.find(x => x.commentId === a)!.waitReason, 'session-protected', 'same-session active lease must be reported');
+  });
+});
+
+describe('claimNextWake task linkage (bece7e9e/E1)', () => {
+  it('claiming a wake auto-flows the task todo → in_progress (board truthfulness, R7 fix)', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new Store('.unused', db);
+    store.createProject({ id: 'p1', name: 'P' });
+    const issueId = store.createIssue({ projectId: 'p1', title: 'T' }).id;
+    assert.equal(store.getIssue(issueId)!.status, 'todo');
+    store.addComment(issueId, { author: 'web', body: '@agent 开工' }).id;
+    const claimed = store.claimNextWake('watch', 'run-e1', '@agent');
+    assert.ok(claimed, 'the wake must be claimable');
+    assert.equal(store.getIssue(issueId)!.status, 'in_progress', 'task must auto-flow to in_progress on wake dispatch');
+  });
+
+  it('a wake on a done task is not dispatched (rejection gate)', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new Store('.unused', db);
+    store.createProject({ id: 'p1', name: 'P' });
+    const issueId = store.createIssue({ projectId: 'p1', title: 'T' }).id;
+    store.addComment(issueId, { author: 'web', body: '@agent 完结后唤醒' }).id;
+    db.prepare('UPDATE issues SET status = ? WHERE id = ?').run('done', issueId);
+    assert.equal(store.claimNextWake('watch', 'run-e1', '@agent'), null, 'done-task wakes must be rejected');
+  });
+
+  it('a wake on an in_progress task is dispatched and the task stays in_progress', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new Store('.unused', db);
+    store.createProject({ id: 'p1', name: 'P' });
+    const issueId = store.createIssue({ projectId: 'p1', title: 'T' }).id;
+    store.addComment(issueId, { author: 'web', body: '@agent 追加指令' }).id;
+    db.prepare('UPDATE issues SET status = ? WHERE id = ?').run('in_progress', issueId);
+    const claimed = store.claimNextWake('watch', 'run-e1', '@agent');
+    assert.ok(claimed, 'in_progress task wakes stay dispatchable');
+    assert.equal(store.getIssue(issueId)!.status, 'in_progress');
   });
 });
 
