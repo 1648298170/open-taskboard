@@ -2597,3 +2597,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable
   opacity: .75;
 }
 .wake-queue-more { display: flex; justify-content: center; padding: 6px 0; }
+
+/* D1-badge: zero-state dimmed badge keeps the entry discoverable */
+.wake-queue-badge.zero { opacity: .45; }

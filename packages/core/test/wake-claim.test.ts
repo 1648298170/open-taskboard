@@ -333,6 +333,18 @@ describe('claimNextWake task linkage (bece7e9e/E1)', () => {
     assert.equal(store.claimNextWake('watch', 'run-e1', '@agent'), null, 'done-task wakes must be rejected');
   });
 
+  it('E1: a wake on an in_review task is dispatched (follow-up instructions stay workable)', () => {
+    const db = new DatabaseSync(':memory:');
+    const store = new Store('.unused', db);
+    store.createProject({ id: 'p1', name: 'P' });
+    const issueId = store.createIssue({ projectId: 'p1', title: 'T' }).id;
+    store.addComment(issueId, { author: 'web', body: '@agent 追加指令' }).id;
+    db.prepare('UPDATE issues SET status = ? WHERE id = ?').run('in_review', issueId);
+    const claimed = store.claimNextWake('watch', 'run-e1', '@agent');
+    assert.ok(claimed, 'in_review task wakes must stay dispatchable (user follow-up workflow)');
+    assert.equal(store.getIssue(issueId)!.status, 'in_review', 'in_review must not be downgraded');
+  });
+
   it('a wake on an in_progress task is dispatched and the task stays in_progress', () => {
     const db = new DatabaseSync(':memory:');
     const store = new Store('.unused', db);

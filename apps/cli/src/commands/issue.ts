@@ -20,7 +20,7 @@ export const show = (i: IssueLike): void => {
 export const issueCommands: Record<string, Command> = {
   'issue create': {
     summary: 'Create an issue',
-    usage: 'issue create --project ID --title T [--template NAME] [--parent ID] [--worktree W] [--session-id ID] [--start-date D] [--due-date D]',
+    usage: 'issue create --project ID --title T [--template NAME] [--parent ID] [--worktree W] [--session-id ID] [--start-date D] [--due-date D] [--wake]',
     async run(ctx) {
       const { api, flags } = ctx;
       // T4-23: --template NAME prefills fields from <dataDir>/templates.json.
@@ -46,6 +46,11 @@ export const issueCommands: Record<string, Command> = {
       if (flags.confirm) body.confirm = true;
       const i = await api('POST', `/api/projects/${seg(flags.project)}/issues`, body, { sessionId });
       console.log(`created #${i.id} [${i.status}] ${i.title}`);
+      // Route A: --wake auto-enqueues the new task for agent dispatch
+      if (flags.wake) {
+        await api('POST', `/api/issues/${i.id}/comments`, { author: 'web', body: `@agent ${i.title}` }, { sessionId });
+        console.log('wake queued: task enqueued for agent dispatch');
+      }
     }
   },
   'issue list': {

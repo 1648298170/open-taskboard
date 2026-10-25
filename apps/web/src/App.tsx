@@ -863,7 +863,7 @@ export default function App() {
     <button className={`icon-btn wake-queue-btn${queueOpen ? ' on' : ''}`} aria-label="唤醒队列" title="唤醒队列中心"
     onClick={() => setQueueOpen(o => !o)}>
       <ListOrdered size={16} />
-      {queueCount !== null && queueCount > 0 && <span className="wake-queue-badge">{queueCount > 99 ? '99+' : queueCount}</span>}
+      {queueCount !== null && <span className={"wake-queue-badge" + (queueCount === 0 ? ' zero' : '')}>{queueCount > 99 ? '99+' : queueCount}</span>}
     </button>
               {/* v0.4: 快捷键帮助（? 键同效）。 */}
               <button className={`icon-btn${helpOpen ? ' on' : ''}`} aria-label="快捷键帮助" title="快捷键帮助（?）"

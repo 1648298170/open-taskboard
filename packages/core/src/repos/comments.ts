@@ -616,7 +616,7 @@ export class CommentRepo {
        JOIN issues i ON i.id = c.issue_id
        JOIN projects p ON p.id = i.project_id
        WHERE c.status = 'pending' AND c.terminal_at IS NULL AND c.claimed_by = ''
-         AND i.archived_at IS NULL AND i.status IN ('todo', 'in_progress')
+         AND i.archived_at IS NULL AND i.status IN ('todo', 'in_progress', 'in_review')
          AND c.author IN ${HUMAN_AUTHORS}
          AND c.body NOT LIKE '状态变更记录：%'
          AND (c.not_before IS NULL OR c.not_before <= ?)
