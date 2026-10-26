@@ -986,9 +986,10 @@ describe('wake engine: periodic poll', () => {
     try {
       // Direct insert bypasses Store.addComment, so the event subscription can
       // never see it — only the periodic sweep can deliver this wake.
+      // is_wake=1 模拟迁移回填后的历史唤醒行（F1/F2 资格标记）。
       const t = new Date().toISOString();
       db.prepare(
-        'INSERT INTO comments (id, issue_id, author, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO comments (id, issue_id, author, body, created_at, updated_at, is_wake) VALUES (?, ?, ?, ?, ?, ?, 1)'
       ).run('poll-comment', issueId, 'web', '@agent 轮询补拉', t, t);
 
       await waitFor(() => store.getComment('poll-comment')!.status === 'processing');

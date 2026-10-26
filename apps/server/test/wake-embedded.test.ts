@@ -135,7 +135,7 @@ describe('embedded wake: poll', () => {
       // only the periodic pending sweep can deliver it.
       const t = new Date().toISOString();
       fixture.db.prepare(
-        'INSERT INTO comments (id, issue_id, author, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO comments (id, issue_id, author, body, created_at, updated_at, is_wake) VALUES (?, ?, ?, ?, ?, ?, 1)'
       ).run('poll-only', fixture.issueId, 'web', '@agent 轮询补拉', t, t);
 
       await waitFor(() => fixture.store.getComment('poll-only')!.status === 'processing');

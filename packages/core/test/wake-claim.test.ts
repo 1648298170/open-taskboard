@@ -265,15 +265,16 @@ describe('wake queue center: priority & revision (Q1)', () => {
     assert.ok(filtered.counts.pending >= 1, 'project-filtered snapshot must also work');
   });
 
-  it('human plain comments enter the queue without the @agent prefix (口径已确认)', () => {
+  it('human plain comments do NOT enter the queue (@agent remains the wake trigger)', () => {
     const { store, commentId, issueId } = fixture();
-    // 先移除夹具自带的前缀评论，隔离验证普通评论的入队与领取
+    // 先移除夹具自带的前缀评论，隔离验证普通评论被排除
     store.deleteComment(commentId, 'web');
-    const plain = store.addComment(issueId, { author: 'web', body: '普通评论也要入队' }).id;
+    const plain = store.addComment(issueId, { author: 'web', body: '普通评论不入队' }).id;
     const batch = store.listQueueBatch(new Date().toISOString());
-    assert.ok(batch.some(c => c.id === plain), 'human plain comment must be queued');
-    const claimed = store.claimNextWake('watch', 'run-plain', '@agent');
-    assert.ok(claimed && claimed.commentId === plain, 'human plain comment must be claimable');
+    assert.equal(batch.some(c => c.id === plain), false, 'plain comments must not be queued');
+    assert.equal(store.claimNextWake('watch', 'run-plain', '@agent'), null, 'plain comments must not be claimable');
+    const snap = store.wakeQueueSnapshot(new Date().toISOString());
+    assert.equal(snap.items.some(i => i.commentId === plain), false, 'plain comments must not appear in the queue view');
   });
 
   it('system audit comments (状态变更记录) never enter the wake queue (防唤醒风暴)', () => {
@@ -529,11 +530,9 @@ describe('protected comment deletion & reclassification (§6)', () => {
     assert.equal(meta.queuePriority, 0, 'priority must clear on wake→plain edit');
     assert.equal(meta.priorityAt, null);
     assert.equal(meta.notBefore, null);
-    // 口径更新：资格按作者判定——普通人类评论仍留在队列（普通优先级），仅清除优先级元数据
+    // 口径更新：资格按 is_wake（@agent predicate）判定——普通评论离开队列视图
     const snap = store.wakeQueueSnapshot(new Date().toISOString());
-    const row = snap.items.find(i => i.commentId === commentId)!;
-    assert.ok(row, 'human plain comment stays in the queue view');
-    assert.equal(row.queuePriority, 0);
+    assert.equal(snap.items.some(i => i.commentId === commentId), false, `the reclassified comment must leave the wake queue view; row=${JSON.stringify(store.queueMeta(commentId))} snap=${JSON.stringify(snap.items)}`);
   });
 
   it('keeps priority when a wake comment is edited to another wake body', () => {

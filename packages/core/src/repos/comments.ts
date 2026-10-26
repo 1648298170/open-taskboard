@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
+import { isWakeComment } from '../types.js';
 import type { Comment, PendingWakeComment } from '../types.js';
 
 // Public comment projection. claimed_by/claimed_run/updated_at/dispatch_id are
@@ -72,11 +73,14 @@ export class CommentRepo {
 
   // Inserts the comment and bumps the parent issue's updated_at.
   // Caller wraps this in a transaction and checks the issue exists first.
-  add(issueId: string, input: { author?: string; body: string }): string {
+  add(issueId: string, input: { author?: string; body: string; source?: string }): string {
     const id = shortId();
     const t = now();
-    this.db.prepare('INSERT INTO comments (id, issue_id, author, body, created_at, updated_at, queued_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(id, issueId, input.author ?? '', input.body, t, t, t);
+    // §F1/F2: is_wake 由 TS 唤醒 predicate（唯一规则来源）在写入时计算持久化，
+    // SQL 资格过滤不再自建第二套 prefix 规则；系统审计内容不作为唤醒请求。
+    const isWake = isWakeComment(input.body) && input.source !== 'system' ? 1 : 0;
+    this.db.prepare('INSERT INTO comments (id, issue_id, author, body, created_at, updated_at, queued_at, source, is_wake) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, issueId, input.author ?? '', input.body, t, t, t, input.source ?? 'api', isWake);
     this.db.prepare('UPDATE issues SET updated_at = ? WHERE id = ?').run(t, issueId);
     return id;
   }
@@ -105,8 +109,12 @@ export class CommentRepo {
   // 终态保留给受控恢复；无保护时由调用方附带 status='pending' 触发完整重置。
   update(id: string, patch: { body?: string; status?: string }, issueId: string): void {
     const sets: string[] = [];
-    const vals: string[] = [];
-    if (patch.body !== undefined) { sets.push('body = ?'); vals.push(patch.body); }
+    const vals: (string | number)[] = [];
+    if (patch.body !== undefined) {
+      sets.push('body = ?'); vals.push(patch.body);
+      // §F1: 正文编辑后重算唤醒资格（单一 predicate 来源，写时持久化）。
+      sets.push('is_wake = ?'); vals.push(isWakeComment(patch.body) ? 1 : 0);
+    }
     if (patch.status !== undefined) {
       // An explicit status write ends any engine-owned attempt: the stale
       // claim token must not be able to release a row someone else moved.
@@ -199,7 +207,7 @@ export class CommentRepo {
       `SELECT c.id, c.issue_id AS issueId, i.project_id AS projectId, i.title AS issueTitle,
               c.author, c.body, c.status, c.created_at AS createdAt
        FROM comments c JOIN issues i ON i.id = c.issue_id
-       WHERE c.status = 'pending' AND c.terminal_at IS NULL AND i.archived_at IS NULL AND i.status IN ('todo', 'in_progress') AND c.author IN ${HUMAN_AUTHORS} AND c.body NOT LIKE '状态变更记录：%' AND (c.not_before IS NULL OR c.not_before <= ?)
+       WHERE c.status = 'pending' AND c.terminal_at IS NULL AND i.archived_at IS NULL AND i.status IN ('todo', 'in_progress', 'in_review') AND c.is_wake = 1 AND c.source != 'system' AND (c.not_before IS NULL OR c.not_before <= ?)
        ORDER BY c.queue_priority DESC,
          CASE WHEN c.queue_priority = 1 THEN c.priority_at END ASC,
          COALESCE(c.queued_at, c.created_at) ASC, c.rowid`
@@ -474,9 +482,9 @@ export class CommentRepo {
     if (opts.projectId) countParams.push(opts.projectId);
     const base = `
       FROM comments c JOIN issues i ON i.id = c.issue_id
-      WHERE c.author IN ${HUMAN_AUTHORS}
-        AND i.status IN ('todo', 'in_progress')
-        AND c.body NOT LIKE '状态变更记录：%'
+      WHERE c.is_wake = 1
+        AND c.source != 'system'
+        AND i.status IN ('todo', 'in_progress', 'in_review')
         AND i.archived_at IS NULL
         ${projectFilter}`;
     const count = (where: string): number =>
@@ -524,7 +532,7 @@ export class CommentRepo {
                   AND (lb.state IN ('dispatching', 'sent', 'unverified_sent')
                        OR (lb.state = 'held' AND lb.expires_at > ?)) LIMIT 1) AS sessionBusy
        FROM comments c JOIN issues i ON i.id = c.issue_id JOIN projects p ON p.id = i.project_id
-       WHERE c.author IN ${HUMAN_AUTHORS} AND i.status IN ('todo', 'in_progress') AND c.body NOT LIKE '状态变更记录：%' AND i.archived_at IS NULL ${projectFilter}
+       WHERE c.is_wake = 1 AND c.source != 'system' AND i.status IN ('todo', 'in_progress', 'in_review') AND i.archived_at IS NULL ${projectFilter}
          AND (c.status IN ('pending', 'processing') OR c.terminal_at IS NOT NULL)
          ${view ? viewWhere[view] : '' }
        ORDER BY c.queue_priority DESC,
@@ -617,8 +625,7 @@ export class CommentRepo {
        JOIN projects p ON p.id = i.project_id
        WHERE c.status = 'pending' AND c.terminal_at IS NULL AND c.claimed_by = ''
          AND i.archived_at IS NULL AND i.status IN ('todo', 'in_progress', 'in_review')
-         AND c.author IN ${HUMAN_AUTHORS}
-         AND c.body NOT LIKE '状态变更记录：%'
+         AND c.is_wake = 1 AND c.source != 'system'
          AND (c.not_before IS NULL OR c.not_before <= ?)
          ${projectFilter}
          ${authorFilter}
