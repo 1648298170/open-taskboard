@@ -466,6 +466,16 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
     db.exec('CREATE INDEX IF NOT EXISTS idx_comments_wake_priority ON comments(queue_priority, priority_at, status, not_before)');
     db.exec("INSERT INTO app_settings (key, value) VALUES ('wake_queue_revision', '0') ON CONFLICT(key) DO NOTHING");
   },
+  // v26 (§7): persisted run-phase evidence for the wake lifecycle. Values:
+  // 'running' (monitor confirmed busy + correlated prompt) and 'tui-waiting'
+  // (TUI input written, awaiting the human submit). Every other user-visible
+  // state derives from status/terminal_at/lease state, so only the two
+  // non-derivable phases need persistence (restart-safe).
+  (db: DatabaseSync) => {
+    if (!hasColumn(db, 'comments', 'run_evidence')) {
+      db.exec('ALTER TABLE comments ADD COLUMN run_evidence TEXT');
+    }
+  },
   // v27 (F1/F2): explicit wake-eligibility markers. is_wake is computed at
   // write time by the TS wake predicate (single source of truth) so SQL
   // eligibility never re-implements prefix rules; source records the comment
@@ -483,16 +493,6 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
     db.exec("UPDATE comments SET source = 'system' WHERE source = 'legacy' AND body LIKE '状态变更记录：%'");
     db.exec("UPDATE comments SET is_wake = 1 WHERE is_wake = 0 AND source = 'legacy' AND TRIM(body) LIKE '@agent%' AND author NOT IN ('mcp', 'watch', 'system')");
   },
-  // v26 (§7): persisted run-phase evidence for the wake lifecycle. Values:
-  // 'running' (monitor confirmed busy + correlated prompt) and 'tui-waiting'
-  // (TUI input written, awaiting the human submit). Every other user-visible
-  // state derives from status/terminal_at/lease state, so only the two
-  // non-derivable phases need persistence (restart-safe).
-  (db: DatabaseSync) => {
-    if (!hasColumn(db, 'comments', 'run_evidence')) {
-      db.exec('ALTER TABLE comments ADD COLUMN run_evidence TEXT');
-    }
-  }
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after
