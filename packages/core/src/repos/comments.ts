@@ -598,6 +598,33 @@ export class CommentRepo {
   }
 
   /**
+   * F4④ 开发诊断：唤醒资格漏斗计数（仅计数，不含任何评论内容/id）。
+   * 排除原因由相邻层差值推导：total-wakeMarked=非唤醒内容、
+   * wakeMarked-sourceOk=系统审计回声、taskExecutable-queued=状态/终态门槛。
+   */
+  wakeEligibilityStats(): {
+    total: number;
+    wakeMarked: number;
+    sourceOk: number;
+    taskExecutable: number;
+    queued: number;
+  } {
+    const row = this.db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        COALESCE(SUM(c.is_wake), 0) AS wakeMarked,
+        COALESCE(SUM(CASE WHEN c.source != 'system' THEN 1 ELSE 0 END), 0) AS sourceOk,
+        COALESCE(SUM(CASE WHEN i.status IN ('todo', 'in_progress', 'in_review') AND i.archived_at IS NULL THEN 1 ELSE 0 END), 0) AS taskExecutable,
+        COALESCE(SUM(CASE WHEN c.is_wake = 1 AND c.source != 'system'
+          AND i.status IN ('todo', 'in_progress', 'in_review') AND i.archived_at IS NULL
+          AND c.status = 'pending' AND c.terminal_at IS NULL THEN 1 ELSE 0 END), 0) AS queued
+      FROM comments c
+      JOIN issues i ON i.id = c.issue_id
+    `).get() as { total: number; wakeMarked: number; sourceOk: number; taskExecutable: number; queued: number };
+    return { ...row };
+  }
+
+  /**
    * 原子选领（v10 Q1 / §4/I-03）：候选筛选（wake 前缀、归档、not_before、
    * 终态、未领取、可选执行器范围）、priority+FIFO 排序与 CAS 领取在同一
    * 短写事务内完成（Store 包装负责 BEGIN/COMMIT，事务内禁止网络/探测）。

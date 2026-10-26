@@ -663,6 +663,15 @@ describe('worktree binding', () => {
 // --- (m) dependencies (T4-19) ------------------------------------------------------
 
 describe('Store dependencies', () => {
+  it('rejects a duplicate dependency edge instead of leaking a UNIQUE violation', () => {
+    const { store } = fresh();
+    store.createProject({ id: 'p1', name: 'P' });
+    const x = store.createIssue({ projectId: 'p1', title: 'x' }).id;
+    const y = store.createIssue({ projectId: 'p1', title: 'y' }).id;
+    store.addDependency(x, y);
+    throwsWith(() => store.addDependency(x, y), ValidationError, 'dependency already exists');
+  });
+
   it('roundtrips add → list both directions → remove, logging dependency activities', () => {
     const { store } = fresh();
     const { A, C } = seedTwoProjects(store); // A, C top-level in p1

@@ -24,7 +24,7 @@ import {
 /** The Store slice the engine depends on (the facade itself satisfies it). */
 export type WakeStore = Pick<
   Store,
-  'claimNextWake' | 'releaseWake' | 'getComment' | 'getIssue' | 'queueMeta' | 'requeueWake' | 'deferWakeBusy' | 'deferWakeUnknown' | 'deferBusyTimeout' | 'resetBusy' | 'closeBusyAt' | 'terminalizeWake' | 'completeTerminalWake' | 'absentScan' | 'setRunEvidence' | 'finalizeDispatch' | 'hasActiveDispatchForWorktree' | 'countActiveDispatches' | 'listStaleProcessing' | 'listOrphanProcessing' | 'recordExecutionEvent' | 'subscribe' | 'registerWakeEngine' | 'heartbeatWakeEngine' |   'wakeLeaseAcquire' | 'wakeLeaseRenew' | 'wakeLeaseMarkDispatching' | 'wakeLeaseMarkSent' | 'wakeLeaseReleaseHeld' | 'wakeLeaseConclude' | 'wakeLeaseGet' | 'wakeLeaseFindByComment' | 'wakeLeaseHasProtection' | 'wakeLeaseHasActiveForSession'
+  'claimNextWake' | 'releaseWake' | 'wakeEligibilityStats' | 'getComment' | 'getIssue' | 'queueMeta' | 'requeueWake' | 'deferWakeBusy' | 'deferWakeUnknown' | 'deferBusyTimeout' | 'resetBusy' | 'closeBusyAt' | 'terminalizeWake' | 'completeTerminalWake' | 'absentScan' | 'setRunEvidence' | 'finalizeDispatch' | 'hasActiveDispatchForWorktree' | 'countActiveDispatches' | 'listStaleProcessing' | 'listOrphanProcessing' | 'recordExecutionEvent' | 'subscribe' | 'registerWakeEngine' | 'heartbeatWakeEngine' |   'wakeLeaseAcquire' | 'wakeLeaseRenew' | 'wakeLeaseMarkDispatching' | 'wakeLeaseMarkSent' | 'wakeLeaseReleaseHeld' | 'wakeLeaseConclude' | 'wakeLeaseGet' | 'wakeLeaseFindByComment' | 'wakeLeaseHasProtection' | 'wakeLeaseHasActiveForSession'
 >;
 
 /** Narrow child-process surface so tests can inject a deterministic spawn. */
@@ -181,7 +181,20 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
   let running = false;
   let unsubscribe: (() => void) | null = null;
   let releaseLock: (() => void) | null = null;
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  /** F4④ 开发诊断：TASKBOARD_WAKE_DEBUG=1 时每个轮询周期输出资格漏斗（仅计数，不含评论内容）。 */
+function logEligibilityFunnel(store: WakeStore): void {
+  try {
+    const stats = store.wakeEligibilityStats();
+    console.log(
+      `[wake] eligibility funnel: total=${stats.total} wakeMarked=${stats.wakeMarked} ` +
+        `sourceOk=${stats.sourceOk} taskExecutable=${stats.taskExecutable} queued=${stats.queued}`,
+    );
+  } catch (err) {
+    console.warn('[wake] eligibility funnel diagnostics failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+let pollTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let orphanTimer: ReturnType<typeof setInterval> | null = null;
   // Channel-level watchdog state: one WARN while OpenCode is unreachable, one
@@ -985,6 +998,7 @@ export function createWakeEngine(deps: WakeDeps, options: WakeEngineOptions = {}
         void probeChannelHealth();
         void sweepStaleProcessing();
         void pump();
+        if (process.env.TASKBOARD_WAKE_DEBUG === '1') logEligibilityFunnel(store);
       }, options.pollMs);
     }
     heartbeatTimer = setInterval(() => { store.heartbeatWakeEngine(runId, nowIso()); }, options.heartbeatMs ?? 30_000);

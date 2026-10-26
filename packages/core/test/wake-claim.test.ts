@@ -597,3 +597,28 @@ describe('claimNextWake strategy filters (§4+§8)', () => {
     assert.equal(c2!.commentId, c, 'the p1 candidates must not leak into the p2 scope');
   });
 });
+
+describe('Store.wakeEligibilityStats (F4④)', () => {
+  it('funnels totals/marked/source/task/queued without leaking content', () => {
+    const { store, db, issueId } = fixture();
+    const funnel = (): { total: number; wakeMarked: number; sourceOk: number; taskExecutable: number; queued: number } =>
+      store.wakeEligibilityStats();
+
+    // fixture 自带 1 条合格唤醒（web + @agent，todo 任务）
+    assert.deepEqual(funnel(), { total: 1, wakeMarked: 1, sourceOk: 1, taskExecutable: 1, queued: 1 });
+
+    // 非唤醒内容：计入 total，不入队
+    store.addComment(issueId, { author: 'web', body: '普通讨论' });
+    assert.deepEqual(funnel(), { total: 2, wakeMarked: 1, sourceOk: 2, taskExecutable: 2, queued: 1 });
+
+    // 系统审计回声：来源不合格，永不入队
+    db.prepare(
+      "INSERT INTO comments (id, issue_id, author, body, created_at, updated_at, queued_at, status, source, is_wake) VALUES ('c-sys', ?, 'sisyphus', '状态变更记录：x', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'pending', 'system', 0)",
+    ).run(issueId);
+    assert.deepEqual(funnel(), { total: 3, wakeMarked: 1, sourceOk: 2, taskExecutable: 3, queued: 1 });
+
+    // done 任务：状态门槛把合格评论挡在队列外
+    db.prepare('UPDATE issues SET status = ? WHERE id = ?').run('done', issueId);
+    assert.deepEqual(funnel(), { total: 3, wakeMarked: 1, sourceOk: 2, taskExecutable: 0, queued: 0 });
+  });
+});

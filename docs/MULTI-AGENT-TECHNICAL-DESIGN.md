@@ -1021,6 +1021,7 @@ pnpm test
 | 数据迁移、备份、恢复 | 部分完成 | 迁移 v22 幂等（hasColumn 守卫）；启动对账回收 processing 孤儿；备份沿用既有 VACUUM INTO 快照 |
 | UI 状态反馈和错误提示 | 部分完成 | 评论徽章区分 排队中/唤醒中/已处理/失败·超时（含重试次数与错误 title）；执行活动流记录 已排队/重试/停止重试/超时；待人工目验 |
 | 调度器实现选择与可靠性 | 部分完成 | 选择「串行队列 + DB 队列 + 轮询兜底」而非 Generator：状态全在 SQLite（崩溃可恢复、双实例安全）；主键 FIFO 由 queued_at 排序保证 |
+| 唤醒资格标记制（is_wake/source） | 已完成 | v27 迁移（hasColumn 守卫）：TS 唤醒谓词在写入时计算 `is_wake` 并持久化（单一事实源），SQL 资格查询（listQueueBatch / queueSnapshot / claimNextWake）统一读标记；`source` 记录 web/mcp/cli/api/system/legacy，system 审计回声永不唤醒；任务状态门槛 todo/in_progress/in_review（未归档）全路径一致；`TASKBOARD_WAKE_DEBUG=1` 输出资格漏斗诊断（仅计数）；全量测试绿（core/wake 用例随行） |
 | 性能与资源限制 | 待核对 | 并发上限、日志限制、过载和清理测试 |
 | 任务依赖与公平调度 | 明确延期 / 待核对 | 记录当前依赖能力；后续实现循环检测、阻塞与人工放行测试 |
 | 用量、成本和通知 | 明确延期 | 先确认 Provider 是否提供可靠数据，再定义 UI / API / 验收 |

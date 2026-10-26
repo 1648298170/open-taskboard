@@ -154,6 +154,8 @@ todo → in_progress → in_review → done
 
 **Docker 部署默认内嵌唤醒引擎（开箱即用）**：服务端进程在配置了 `TASKBOARD_OPENCODE_URL` 时自动启动内嵌唤醒引擎（默认开启，设 `TASKBOARD_WAKE_EMBEDDED=0` 关闭）。绑定 Session 的任务收到 `@agent` 评论后由服务端直接投递 `prompt_async`，无需额外运行侧车；引擎还会每 60 秒（`TASKBOARD_WAKE_POLL_MS` 可调，最小 5000ms）补拉一次待处理评论，即使事件丢失也不会静默积压。宿主部署、或需要 TUI 输入框 / headless 新会话通道时，仍使用 `taskboard watch`（直连本地数据目录）；外部侧车自启继续由 `taskboard setup` 管理。
 
+**唤醒资格模型（标记制，防误唤醒）**：评论写入时由 TS 唤醒谓词计算 `is_wake` 标记并持久化——SQL 资格查询（队列/快照/领取）与 TS 判定共用同一事实源，不再各写一套前缀规则。一条评论可被唤醒需同时满足：① 正文以 `@agent` 开头；② 作者来源合格——`source` 标记 web / MCP / CLI / API 皆可，`system`（状态审计回声）永不唤醒，任意登录名均可触发（无硬编码用户白名单）；③ 所属任务处于 `todo` / `in_progress` / `in_review` 且未归档（done 任务上的唤醒评论挂起不投递）。面板「唤醒队列」与队列 API 均按此口径计数；设 `TASKBOARD_WAKE_DEBUG=1` 可在引擎日志输出资格漏斗诊断（仅计数，不含评论内容）。投递为 at-least-once 语义，处理幂等由 agent 侧保证。
+
 ```bash
 taskboard watch --tui-url http://127.0.0.1:4096   # ① 可选：指令进 opencode TUI 输入框（opencode 专属增强）
 taskboard watch --opencode http://127.0.0.1:4096  # ② 建议：绑定任务通过 OpenCode v1 prompt_async 续原会话
@@ -302,6 +304,7 @@ docker compose up -d --build
 | `TASKBOARD_OPENCODE_PUBLIC_URL` | 未设置 | 浏览器可访问的 OpenCode 地址，用于生成 Session 跳转链接。Docker 部署时不要填写 `host.docker.internal`；请设置为浏览器能访问的宿主机 IP、域名及端口。 |
 | `TASKBOARD_WAKE_EMBEDDED` | 默认开启 | 服务端内嵌唤醒引擎开关：任何非 `0` 值启用，`0` 关闭。仅在 `TASKBOARD_OPENCODE_URL` 已配置时启动；未配置时日志提示 `wake embedded: off (no OpenCode URL configured)` 并跳过 |
 | `TASKBOARD_WAKE_POLL_MS` | `60000` | 内嵌引擎兜底轮询间隔（毫秒，最小 `5000`，非法值回落 `60000`）。事件订阅负责实时性，轮询负责补拉漏网评论 |
+| `TASKBOARD_WAKE_DEBUG` | 未设置 | `1` 时内嵌引擎每个轮询周期输出唤醒资格漏斗诊断日志（总数/唤醒标记/来源合格/任务状态合格/入队，仅计数不含评论内容），用于排查「为什么没唤醒」 |
 | `TASKBOARD_SESSION_ID` | 未设置 | CLI 每次请求自动带 `x-taskboard-session`；`--session-id` 优先于该环境变量 |
 | `TASKBOARD_WEB_DIST` | 自动探测 | 看板静态目录（默认 `apps/web/dist`，vite 构建产物） |
 | `TASKBOARD_AUTH_REQUIRED` | 未设置 | `1` 时强制浏览器登录；非回环监听地址也会自动强制登录。首次访问创建管理员，后续通过 HttpOnly Session Cookie 认证，无需手动输入 Token |\n| `TASKBOARD_TOKEN` | 未设置 | 可选的兼容凭证，供 CLI/MCP 等机器客户端使用；浏览器不再要求输入或保存此值 |

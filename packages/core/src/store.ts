@@ -1053,6 +1053,16 @@ export class Store {
   getQueueRevision(): number {
     return this.comments.getQueueRevision();
   }
+  /** F4④：唤醒资格漏斗诊断计数（不含评论内容）。 */
+  wakeEligibilityStats(): {
+    total: number;
+    wakeMarked: number;
+    sourceOk: number;
+    taskExecutable: number;
+    queued: number;
+  } {
+    return this.comments.wakeEligibilityStats();
+  }
 
   /**
    * 原子选领（v10 Q1 / §4/I-03）：候选筛选 + 排序 + CAS claim 在同一短写
@@ -1352,6 +1362,7 @@ export class Store {
     if (!target) throw new NotFoundError(`issue not found: ${dependsOnId}`);
     if (issue.projectId !== target.projectId) throw new ValidationError('dependencies must stay within one project');
     if (issueId === dependsOnId) throw new ValidationError('an issue cannot depend on itself');
+    if (this.deps.exists(issueId, dependsOnId)) throw new ValidationError('dependency already exists');
     // Adding issueId→dependsOnId cycles iff dependsOnId already (transitively)
     // depends on issueId — i.e. issueId is reachable from dependsOnId.
     if (this.transitiveDependsOn(dependsOnId).has(issueId)) {
