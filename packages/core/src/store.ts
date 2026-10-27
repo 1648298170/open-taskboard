@@ -2,9 +2,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isWakeComment, STATUSES, activeClaim } from './types.js';
+import { RUN_TERMINAL_STATUSES, canTransitionRun, isWakeComment, STATUSES, activeClaim } from './types.js';
 import type {
-  Activity, Attachment, Comment, DependencyEdge, Issue, IssuePatch, PendingWakeComment, Priority, Progress, Project, Status, Stats, StoreEvent, WorkspaceDirectory
+  Activity, AgentRun, AgentRunEvent, Attachment, Comment, DependencyEdge, Issue, IssuePatch, PendingWakeComment, Priority, Progress, Project, RunSourceType, RunStatus, Status, Stats, StoreEvent, WorkspaceDirectory
 } from './types.js';
 import { ConflictError, NotFoundError, PermissionError, ValidationError } from './errors.js';
 import { configureDatabase, createDatabase } from './db.js';
@@ -20,6 +20,7 @@ import { ActivityRepo } from './repos/activities.js';
 import { DependencyRepo } from './repos/dependencies.js';
 import { SearchRepo } from './repos/search.js';
 import { AttachmentRepo } from './repos/attachments.js';
+import { RunRepo, type RunQueueView, type RunTransitionPatch } from './repos/runs.js';
 
 const now = (): string => new Date().toISOString();
 
@@ -80,6 +81,7 @@ export class Store {
   private wakeEngines: WakeEngineRepo;
   private activities: ActivityRepo;
   private deps: DependencyRepo;
+  private runs: RunRepo;
   private fts: SearchRepo;
   private attachments: AttachmentRepo;
   /** Root directory for attachment bodies (shared with AttachmentRepo). */
@@ -103,6 +105,7 @@ export class Store {
     this.wakeEngines = new WakeEngineRepo(this.db);
     this.activities = new ActivityRepo(this.db);
     this.deps = new DependencyRepo(this.db);
+    this.runs = new RunRepo(this.db);
     this.fts = new SearchRepo(this.db);
     this.ftsAvailable = this.fts.available();
     this.attachmentsDir = attachmentsDir ?? join(dataDir, 'attachments');
@@ -636,6 +639,8 @@ export class Store {
         });
         this.logActivity(issueId, actor, 'updated', `status: ${issue.status}→in_progress (wake)`);
       }
+      // Q4§6.1: qualified @agent comment → idempotent comment_wake Run
+      this.maybeCreateCommentWakeRun(issueId, commentId, input.body);
       return commentId;
     });
     // Payload carries author/body-excerpt/issueTitle so webhook & SSE
@@ -737,6 +742,11 @@ export class Store {
           ...(before === 'done' ? { completedAt: null } : {})
         });
         this.logActivity(issueId, actor, 'updated', `status: ${before}→in_progress (wake)`);
+      }
+      // Q4: body edits move wake state — re-wake bumps generation (new Run),
+      // de-wake cancels still-queued Runs. Protected rounds stay untouched.
+      if (patch.body !== undefined) {
+        this.syncCommentWakeRuns(id, cur.body, patch.body!, issueId, protectedRound);
       }
     });
     const updated = this.comments.get(id)!;
@@ -1062,6 +1072,336 @@ export class Store {
     queued: number;
   } {
     return this.comments.wakeEligibilityStats();
+  }
+
+  // ── AgentRun（独立任务执行队列，Q1/§3/§4）────────────────────────────
+
+  /** 创建执行尝试（§7.1）。幂等键冲突返回原 Run；done/归档任务拒绝创建。 */
+  createAgentRun(issueId: string, input: {
+    prompt: string;
+    sourceType?: RunSourceType;
+    sourceCommentId?: string | null;
+    sourceGeneration?: number | null;
+    idempotencyKey?: string;
+    priority?: number;
+    attemptNo?: number;
+    previousRunId?: string | null;
+    notBefore?: string | null;
+  }): AgentRun {
+    const issue = this.issues.get(issueId);
+    if (!issue) throw new NotFoundError(`issue not found: ${issueId}`);
+    if (issue.archivedAt) throw new ValidationError('ISSUE_ARCHIVED: issue is archived');
+    if (issue.status !== 'todo' && issue.status !== 'in_progress' && issue.status !== 'in_review') {
+      throw new ValidationError(`ISSUE_NOT_EXECUTABLE: issue status is ${issue.status}`);
+    }
+    const idempotencyKey = input.idempotencyKey ?? `manual:${issueId}:${randomUUID()}`;
+    const existing = this.runs.findByIdempotencyKey(idempotencyKey);
+    if (existing) return existing;
+    const project = this.projects.get(issue.projectId);
+    const run = inTransaction(this.db, () => this.runs.create({
+      issueId,
+      attemptNo: input.attemptNo ?? 1,
+      previousRunId: input.previousRunId ?? null,
+      sourceType: input.sourceType ?? 'manual',
+      sourceCommentId: input.sourceCommentId ?? null,
+      sourceGeneration: input.sourceGeneration ?? null,
+      idempotencyKey,
+      promptSnapshot: input.prompt,
+      priority: input.priority ?? 0,
+      workspacePath: project?.workspacePath ?? '',
+      worktreePath: issue.worktreePath ?? '',
+      notBefore: input.notBefore ?? null,
+    }));
+    this.emit('agent-run.changed', { id: run.id });
+    return run;
+  }
+
+  getAgentRun(id: string): AgentRun | null {
+    return this.runs.get(id);
+  }
+
+  listAgentRunsByIssue(issueId: string, limit = 50, cursor?: string): { items: AgentRun[]; cursor: string | null } {
+    return this.runs.listByIssue(issueId, Math.max(1, Math.min(limit, 200)), cursor);
+  }
+
+  listAgentRunsQueue(opts: RunQueueView = {}): { items: AgentRun[]; counts: Record<string, number>; cursor: string | null } {
+    return this.runs.listQueue(now(), opts);
+  }
+
+  /** 追加 Run 事件（§3.2）。同 eventId 重放返回 null；payload 上限 4KB（§9.5）。 */
+  appendRunEvent(id: string, eventId: string, type: string, payload: Record<string, unknown> = {}): AgentRunEvent | null {
+    if (!this.runs.get(id)) throw new NotFoundError(`run not found: ${id}`);
+    const capped = JSON.stringify(payload).slice(0, 4096);
+    const event = inTransaction(this.db, () => this.runs.appendEvent(id, eventId, type, capped, now()));
+    if (event) this.emit('agent-run.event', { id, eventId });
+    return event;
+  }
+
+  listRunEvents(id: string, afterSequence = 0, limit = 100): AgentRunEvent[] {
+    if (!this.runs.get(id)) throw new NotFoundError(`run not found: ${id}`);
+    return this.runs.listEvents(id, afterSequence, limit);
+  }
+
+  /** 状态 CAS 迁移（§4.2）。终态无出边→迟到事件被拒；并发 CAS miss → ConflictError。 */
+  transitionRun(id: string, to: RunStatus, patch: RunTransitionPatch = {}, opts: { expectedStatus?: RunStatus } = {}): AgentRun {
+    const updated = inTransaction(this.db, () => {
+      const run = this.runs.get(id);
+      if (!run) throw new NotFoundError(`run not found: ${id}`);
+      const from = opts.expectedStatus ?? run.status;
+      if (!canTransitionRun(from, to)) {
+        throw new ValidationError(`RUN_STATE_CONFLICT: illegal run transition ${from} -> ${to}`);
+      }
+      return this.runs.transition(id, from, to, patch, now());
+    });
+    if (!updated) throw new ConflictError('RUN_STATE_CONFLICT: run changed concurrently, re-read and retry');
+    this.emit('agent-run.changed', { id });
+    this.syncRunCommentProjection(id);
+    return updated;
+  }
+
+  /** 原子领取（§5.4）：单事务内完成全局 slot 检查、候选扫描（aging 防饥饿）、
+   * Session/Worktree/legacy 租约冲突 defer、CAS 领取与资源租约获取。
+   * 事务内无网络/文件扫描/health probe；busy 候选只 defer 不阻塞其他资源。 */
+  claimNextAgentRun(claimer: string, engineRunId: string, opts: { globalLimit?: number; deferMs?: number; leaseTtlMs?: number; serverUrl?: string } = {}): AgentRun | null {
+    if (!claimer.trim() || !engineRunId.trim()) throw new ValidationError('claimer and engineRunId are required');
+    const globalLimit = Math.max(1, opts.globalLimit ?? 4);
+    const deferAt = new Date(Date.now() + (opts.deferMs ?? 30_000)).toISOString();
+    const claimed = inTransaction(this.db, () => {
+      if (this.runs.countActive() >= globalLimit) return null;
+      for (const candidate of this.runs.listClaimCandidates(now())) {
+        if (!candidate.sessionId) {
+          // SESSION_REQUIRED（§5.3）：无可绑定 Session，defer 出队头，不投递
+          this.runs.deferCandidate(candidate.id, deferAt, now());
+          continue;
+        }
+        const busyRun = this.db.prepare(
+          `SELECT 1 FROM agent_runs WHERE status IN ('starting','running','awaiting_input','awaiting_approval','cancel_requested') AND provider_session_id = ? LIMIT 1`,
+        ).get(candidate.sessionId);
+        if (busyRun) { this.runs.deferCandidate(candidate.id, deferAt, now()); continue; }
+        if (candidate.worktreePath) {
+          const busyWt = this.db.prepare(
+            `SELECT 1 FROM agent_runs WHERE status IN ('starting','running','awaiting_input','awaiting_approval','cancel_requested') AND worktree_path = ? LIMIT 1`,
+          ).get(candidate.worktreePath);
+          if (busyWt) { this.runs.deferCandidate(candidate.id, deferAt, now()); continue; }
+        }
+        if (this.wakeLeases.hasActiveForSession(candidate.sessionId, now())) {
+          // 与 legacy wake 派发共存（§10.2）：该 Session 被旧引擎占用
+          this.runs.deferCandidate(candidate.id, deferAt, now());
+          continue;
+        }
+        const dispatchId = randomUUID();
+        const leaseKey = `agent-run|${candidate.sessionId}`;
+        const lease = this.wakeLeases.acquire({
+          leaseKey,
+          sessionId: candidate.sessionId,
+          serverUrl: opts.serverUrl ?? 'agent-run',
+          holderRun: engineRunId.trim(),
+          dispatchId,
+          nowIso: now(),
+          ttlMs: opts.leaseTtlMs ?? 600_000,
+          ownerType: 'agent_run',
+          ownerId: candidate.id,
+        });
+        if (!lease) { this.runs.deferCandidate(candidate.id, deferAt, now()); continue; }
+        const run = this.runs.claimCandidate({
+          id: candidate.id,
+          version: candidate.version,
+          claimer: claimer.trim(),
+          engineRunId: engineRunId.trim(),
+          dispatchId,
+          sessionId: candidate.sessionId,
+          nowIso: now(),
+        });
+        if (!run) {
+          // CAS 输给并发领取者：释放刚拿到的租约，试下一个候选
+          this.wakeLeases.releaseOwnerHeld(leaseKey, lease.fence, dispatchId, candidate.id, now());
+          continue;
+        }
+        this.runs.appendEvent(run.id, `claimed:${dispatchId}`, 'claimed', JSON.stringify({ by: claimer.trim(), sessionId: candidate.sessionId }), now());
+        return run;
+      }
+      return null;
+    });
+    if (claimed) {
+      this.emit('agent-run.changed', { id: claimed.id });
+      this.syncRunCommentProjection(claimed.id);
+    }
+    return claimed;
+  }
+
+  /** 释放 Run 资源租约（收尾路径）：held → owner 版释放，活动态 → conclude 墓碑。 */
+  releaseAgentRunLease(runId: string, dispatchId: string): boolean {
+    const lease = this.wakeLeases.findByOwner(runId);
+    if (!lease || lease.dispatchId !== dispatchId) return false;
+    if (lease.state === 'held') return this.wakeLeases.releaseOwnerHeld(lease.leaseKey, lease.fence, dispatchId, runId, now());
+    return this.wakeLeases.conclude(lease.leaseKey, lease.fence, dispatchId, now());
+  }
+
+  // recoverOrphanRuns lease release: stale owner leases must not outlive recovery
+  /** 孤儿恢复（§9.4）：starting 且未发送（started_at NULL）→ 幂等重排队；
+   * 其余活动态 → interrupted（发送后结果未知，需 marker 核验/人工）。 */
+  recoverOrphanRuns(livenessCutoffIso: string): { requeued: string[]; interrupted: string[] } {
+    const out = { requeued: [] as string[], interrupted: [] as string[] };
+    inTransaction(this.db, () => {
+      for (const run of this.runs.listRunOrphans(livenessCutoffIso)) {
+        if (run.status === 'starting' && run.startedAt === null) {
+          const rq = this.runs.requeueUnstarted(run.id, now());
+          if (rq) {
+            out.requeued.push(rq.id);
+            // stale owner lease (held, TTL live) must go or the requeued run
+            // would defer against its own dead claim forever
+            if (run.dispatchId) this.releaseAgentRunLease(run.id, run.dispatchId);
+            this.runs.appendEvent(rq.id, `recovery-requeued:${rq.version}`, 'recovery_reconciled', JSON.stringify({ reason: 'owner lost before dispatch' }), now());
+          }
+        } else {
+          const updated = this.runs.transition(run.id, run.status, 'interrupted', { errorCode: 'RUNTIME_UNAVAILABLE', errorMessage: 'scheduler owner lost; dispatch result unknown' }, now());
+          if (updated) {
+            out.interrupted.push(updated.id);
+            if (run.dispatchId) this.releaseAgentRunLease(run.id, run.dispatchId);
+            this.runs.appendEvent(updated.id, `recovery-interrupted:${updated.version}`, 'recovery_reconciled', JSON.stringify({ reason: 'owner lost after dispatch' }), now());
+          }
+        }
+      }
+    });
+    return out;
+  }
+
+  /** 重试（§4.4）：新 Run 引用 previous_run_id，attempt+1；确定性幂等键防双击。 */
+  retryAgentRun(id: string): AgentRun {
+    const parent = this.runs.get(id);
+    if (!parent) throw new NotFoundError(`run not found: ${id}`);
+    const retryable: readonly RunStatus[] = [...RUN_TERMINAL_STATUSES, 'interrupted'];
+    if (!retryable.includes(parent.status)) {
+      throw new ValidationError(`cannot retry run in status ${parent.status}`);
+    }
+    return this.createAgentRun(parent.issueId, {
+      prompt: parent.promptSnapshot,
+      sourceType: parent.sourceType,
+      sourceCommentId: parent.sourceCommentId,
+      sourceGeneration: parent.sourceGeneration,
+      idempotencyKey: `retry:${parent.id}:attempt${parent.attemptNo + 1}`,
+      priority: parent.priority,
+      attemptNo: parent.attemptNo + 1,
+      previousRunId: parent.id,
+    });
+  }
+
+  /** Q5 API fast-path: cancel a still-queued run without the scheduler. */
+  cancelQueuedAgentRun(runId: string): boolean {
+    const run = this.runs.get(runId);
+    if (!run || run.status !== 'queued') return false;
+    try {
+      this.transitionRun(runId, 'cancelled');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Q4§6.1: a qualified @agent comment (is_wake marker + non-system source +
+   * token-boundary re-check) idempotently creates one comment_wake Run per
+   * generation. Plain/audit comments never create runs. Agent self-wake
+   * stays guarded by the busy mutex and claim-level ignoreAuthors.
+   */
+  private maybeCreateCommentWakeRun(issueId: string, commentId: string, body: string): void {
+    const comment = this.comments.get(commentId);
+    if (!comment || comment.isWake !== 1 || comment.source === 'system') return;
+    if (!isWakeComment(body)) return;
+    const issue = this.issues.get(issueId);
+    if (!issue || issue.archivedAt || issue.status === 'done') return;
+    this.createCommentWakeRun(issueId, commentId, body, comment.wakeGeneration);
+  }
+
+  private createCommentWakeRun(issueId: string, commentId: string, body: string, generation: number): void {
+    const key = `comment:${commentId}:gen${generation}`;
+    if (this.runs.findByIdempotencyKey(key)) return; // replay-safe (§12.4-26)
+    const issue = this.issues.get(issueId)!;
+    const comment = this.comments.get(commentId);
+    this.runs.create({
+      issueId,
+      sourceType: 'comment_wake',
+      sourceCommentId: commentId,
+      sourceGeneration: generation,
+      idempotencyKey: key,
+      promptSnapshot: body,
+      priority: comment?.queuePriority ?? 0,
+      workspacePath: this.projects.get(issue.projectId)?.workspacePath ?? '',
+      worktreePath: issue.worktreePath ?? '',
+    });
+  }
+
+  /** Q4: body edits move wake state — re-wake bumps generation (new Run),
+   *  de-wake cancels still-queued Runs; started runs keep their course. */
+  private syncCommentWakeRuns(commentId: string, oldBody: string, newBody: string, issueId: string, protectedRound: boolean): void {
+    const comment = this.comments.get(commentId);
+    if (!comment || comment.source === 'system' || protectedRound) return;
+    const was = isWakeComment(oldBody);
+    const nowWake = isWakeComment(newBody);
+    if (!was && !nowWake) return;
+    if (was && !nowWake) {
+      // de-wake (§12.4-28): cancel queued runs from this comment
+      const queued = this.db.prepare(
+        `SELECT id, version FROM agent_runs WHERE source_comment_id = ? AND status = 'queued'`,
+      ).all(commentId) as { id: string; version: number }[];
+      for (const r of queued) this.runs.transition(r.id, 'queued', 'cancelled', { errorMessage: 'comment de-waked' }, now());
+      return;
+    }
+    // re-wake (§12.4-27): the current generation already produced a run
+    // when the comment was already wake — bump; plain→wake uses gen as-is
+    let generation = comment.wakeGeneration;
+    const used = this.runs.findByIdempotencyKey(`comment:${commentId}:gen${generation}`);
+    if (was && used) generation = this.comments.bumpWakeGeneration(commentId);
+    this.createCommentWakeRun(issueId, commentId, newBody, generation);
+  }
+
+  /** Q4§6.2: comment status is a one-way projection of the run state. */
+  private syncRunCommentProjection(runId: string): void {
+    const run = this.runs.get(runId);
+    if (!run?.sourceCommentId) return;
+    const map: Partial<Record<RunStatus, string>> = {
+      starting: 'processing', running: 'processing', awaiting_input: 'processing',
+      awaiting_approval: 'processing', cancel_requested: 'processing',
+      succeeded: 'processed', failed: 'pending', interrupted: 'pending', cancelled: 'pending',
+    };
+    const target = map[run.status];
+    if (!target) return;
+    const comment = this.comments.get(run.sourceCommentId);
+    if (!comment || comment.status === target) return;
+    this.comments.update(run.sourceCommentId, { status: target }, run.issueId);
+  }
+
+  /** Q4§6.3: idempotent, paged backfill of legacy pending wake comments
+   *  into Runs. No network inside the transaction; processing rows are
+   *  excluded (their round belongs to the legacy engine’s recovery);
+   *  processed/plain/audit comments are never imported; legacy rows that
+   *  fail the token boundary get their is_wake marker corrected. */
+  backfillCommentWakeRuns(limit = 200): { scanned: number; created: number; correctedLegacy: number } {
+    const out = { scanned: 0, created: 0, correctedLegacy: 0 };
+    inTransaction(this.db, () => {
+      const rows = this.db.prepare(
+        `SELECT c.id, c.issue_id AS issueId, c.body, c.source, c.wake_generation AS gen
+         FROM comments c JOIN issues i ON i.id = c.issue_id
+         WHERE c.is_wake = 1 AND c.source != 'system' AND c.status = 'pending'
+           AND c.terminal_at IS NULL AND i.archived_at IS NULL
+           AND i.status IN ('todo', 'in_progress', 'in_review')
+           AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.source_comment_id = c.id)
+         ORDER BY c.queued_at, c.rowid LIMIT ?`,
+      ).all(limit) as { id: string; issueId: string; body: string; source: string; gen: number }[];
+      for (const row of rows) {
+        out.scanned++;
+        if (!isWakeComment(row.body)) {
+          if (row.source === 'legacy') {
+            this.db.prepare('UPDATE comments SET is_wake = 0 WHERE id = ?').run(row.id);
+            out.correctedLegacy++;
+          }
+          continue;
+        }
+        this.createCommentWakeRun(row.issueId, row.id, row.body, row.gen);
+        out.created++;
+      }
+    });
+    return out;
   }
 
   /**

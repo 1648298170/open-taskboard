@@ -6,11 +6,8 @@ import type { Comment, PendingWakeComment } from '../types.js';
 // Public comment projection. claimed_by/claimed_run/updated_at/dispatch_id are
 // wake-engine CAS state and intentionally stay out of the API payload
 // (terminal_at joins the payload only in the S4 contract batch).
-const COMMENT_COLS = 'id, issue_id AS issueId, author, body, status, created_at AS createdAt, attempts, last_error AS lastError, not_before AS notBefore, terminal_at AS terminalAt';
+const COMMENT_COLS = 'id, issue_id AS issueId, author, body, status, created_at AS createdAt, attempts, last_error AS lastError, not_before AS notBefore, terminal_at AS terminalAt, source AS source, is_wake AS isWake, wake_generation AS wakeGeneration';
 const now = (): string => new Date().toISOString();
-// 入队资格口径（用户已确认）：人类作者评论即入队，不再要求 @agent 前缀；
-// agent 执行者（mcp/sisyphus/watch 等）的审计内容按作者天然排除。
-const HUMAN_AUTHORS = "('web', 'admin')".replace(/"/g, "'");
 const shortId = (): string => randomUUID().slice(0, 8);
 
 export interface WakeQueueMeta {
@@ -185,6 +182,16 @@ export class CommentRepo {
     ).all() as unknown as PendingWakeComment[];
   }
 
+  getWakeGeneration(id: string): number {
+    const row = this.db.prepare('SELECT wake_generation AS g FROM comments WHERE id = ?').get(id) as { g: number } | undefined;
+    return row?.g ?? 1;
+  }
+
+  /** Q4 re-wake: an explicit user re-trigger bumps the generation. */
+  bumpWakeGeneration(id: string): number {
+    this.db.prepare('UPDATE comments SET wake_generation = wake_generation + 1 WHERE id = ?').run(id);
+    return this.getWakeGeneration(id);
+  }
   countByAuthor(issueId: string, author: string): number {
     return (this.db.prepare('SELECT COUNT(*) AS n FROM comments WHERE issue_id = ? AND author = ?').get(issueId, author) as { n: number }).n;
   }

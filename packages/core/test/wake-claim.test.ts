@@ -126,7 +126,7 @@ describe('comments.updated_at (v21)', () => {
     // attempts/lastError/notBefore 是刻意公开的队列状态（面板徽章需要）；
     // claimed_by（认领令牌）与 updated_at（内部时长）仍然不出现在载荷里。
     assert.deepEqual(Object.keys(comment).sort(), [
-      'attempts', 'author', 'body', 'createdAt', 'id', 'issueId', 'lastError', 'notBefore', 'status', 'terminalAt'
+      'attempts', 'author', 'body', 'createdAt', 'id', 'isWake', 'issueId', 'lastError', 'notBefore', 'source', 'status', 'terminalAt', 'wakeGeneration'
     ]);
   });
 

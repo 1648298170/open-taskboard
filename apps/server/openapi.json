@@ -2840,6 +2840,220 @@
         }
       }
     },
+    "/api/agent-runs": {
+      "get": {
+        "summary": "Task execution queue center (agent runs)",
+        "operationId": "listAgentRuns",
+        "tags": [
+          "Agent Runs"
+        ],
+        "parameters": [
+          {
+            "name": "view",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "active",
+                "needs_attention",
+                "terminal",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "counts + items + cursor"
+          }
+        }
+      }
+    },
+    "/api/issues/{id}/agent-runs": {
+      "post": {
+        "summary": "Create an execution run for an issue (202 + runId, idempotent)",
+        "operationId": "createAgentRun",
+        "tags": [
+          "Agent Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "run queued"
+          },
+          "400": {
+            "description": "issue not executable / archived"
+          },
+          "404": {
+            "description": "issue not found"
+          }
+        }
+      },
+      "get": {
+        "summary": "Run history for an issue (keyset pagination)",
+        "operationId": "listIssueAgentRuns",
+        "tags": [
+          "Agent Runs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "items + cursor"
+          }
+        }
+      }
+    },
+    "/api/agent-runs/{runId}": {
+      "get": {
+        "summary": "Run snapshot with capability flags",
+        "operationId": "getAgentRun",
+        "tags": [
+          "Agent Runs"
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "run + capabilities"
+          },
+          "404": {
+            "description": "run not found"
+          }
+        }
+      }
+    },
+    "/api/agent-runs/{runId}/events": {
+      "get": {
+        "summary": "Structured run events after a sequence cursor",
+        "operationId": "listAgentRunEvents",
+        "tags": [
+          "Agent Runs"
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "events"
+          },
+          "404": {
+            "description": "run not found"
+          }
+        }
+      }
+    },
+    "/api/agent-runs/{runId}/cancel": {
+      "post": {
+        "summary": "Request run cancellation (queued fast-path or provider request)",
+        "operationId": "cancelAgentRun",
+        "tags": [
+          "Agent Runs"
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "cancelled"
+          },
+          "202": {
+            "description": "cancel requested, awaiting confirmation"
+          },
+          "409": {
+            "description": "already terminal"
+          }
+        }
+      }
+    },
+    "/api/agent-runs/{runId}/retry": {
+      "post": {
+        "summary": "Retry a terminal/interrupted run as a new child run",
+        "operationId": "retryAgentRun",
+        "tags": [
+          "Agent Runs"
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "child run queued"
+          },
+          "409": {
+            "description": "not retryable"
+          }
+        }
+      }
+    },
     "/api/wake-queue": {
       "summary": "Wake queue center snapshot",
       "get": {

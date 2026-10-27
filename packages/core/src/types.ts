@@ -12,7 +12,16 @@ export const WAKE_PREFIX = '@agent';
  * re-open a task without ever being delivered, or vice versa.
  */
 export function isWakeComment(body: string, prefix: string = WAKE_PREFIX): boolean {
-  return body.trimStart().startsWith(prefix);
+  // token boundary (Q4): "@agent do x" wakes, "@agentfoo" must not. The
+  // prefix must be followed by whitespace or end-of-text. This predicate is
+  // the single source of truth — the persisted is_wake marker carries the
+  // decision into every SQL/scan/claim/UI path.
+  const trimmed = body.trimStart();
+  if (!trimmed.startsWith(prefix)) return false;
+  const rest = trimmed.slice(prefix.length);
+  if (rest === '') return true;
+  const first = rest[0];
+  return first !== undefined && /\s/.test(first);
 }
 
 export const PRIORITIES = ['urgent', 'high', 'medium', 'low'] as const;
@@ -150,6 +159,12 @@ export interface Comment {
   queuePriority: number;
   /** 进入优先队列的时间（normal 时为 null）。 */
   priorityAt: string | null;
+  /** Q4: 作者来源标记（web/mcp/cli/api/system/legacy）。 */
+  source: string;
+  /** Q4: 持久化唤醒资格标记（写入时由 TS 谓词计算）。 */
+  isWake: number;
+  /** Q4: 唤醒请求轮次（明确重触发时 +1）。 */
+  wakeGeneration: number;
 }
 
 export interface WakeQueueItem {
@@ -271,4 +286,101 @@ export function activeClaim(issue: Pick<Issue, 'claimedBy' | 'leaseExpiresAt'>):
     && Date.parse(issue.leaseExpiresAt) > Date.now()
     ? issue.claimedBy
     : null;
+}
+
+// ── AgentRun（独立任务执行队列，Q1/§3/§4）──────────────────────────────
+
+/** Run 十态（§4.1）。queued 为初始态；succeeded/failed/cancelled 为终态。 */
+export const RUN_STATUSES = [
+  'queued', 'starting', 'running', 'awaiting_input', 'awaiting_approval',
+  'cancel_requested', 'succeeded', 'failed', 'cancelled', 'interrupted',
+] as const;
+
+export type RunStatus = (typeof RUN_STATUSES)[number];
+
+export const RUN_TERMINAL_STATUSES = ['succeeded', 'failed', 'cancelled'] as const;
+
+export type RunTerminalStatus = (typeof RUN_TERMINAL_STATUSES)[number];
+
+/** 执行请求来源（§3.1）。第一版启用 manual 与 comment_wake。 */
+export const RUN_SOURCE_TYPES = ['manual', 'comment_wake', 'automation'] as const;
+
+export type RunSourceType = (typeof RUN_SOURCE_TYPES)[number];
+
+/** 合法状态迁移表（§4.2）。终态无出边——迟到事件不得覆盖终态。 */
+export const RUN_TRANSITIONS: Readonly<Record<RunStatus, readonly RunStatus[]>> = {
+  queued: ['starting', 'cancelled'],
+  starting: ['running', 'awaiting_input', 'awaiting_approval', 'failed', 'interrupted', 'cancel_requested', 'cancelled'],
+  running: ['awaiting_input', 'awaiting_approval', 'succeeded', 'failed', 'cancel_requested', 'interrupted'],
+  awaiting_input: ['running', 'cancel_requested', 'interrupted', 'failed'],
+  awaiting_approval: ['running', 'cancel_requested', 'interrupted', 'failed'],
+  cancel_requested: ['cancelled', 'running', 'failed', 'interrupted'],
+  interrupted: ['running', 'succeeded', 'failed', 'cancelled'],
+  succeeded: [],
+  failed: [],
+  cancelled: [],
+};
+
+export function canTransitionRun(from: RunStatus, to: RunStatus): boolean {
+  return from !== to && RUN_TRANSITIONS[from].includes(to);
+}
+
+/** Run 稳定错误码（§7.4）。路由层映射到 HTTP 语义；诊断详情进事件与日志。 */
+export const RUN_ERROR_CODES = [
+  'RUN_NOT_FOUND', 'ISSUE_NOT_FOUND', 'ISSUE_NOT_EXECUTABLE', 'ISSUE_ARCHIVED',
+  'SESSION_REQUIRED', 'SESSION_WORKSPACE_MISMATCH', 'RUNTIME_UNAVAILABLE',
+  'CAPABILITY_UNSUPPORTED', 'IDEMPOTENCY_CONFLICT', 'RUN_STATE_CONFLICT',
+  'RUN_ALREADY_TERMINAL', 'CANCEL_NOT_SUPPORTED', 'CANCEL_UNCONFIRMED',
+  'RESOURCE_BUSY', 'CONCURRENCY_LIMIT', 'STALE_RUN_CURSOR',
+] as const;
+
+export type RunErrorCode = (typeof RUN_ERROR_CODES)[number];
+
+/** 一次执行尝试（§3.1）。业务任务(Issue)/评论/执行尝试三实体分离。 */
+export interface AgentRun {
+  id: string;
+  issueId: string;
+  attemptNo: number;
+  previousRunId: string | null;
+  status: RunStatus;
+  sourceType: RunSourceType;
+  sourceCommentId: string | null;
+  sourceGeneration: number | null;
+  idempotencyKey: string;
+  providerType: string;
+  runtimeId: string | null;
+  providerSessionId: string | null;
+  interactionMode: string; // 第一版仅 'existing-session'
+  promptSnapshot: string;
+  resultSummary: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+  priority: number;
+  queuedAt: string;
+  notBefore: string | null;
+  claimedBy: string;
+  claimedRunId: string | null;
+  dispatchId: string | null;
+  leaseKey: string | null;
+  leaseFence: number | null;
+  workspacePath: string;
+  worktreePath: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  cancelRequestedAt: string | null;
+  exitCode: number | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Run 的结构化事件（§3.2）。只追加；UNIQUE(run_id,event_id)+(run_id,sequence)。 */
+export interface AgentRunEvent {
+  id: string;
+  runId: string;
+  eventId: string;
+  sequence: number;
+  type: string;
+  payloadJson: string;
+  createdAt: string;
 }

@@ -10,6 +10,8 @@
 import { randomUUID } from 'node:crypto';
 import * as os from 'node:os';
 import type { Store, TaskboardEnv } from '@taskboard/core';
+import { startRunScheduler } from '@taskboard/wake';
+import { createOpenCodeRunWorker } from './opencode-run-worker.js';
 import { createWakeEngine, WATCH_REQUEST_TIMEOUT_MS } from '@taskboard/wake';
 import type { FetchLike, WakeEngine } from '@taskboard/wake';
 import { getConfiguredOpenCodeBase } from './opencode.js';
@@ -58,6 +60,13 @@ export function wakeEmbeddedEnabled(env: TaskboardEnv): boolean {
   return env.TASKBOARD_WAKE_EMBEDDED !== '0';
 }
 
+/** Q4§10.2 single-dispatch-path switch: '1' routes @agent wakes through
+ *  the unified Run scheduler and keeps the legacy comment engine off.
+ *  The two paths must never run at the same time. */
+export function runSchedulerEnabled(env: TaskboardEnv): boolean {
+  return env.TASKBOARD_RUN_SCHEDULER === '1';
+}
+
 export async function startEmbeddedWake(opts: EmbeddedWakeOptions): Promise<EmbeddedWake> {
   const log = opts.log ?? ((message: string, level?: 'info' | 'error') => {
     if (level === 'error') console.error(message);
@@ -86,6 +95,22 @@ export async function startEmbeddedWake(opts: EmbeddedWakeOptions): Promise<Embe
     return inert();
   }
 
+  if (runSchedulerEnabled(opts.env)) {
+    const worker = createOpenCodeRunWorker(opts.store, { serverUrl: opencodeBase });
+    const scheduler = startRunScheduler(opts.store, { worker, pollMs, heartbeatMs: 30_000 });
+    log(`wake embedded: RUN SCHEDULER mode (TASKBOARD_RUN_SCHEDULER=1, instance=${instanceId}, opencode=${opencodeBase})`);
+    let schedulerStopped = false;
+    return {
+      engine: null,
+      instanceId,
+      pollMs,
+      stop: async () => {
+        if (schedulerStopped) return;
+        schedulerStopped = true;
+        scheduler.stop();
+      },
+    };
+  }
   const engine = createWakeEngine(
     {
       store: opts.store,

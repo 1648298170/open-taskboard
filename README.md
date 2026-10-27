@@ -156,6 +156,8 @@ todo → in_progress → in_review → done
 
 **唤醒资格模型（标记制，防误唤醒）**：评论写入时由 TS 唤醒谓词计算 `is_wake` 标记并持久化——SQL 资格查询（队列/快照/领取）与 TS 判定共用同一事实源，不再各写一套前缀规则。一条评论可被唤醒需同时满足：① 正文以 `@agent` 开头；② 作者来源合格——`source` 标记 web / MCP / CLI / API 皆可，`system`（状态审计回声）永不唤醒，任意登录名均可触发（无硬编码用户白名单）；③ 所属任务处于 `todo` / `in_progress` / `in_review` 且未归档（done 任务上的唤醒评论挂起不投递）。面板「唤醒队列」与队列 API 均按此口径计数；设 `TASKBOARD_WAKE_DEBUG=1` 可在引擎日志输出资格漏斗诊断（仅计数，不含评论内容）。投递为 at-least-once 语义，处理幂等由 agent 侧保证。
 
+**独立任务执行队列（AgentRun）**：任务执行从「评论即队列」演进为三实体模型——Issue（业务任务）→ AgentRun（一次执行尝试，十态状态机）→ AgentEvent（结构化事件）。`@agent` 评论经 `wake_generation` 幂等映射为 `comment_wake` Run（重放/补扫零重复）；也可通过 `POST /api/issues/:id/agent-runs` 手动创建执行请求（202 + runId，幂等键重复请求返回原 Run）。Run 成功**不会**自动把 Issue 置 done（人工验收门禁不 bypass）。统一 RunScheduler 是唯一派发路径：原子领取 + Session/Worktree/全局并发门禁 + 孤儿恢复；队列中心查询走 `GET /api/agent-runs`（view/status/projectId/limit/cursor）。设 `TASKBOARD_RUN_SCHEDULER=1` 启用 Run 调度模式（此时旧评论直派发引擎关闭，单选不双开——默认关闭保持既有唤醒行为）。真实 OpenCode E2E 与 Web 队列中心界面为待验证/待交付项。
+
 ```bash
 taskboard watch --tui-url http://127.0.0.1:4096   # ① 可选：指令进 opencode TUI 输入框（opencode 专属增强）
 taskboard watch --opencode http://127.0.0.1:4096  # ② 建议：绑定任务通过 OpenCode v1 prompt_async 续原会话
@@ -305,6 +307,7 @@ docker compose up -d --build
 | `TASKBOARD_WAKE_EMBEDDED` | 默认开启 | 服务端内嵌唤醒引擎开关：任何非 `0` 值启用，`0` 关闭。仅在 `TASKBOARD_OPENCODE_URL` 已配置时启动；未配置时日志提示 `wake embedded: off (no OpenCode URL configured)` 并跳过 |
 | `TASKBOARD_WAKE_POLL_MS` | `60000` | 内嵌引擎兜底轮询间隔（毫秒，最小 `5000`，非法值回落 `60000`）。事件订阅负责实时性，轮询负责补拉漏网评论 |
 | `TASKBOARD_WAKE_DEBUG` | 未设置 | `1` 时内嵌引擎每个轮询周期输出唤醒资格漏斗诊断日志（总数/唤醒标记/来源合格/任务状态合格/入队，仅计数不含评论内容），用于排查「为什么没唤醒」 |
+| `TASKBOARD_RUN_SCHEDULER` | 未设置 | `1` 时服务端内嵌改为启动统一 Run 调度器（独立任务执行队列，`@agent` 评论幂等转换为 AgentRun），旧评论直派发引擎关闭——两条派发路径互斥，不能同时开启（§10.2 灰度单选） |
 | `TASKBOARD_SESSION_ID` | 未设置 | CLI 每次请求自动带 `x-taskboard-session`；`--session-id` 优先于该环境变量 |
 | `TASKBOARD_WEB_DIST` | 自动探测 | 看板静态目录（默认 `apps/web/dist`，vite 构建产物） |
 | `TASKBOARD_AUTH_REQUIRED` | 未设置 | `1` 时强制浏览器登录；非回环监听地址也会自动强制登录。首次访问创建管理员，后续通过 HttpOnly Session Cookie 认证，无需手动输入 Token |\n| `TASKBOARD_TOKEN` | 未设置 | 可选的兼容凭证，供 CLI/MCP 等机器客户端使用；浏览器不再要求输入或保存此值 |

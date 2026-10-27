@@ -8,6 +8,8 @@ export interface WakeLeaseRow {
   sessionId: string;
   serverUrl: string;
   holderRun: string;
+  ownerType: string;
+  ownerId: string | null;
   commentId: string | null;
   dispatchId: string | null;
   fence: number;
@@ -19,7 +21,8 @@ export interface WakeLeaseRow {
 }
 
 const COLS = `lease_key AS leaseKey, session_id AS sessionId, server_url AS serverUrl,
-  holder_run AS holderRun, comment_id AS commentId, dispatch_id AS dispatchId,
+  holder_run AS holderRun, owner_type AS ownerType, owner_id AS ownerId,
+  comment_id AS commentId, dispatch_id AS dispatchId,
   fence, state, acquired_at AS acquiredAt, renewed_at AS renewedAt,
   expires_at AS expiresAt, dispatch_started_at AS dispatchStartedAt`;
 
@@ -42,16 +45,19 @@ export class WakeLeaseRepo {
    */
   acquire(input: {
     leaseKey: string; sessionId: string; serverUrl: string; holderRun: string;
-    commentId: string; dispatchId: string; nowIso: string; ttlMs: number;
+    commentId?: string | null; dispatchId: string; nowIso: string; ttlMs: number;
+    ownerType?: string; ownerId?: string | null; // v29: run leases set ownerType='agent_run'
   }): WakeLeaseRow | null {
     const expires = new Date(Date.parse(input.nowIso) + input.ttlMs).toISOString();
     const result = this.db.prepare(
       `INSERT INTO wake_session_leases
-         (lease_key, session_id, server_url, holder_run, comment_id, dispatch_id,
-          fence, state, acquired_at, renewed_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, 'held', ?, ?, ?)
+         (lease_key, session_id, server_url, holder_run, owner_type, owner_id,
+          comment_id, dispatch_id, fence, state, acquired_at, renewed_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'held', ?, ?, ?)
        ON CONFLICT(lease_key) DO UPDATE SET
          holder_run = excluded.holder_run,
+         owner_type = excluded.owner_type,
+         owner_id = excluded.owner_id,
          comment_id = excluded.comment_id,
          dispatch_id = excluded.dispatch_id,
          fence = wake_session_leases.fence + 1,
@@ -62,7 +68,9 @@ export class WakeLeaseRepo {
        WHERE wake_session_leases.state = 'held' AND wake_session_leases.expires_at <= ?
           OR wake_session_leases.state = 'released'`
     ).run(
-      input.leaseKey, input.sessionId, input.serverUrl, input.holderRun, input.commentId,
+      input.leaseKey, input.sessionId, input.serverUrl, input.holderRun,
+      input.ownerType ?? 'comment_wake', input.ownerId ?? input.commentId ?? null,
+      input.commentId ?? null,
       input.dispatchId, input.nowIso, input.nowIso, expires, input.nowIso,
     );
     return result.changes > 0 ? this.get(input.leaseKey) : null;
@@ -155,5 +163,32 @@ export class WakeLeaseRepo {
                OR (state = 'held' AND expires_at > ?))
         LIMIT 1`
     ).get(sessionId, excludeKey, nowIso));
+  }
+
+  /** 最新一笔属主某 owner（如 run id）的租约：recovery/收尾查询用。 */
+  findByOwner(ownerId: string): WakeLeaseRow | null {
+    return (this.db.prepare(
+      `SELECT ${COLS} FROM wake_session_leases WHERE owner_id = ? ORDER BY fence DESC LIMIT 1`
+    ).get(ownerId) ?? null) as unknown as WakeLeaseRow | null;
+  }
+
+  /** 该 Session（任何命名空间）是否有未解除的活动租约——Run 领取冲突检查用。 */
+  hasActiveForSession(sessionId: string, nowIso: string, excludeLeaseKey?: string): boolean {
+    return Boolean(this.db.prepare(
+      `SELECT 1 FROM wake_session_leases
+        WHERE session_id = ? AND lease_key <> COALESCE(?, '')
+          AND (state IN ('dispatching', 'sent', 'unverified_sent')
+               OR (state = 'held' AND expires_at > ?))
+        LIMIT 1`
+    ).get(sessionId, excludeLeaseKey ?? null, nowIso));
+  }
+
+  /** Run 租约的 held 释放：绑 owner_id（而非 comment_id，Run 行该列为 NULL）。 */
+  releaseOwnerHeld(leaseKey: string, fence: number, dispatchId: string, ownerId: string, nowIso: string): boolean {
+    const result = this.db.prepare(
+      `UPDATE wake_session_leases SET state = 'released', renewed_at = ?
+       WHERE lease_key = ? AND fence = ? AND dispatch_id = ? AND owner_id = ? AND state = 'held'`
+    ).run(nowIso, leaseKey, fence, dispatchId, ownerId);
+    return result.changes > 0;
   }
 }

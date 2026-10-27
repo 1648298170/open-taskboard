@@ -493,6 +493,91 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
     db.exec("UPDATE comments SET source = 'system' WHERE source = 'legacy' AND body LIKE '状态变更记录：%'");
     db.exec("UPDATE comments SET is_wake = 1 WHERE is_wake = 0 AND source = 'legacy' AND TRIM(body) LIKE '@agent%' AND author NOT IN ('mcp', 'watch', 'system')");
   },
+  // v28 (Q1): independent task execution queue. agent_runs = one execution
+  // attempt (Run state machine is the single execution truth);
+  // agent_run_events = append-only structured event history with dedupe.
+  // Append-only migration: fresh DBs and upgraded DBs converge to the same
+  // schema; idempotency_key UNIQUE backs createRun idempotency.
+  (db: DatabaseSync) => {
+    if (!hasTable(db, 'agent_runs')) {
+      db.exec(`CREATE TABLE agent_runs (
+        id TEXT PRIMARY KEY,
+        issue_id TEXT NOT NULL,
+        attempt_no INTEGER NOT NULL DEFAULT 1,
+        previous_run_id TEXT,
+        status TEXT NOT NULL DEFAULT 'queued',
+        source_type TEXT NOT NULL,
+        source_comment_id TEXT,
+        source_generation INTEGER,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        provider_type TEXT NOT NULL DEFAULT 'opencode',
+        runtime_id TEXT,
+        provider_session_id TEXT,
+        interaction_mode TEXT NOT NULL DEFAULT 'existing-session',
+        prompt_snapshot TEXT NOT NULL,
+        result_summary TEXT NOT NULL DEFAULT '',
+        error_code TEXT,
+        error_message TEXT,
+        priority INTEGER NOT NULL DEFAULT 0,
+        queued_at TEXT NOT NULL,
+        not_before TEXT,
+        claimed_by TEXT NOT NULL DEFAULT '',
+        claimed_run_id TEXT,
+        dispatch_id TEXT,
+        lease_key TEXT,
+        lease_fence INTEGER,
+        workspace_path TEXT NOT NULL DEFAULT '',
+        worktree_path TEXT NOT NULL DEFAULT '',
+        started_at TEXT,
+        finished_at TEXT,
+        cancel_requested_at TEXT,
+        exit_code INTEGER,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`);
+      db.exec('CREATE INDEX IF NOT EXISTS idx_agent_runs_claimable ON agent_runs(status, not_before, priority, queued_at)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_agent_runs_issue ON agent_runs(issue_id, created_at)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_agent_runs_prev ON agent_runs(previous_run_id)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_agent_runs_source ON agent_runs(source_comment_id, source_generation)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_agent_runs_session ON agent_runs(provider_type, provider_session_id, status)');
+    }
+    if (!hasTable(db, 'agent_run_events')) {
+      db.exec(`CREATE TABLE agent_run_events (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        UNIQUE(run_id, event_id),
+        UNIQUE(run_id, sequence)
+      )`);
+    }
+  },
+  // v29 (Q2): generalize the session lease into a shared execution-resource
+  // lease. owner_type distinguishes legacy comment_wake rows from agent_run
+  // rows; owner_id backfills from comment_id so old rows stay queryable.
+  // comment_id stays NULL for run-owned leases (legacy bindings untouched).
+  (db: DatabaseSync) => {
+    if (!hasColumn(db, 'wake_session_leases', 'owner_type')) {
+      db.exec("ALTER TABLE wake_session_leases ADD COLUMN owner_type TEXT NOT NULL DEFAULT 'comment_wake'");
+    }
+    if (!hasColumn(db, 'wake_session_leases', 'owner_id')) {
+      db.exec('ALTER TABLE wake_session_leases ADD COLUMN owner_id TEXT');
+      db.exec('UPDATE wake_session_leases SET owner_id = comment_id WHERE owner_id IS NULL');
+    }
+  },
+  // v30 (Q4): per-comment wake request generation. A qualified @agent
+  // comment maps to exactly one comment_wake Run per generation
+  // (idempotency key comment:{id}:gen{n}); only an explicit user
+  // re-trigger (body edit / status reset) bumps the generation.
+  (db: DatabaseSync) => {
+    if (!hasColumn(db, 'comments', 'wake_generation')) {
+      db.exec('ALTER TABLE comments ADD COLUMN wake_generation INTEGER NOT NULL DEFAULT 1');
+    }
+  },
 ];
 
 // Applies pending migrations in order, stamping PRAGMA user_version after
